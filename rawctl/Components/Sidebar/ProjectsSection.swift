@@ -29,7 +29,8 @@ struct ProjectsSection: View {
                                 Task {
                                     await appState.selectProject(project)
                                 }
-                            }
+                            },
+                            onUpdateStatus: updateProjectStatus
                         )
                     }
 
@@ -77,6 +78,23 @@ struct ProjectsSection: View {
             expandedMonths.insert(month)
         }
     }
+
+    private func updateProjectStatus(_ project: Project, to status: ProjectStatus) {
+        guard var catalog = appState.catalog else { return }
+        var updatedProject = project
+        updatedProject.status = status
+        catalog.updateProject(updatedProject)
+        appState.catalog = catalog
+
+        Task {
+            do {
+                let service = CatalogService(catalogPath: CatalogService.defaultCatalogPath)
+                try await service.save(catalog)
+            } catch {
+                print("[ProjectsSection] Failed to save catalog: \(error.localizedDescription)")
+            }
+        }
+    }
 }
 
 /// Month grouping for projects
@@ -87,6 +105,7 @@ struct MonthGroup: View {
     let selectedProject: Project?
     let onToggle: () -> Void
     let onSelect: (Project) -> Void
+    var onUpdateStatus: ((Project, ProjectStatus) -> Void)?
 
     var body: some View {
         VStack(spacing: 2) {
@@ -119,7 +138,8 @@ struct MonthGroup: View {
                     ProjectRow(
                         project: project,
                         isSelected: selectedProject?.id == project.id,
-                        onSelect: { onSelect(project) }
+                        onSelect: { onSelect(project) },
+                        onUpdateStatus: onUpdateStatus
                     )
                 }
             }
@@ -142,6 +162,7 @@ struct ProjectRow: View {
     let project: Project
     let isSelected: Bool
     let onSelect: () -> Void
+    var onUpdateStatus: ((Project, ProjectStatus) -> Void)?
 
     var body: some View {
         Button(action: onSelect) {
@@ -193,7 +214,7 @@ struct ProjectRow: View {
             Menu("Set Status") {
                 ForEach(ProjectStatus.allCases, id: \.self) { status in
                     Button(status.displayName) {
-                        // Update status
+                        onUpdateStatus?(project, status)
                     }
                 }
             }
@@ -201,7 +222,7 @@ struct ProjectRow: View {
             Divider()
 
             Button("Archive Project", role: .destructive) {
-                // Archive
+                onUpdateStatus?(project, .archived)
             }
         }
     }

@@ -12,6 +12,8 @@ struct ProjectDashboard: View {
     @ObservedObject var appState: AppState
 
     let project: Project
+    var onStartCulling: (() -> Void)?
+    var onExportPicks: (() -> Void)?
 
     var body: some View {
         ScrollView {
@@ -157,7 +159,7 @@ struct ProjectDashboard: View {
                     icon: "rectangle.on.rectangle",
                     color: .orange
                 ) {
-                    // Open survey mode
+                    onStartCulling?()
                 }
 
                 DashboardActionButton(
@@ -165,7 +167,7 @@ struct ProjectDashboard: View {
                     icon: "square.and.arrow.up",
                     color: .green
                 ) {
-                    // Export picks
+                    onExportPicks?()
                 }
 
                 DashboardActionButton(
