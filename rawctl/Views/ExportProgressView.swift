@@ -105,6 +105,8 @@ actor ExportQueueManager {
         let organization: ExportOrganizationMode
         var status: QueueStatus = .pending
         var completedCount: Int = 0
+        var failedCount: Int = 0
+        var errorMessages: [String] = []
 
         enum QueueStatus {
             case pending
@@ -155,6 +157,8 @@ actor ExportQueueManager {
                 await notifyCompletion(item)
             } catch {
                 queue[index].status = .failed
+                queue[index].failedCount += 1
+                queue[index].errorMessages.append(error.localizedDescription)
             }
         }
 

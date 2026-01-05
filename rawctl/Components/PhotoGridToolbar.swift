@@ -85,8 +85,8 @@ struct PhotoGridToolbar: View {
                 } label: {
                     Label("Compare", systemImage: "square.split.2x1")
                 }
-                .keyboardShortcut("c", modifiers: .command)
-                .help("Compare Mode (Cmd+C)")
+                .keyboardShortcut("c", modifiers: [.command, .option])
+                .help("Compare Mode (Cmd+Option+C)")
 
                 if !appState.selectedAssetIds.isEmpty {
                     Button {

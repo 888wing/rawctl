@@ -41,6 +41,7 @@ struct SmartExportSheet: View {
     @State private var exportedCount = 0
     @State private var showPresetEditor = false
     @State private var showFolderPicker = false
+    @State private var failedExports: [String] = []
 
     private var presets: [ExportPreset] {
         appState.catalog?.exportPresets ?? defaultPresets
@@ -275,10 +276,17 @@ struct SmartExportSheet: View {
             )
 
             // Create folder if needed
-            try? FileManager.default.createDirectory(
-                at: targetFolder,
-                withIntermediateDirectories: true
-            )
+            do {
+                try FileManager.default.createDirectory(
+                    at: targetFolder,
+                    withIntermediateDirectories: true
+                )
+            } catch {
+                await MainActor.run {
+                    failedExports.append("\(asset.url.lastPathComponent): folder creation failed")
+                }
+                continue
+            }
 
             // Export the photo
             let outputName = asset.url.deletingPathExtension().lastPathComponent + ".jpg"
@@ -297,7 +305,13 @@ struct SmartExportSheet: View {
                        using: NSBitmapImageRep.FileType.jpeg,
                        properties: [NSBitmapImageRep.PropertyKey.compressionFactor: Double(preset.quality) / 100.0]
                    ) {
-                    try? jpegData.write(to: outputURL)
+                    do {
+                        try jpegData.write(to: outputURL)
+                    } catch {
+                        await MainActor.run {
+                            failedExports.append("\(asset.url.lastPathComponent): write failed")
+                        }
+                    }
                 }
             }
 
@@ -305,6 +319,11 @@ struct SmartExportSheet: View {
                 exportedCount = index + 1
                 exportProgress = Double(index + 1) / Double(total)
             }
+        }
+
+        // Log any failures
+        if !failedExports.isEmpty {
+            print("[SmartExport] Failed exports: \(failedExports.joined(separator: ", "))")
         }
 
         await MainActor.run {
