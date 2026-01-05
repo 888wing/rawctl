@@ -269,10 +269,11 @@ struct SmartExportSheet: View {
             let recipe = appState.recipes[asset.id] ?? EditRecipe()
 
             // Determine subfolder based on organization mode
-            let targetFolder = determineTargetFolder(
+            let targetFolder = ExportUtilities.determineTargetFolder(
                 for: asset,
                 recipe: recipe,
-                in: destination
+                organization: organizationMode,
+                base: destination
             )
 
             // Create folder if needed
@@ -336,37 +337,6 @@ struct SmartExportSheet: View {
         }
     }
 
-    private func determineTargetFolder(
-        for asset: PhotoAsset,
-        recipe: EditRecipe,
-        in base: URL
-    ) -> URL {
-        switch organizationMode {
-        case .flat:
-            return base
-
-        case .byRating:
-            let rating = recipe.rating
-            let folderName = rating > 0 ? "\(rating)-stars" : "unrated"
-            return base.appendingPathComponent(folderName)
-
-        case .byDate:
-            let formatter = DateFormatter()
-            formatter.dateFormat = "yyyy-MM-dd"
-            let folderName = formatter.string(from: asset.creationDate ?? Date())
-            return base.appendingPathComponent(folderName)
-
-        case .byColor:
-            return base.appendingPathComponent(recipe.colorLabel.displayName)
-
-        case .byFlag:
-            switch recipe.flag {
-            case .pick: return base.appendingPathComponent("Picks")
-            case .reject: return base.appendingPathComponent("Rejects")
-            case .none: return base.appendingPathComponent("Unflagged")
-            }
-        }
-    }
 }
 
 // MARK: - Preset Card

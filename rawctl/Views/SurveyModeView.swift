@@ -15,6 +15,7 @@ struct SurveyModeView: View {
     @State private var currentIndex: Int = 0
     @State private var previewImage: NSImage?
     @State private var isLoading = true
+    @State private var loadTask: Task<Void, Never>?
 
     private var assets: [PhotoAsset] {
         appState.filteredAssets
@@ -85,6 +86,9 @@ struct SurveyModeView: View {
         .onKeyPress(.escape) {
             dismiss()
             return .handled
+        }
+        .onDisappear {
+            loadTask?.cancel()
         }
     }
 
@@ -338,19 +342,26 @@ struct SurveyModeView: View {
     }
 
     private func loadCurrentImage() async {
+        // Cancel any existing load task
+        loadTask?.cancel()
+
         guard let asset = currentAsset else { return }
 
-        isLoading = true
-        let recipe = appState.recipes[asset.id] ?? EditRecipe()
+        loadTask = Task {
+            isLoading = true
+            let recipe = appState.recipes[asset.id] ?? EditRecipe()
 
-        if let image = await ImagePipeline.shared.renderPreview(
-            for: asset,
-            recipe: recipe,
-            maxSize: 1600
-        ) {
-            await MainActor.run {
-                previewImage = image
-                isLoading = false
+            if let image = await ImagePipeline.shared.renderPreview(
+                for: asset,
+                recipe: recipe,
+                maxSize: 1600
+            ) {
+                // Check for cancellation before updating UI
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    previewImage = image
+                    isLoading = false
+                }
             }
         }
     }
