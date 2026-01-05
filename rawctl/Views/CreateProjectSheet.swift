@@ -18,6 +18,8 @@ struct CreateProjectSheet: View {
     @State private var projectType: ProjectType = .portrait
     @State private var sourceFolder: URL?
     @State private var notes: String = ""
+    @State private var showSaveError = false
+    @State private var saveErrorMessage = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -106,6 +108,11 @@ struct CreateProjectSheet: View {
             .background(Color(nsColor: .windowBackgroundColor))
         }
         .frame(width: 500, height: 480)
+        .alert("Save Error", isPresented: $showSaveError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(saveErrorMessage)
+        }
         .onAppear {
             // Auto-generate name from date
             let formatter = DateFormatter()
@@ -151,8 +158,15 @@ struct CreateProjectSheet: View {
 
             // Save catalog
             Task {
-                let service = CatalogService(catalogPath: CatalogService.defaultCatalogPath)
-                try? await service.save(catalog)
+                do {
+                    let service = CatalogService(catalogPath: CatalogService.defaultCatalogPath)
+                    try await service.save(catalog)
+                } catch {
+                    await MainActor.run {
+                        saveErrorMessage = "Failed to save catalog: \(error.localizedDescription)"
+                        showSaveError = true
+                    }
+                }
             }
         }
 

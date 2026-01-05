@@ -16,6 +16,8 @@ struct CreateSmartCollectionSheet: View {
     @State private var icon: String = "folder.badge.gearshape"
     @State private var rules: [FilterRule] = []
     @State private var ruleLogic: RuleLogic = .and
+    @State private var showSaveError = false
+    @State private var saveErrorMessage = ""
 
     // Available icons
     private let icons = [
@@ -106,6 +108,11 @@ struct CreateSmartCollectionSheet: View {
             .background(Color(nsColor: .windowBackgroundColor))
         }
         .frame(width: 500, height: 450)
+        .alert("Save Error", isPresented: $showSaveError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(saveErrorMessage)
+        }
     }
 
     private func createCollection() {
@@ -123,8 +130,15 @@ struct CreateSmartCollectionSheet: View {
 
             // Save catalog
             Task {
-                let service = CatalogService(catalogPath: CatalogService.defaultCatalogPath)
-                try? await service.save(catalog)
+                do {
+                    let service = CatalogService(catalogPath: CatalogService.defaultCatalogPath)
+                    try await service.save(catalog)
+                } catch {
+                    await MainActor.run {
+                        saveErrorMessage = "Failed to save: \(error.localizedDescription)"
+                        showSaveError = true
+                    }
+                }
             }
         }
 
