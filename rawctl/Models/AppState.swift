@@ -107,7 +107,73 @@ final class AppState: ObservableObject {
     
     // Eyedropper mode for white balance
     @Published var eyedropperMode: Bool = false
-    
+
+    // MARK: - Catalog & Project Mode
+
+    /// The loaded catalog (nil if using legacy folder mode)
+    @Published var catalog: Catalog?
+
+    /// Currently selected project (nil = legacy folder mode or library view)
+    @Published var selectedProject: Project?
+
+    /// Currently active smart collection filter
+    @Published var activeSmartCollection: SmartCollection?
+
+    /// Whether we're in project mode vs legacy folder mode
+    var isProjectMode: Bool {
+        selectedProject != nil
+    }
+
+    /// Whether we're viewing a smart collection
+    var isSmartCollectionMode: Bool {
+        activeSmartCollection != nil
+    }
+
+    /// Assets filtered by active smart collection
+    var smartFilteredAssets: [PhotoAsset] {
+        guard let collection = activeSmartCollection else {
+            return filteredAssets
+        }
+        return collection.filter(assets: filteredAssets, recipes: recipes)
+    }
+
+    /// Select a project and load its assets
+    func selectProject(_ project: Project) async {
+        selectedProject = project
+        activeSmartCollection = nil
+
+        // Load first source folder
+        if let firstFolder = project.sourceFolders.first {
+            await openFolderFromPath(firstFolder.path)
+        }
+
+        // Update catalog's last opened
+        if var cat = catalog {
+            cat.lastOpenedProjectId = project.id
+            catalog = cat
+        }
+    }
+
+    /// Clear project selection (return to library view)
+    func clearProjectSelection() {
+        selectedProject = nil
+        activeSmartCollection = nil
+        assets = []
+        recipes = [:]
+    }
+
+    /// Apply a smart collection filter
+    func applySmartCollection(_ collection: SmartCollection?) {
+        activeSmartCollection = collection
+        // Clear other filters when using smart collection
+        if collection != nil {
+            filterRating = 0
+            filterColor = nil
+            filterFlag = nil
+            filterTag = ""
+        }
+    }
+
     // Comparison and Zoom State
     enum ComparisonMode {
         case none
