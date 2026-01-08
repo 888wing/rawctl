@@ -1,0 +1,124 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build and Release
+    runs-on: macos-14
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Install creating-dmg
+        run: brew install create-dmg
+
+      - name: Import signing certificate
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          # Decoding certificate
+          echo $CERTIFICATE_BASE64 | base64 --decode > certificate.p12
+          
+          # Create temporary keychain
+          security create-keychain -p "" build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          security unlock-keychain -p "" build.keychain
+          
+          # Import certificate to keychain
+          security import certificate.p12 -k build.keychain -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
+          
+      - name: Build App
+        run: |
+          xcodebuild -project rawctl.xcodeproj \
+            -scheme rawctl \
+            -configuration Release \
+            -archivePath rawctl.xcarchive \
+            archive \
+            CODE_SIGN_IDENTITY="Developer ID Application: YOUR_NAME (TEAM_ID)" \
+            DEVELOPMENT_TEAM="TEAM_ID"
+
+      - name: Export Archive
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath rawctl.xcarchive \
+            -exportOptionsPlist exportOptions.plist \
+            -exportPath ./export
+
+      - name: Create DMG
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          create-dmg \
+            --volname "rawctl Installer" \
+            --volicon "rawctl/Assets.xcassets/AppIcon.appiconset/icon_512x512.png" \
+            --window-pos 200 120 \
+            --window-size 800 400 \
+            --icon-size 100 \
+            --icon "rawctl.app" 200 190 \
+            --hide-extension "rawctl.app" \
+            --app-drop-link 600 185 \
+            "rawctl-$VERSION.dmg" \
+            "./export/rawctl.app"
+
+      - name: Notarize DMG
+        env:
+          NOTARIZATION_APPLE_ID: ${{ secrets.NOTARIZATION_APPLE_ID }}
+          NOTARIZATION_PASSWORD: ${{ secrets.NOTARIZATION_PASSWORD }}
+          TEAM_ID: ${{ secrets.TEAM_ID }}
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          xcrun notarytool submit "rawctl-$VERSION.dmg" \
+            --apple-id "$NOTARIZATION_APPLE_ID" \
+            --password "$NOTARIZATION_PASSWORD" \
+            --team-id "$TEAM_ID" \
+            --wait
+
+      - name: Staple Ticket
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          xcrun stapler staple "rawctl-$VERSION.dmg"
+
+      - name: Generate Sparkle Signature
+        id: sparkle_sign
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          # This assumes you have the 'generate_keys' or 'sign_update' tool from Sparkle
+          # Alternatively use a swift script or existing tool
+          # For now, we will placeholder this step or expect the binary to be in repo
+          echo "Processing signature..."
+          # ./bin/sign_update "rawctl-$VERSION.dmg" "$SPARKLE_PRIVATE_KEY" > signature.txt
+          # SIGNATURE=$(cat signature.txt)
+          # echo "signature=$SIGNATURE" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            rawctl-*.dmg
+          generate_release_notes: true
+          
+      - name: Upload to Cloudflare R2
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          # Use aws-cli (pre-installed on macos-latest runners usually, or install it)
+          # Configure AWS CLI for R2
+          aws configure set aws_access_key_id $R2_ACCESS_KEY_ID
+          aws configure set aws_secret_access_key $R2_SECRET_ACCESS_KEY
+          aws configure set default.region auto
+          
+          VERSION=${GITHUB_REF#refs/tags/v}
+          ENDPOINT_URL="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          
+          aws s3 cp "rawctl-$VERSION.dmg" "s3://${R2_BUCKET}/" --endpoint-url $ENDPOINT_URL
