@@ -137,14 +137,53 @@ final class AppState: ObservableObject {
         return collection.filter(assets: filteredAssets, recipes: recipes)
     }
 
-    /// Select a project and load its assets
+    /// Select a project and load assets from ALL source folders
     func selectProject(_ project: Project) async {
         selectedProject = project
         activeSmartCollection = nil
 
-        // Load first source folder
-        if let firstFolder = project.sourceFolders.first {
-            await openFolderFromPath(firstFolder.path)
+        // Clear existing assets before loading
+        assets = []
+        recipes = [:]
+
+        // Load all source folders
+        if !project.sourceFolders.isEmpty {
+            isLoading = true
+            loadingMessage = "Loading project folders..."
+
+            var allAssets: [PhotoAsset] = []
+
+            for folder in project.sourceFolders {
+                loadingMessage = "Scanning \(folder.lastPathComponent)..."
+                do {
+                    let folderAssets = try await FileSystemService.scanFolder(folder)
+                    allAssets.append(contentsOf: folderAssets)
+                } catch {
+                    print("[AppState] Error scanning folder \(folder.path): \(error)")
+                }
+            }
+
+            // Sort combined assets by filename
+            assets = allAssets.sorted {
+                $0.filename.localizedStandardCompare($1.filename) == .orderedAscending
+            }
+
+            // Set selected folder to first folder (for display purposes)
+            selectedFolder = project.sourceFolders.first
+
+            isLoading = false
+            loadingMessage = ""
+
+            // Load all recipes
+            await loadAllRecipes()
+
+            // Select first asset
+            if let first = assets.first {
+                selectedAssetId = first.id
+            }
+
+            // Start thumbnail preloading
+            preloadThumbnails()
         }
 
         // Update catalog's last opened
@@ -156,10 +195,12 @@ final class AppState: ObservableObject {
 
     /// Clear project selection (return to library view)
     func clearProjectSelection() {
+        // Only clear project and smart collection selection
+        // Keep assets and recipes if we're just switching views
         selectedProject = nil
         activeSmartCollection = nil
-        assets = []
-        recipes = [:]
+        // Note: Don't clear assets/recipes here - that should only happen
+        // when opening a new folder or project
     }
 
     /// Apply a smart collection filter
@@ -245,7 +286,10 @@ final class AppState: ObservableObject {
     // Professional Tools
     @Published var showHighlightClipping: Bool = false
     @Published var showShadowClipping: Bool = false
-    
+
+    // Global sheets
+    @Published var showAccountSheet: Bool = false
+
     enum ViewMode: String, CaseIterable {
         case grid
         case single
@@ -265,10 +309,45 @@ final class AppState: ObservableObject {
     }
     
     // MARK: - Editing (per-photo recipes)
-    
+
     /// Recipes dictionary keyed by asset ID
     @Published var recipes: [UUID: EditRecipe] = [:]
-    
+
+    // MARK: - AI Layer Stacks
+
+    /// AI layer stacks dictionary keyed by asset ID
+    @Published var aiLayerStacks: [UUID: AILayerStack] = [:]
+
+    /// Get or create AI layer stack for an asset
+    func aiLayerStack(for assetId: UUID) -> AILayerStack {
+        if let stack = aiLayerStacks[assetId] {
+            return stack
+        }
+        let newStack = AILayerStack(documentId: assetId)
+        aiLayerStacks[assetId] = newStack
+        return newStack
+    }
+
+    /// Current AI layer stack for selected photo
+    var currentAILayerStack: AILayerStack? {
+        guard let id = selectedAssetId else { return nil }
+        return aiLayerStack(for: id)
+    }
+
+    // MARK: - Mask Painting Mode
+
+    /// Whether mask painting mode is active (for region-based AI generation)
+    @Published var maskPaintingMode: Bool = false
+
+    /// Current brush mask for region editing
+    @Published var currentBrushMask: BrushMask = BrushMask()
+
+    /// Clear mask and exit painting mode
+    func exitMaskPaintingMode() {
+        maskPaintingMode = false
+        currentBrushMask.clear()
+    }
+
     /// Current recipe for selected photo (convenience computed property)
     var currentRecipe: EditRecipe {
         get {

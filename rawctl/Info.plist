@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.649279628182-5j3r4bpboc30pv4lifchalgdco9jfsv8</string>
+			</array>
+			<key>CFBundleURLName</key>
+			<string>Google Sign-In</string>
+		</dict>
+	</array>
+	<key>GIDClientID</key>
+	<string>649279628182-5j3r4bpboc30pv4lifchalgdco9jfsv8.apps.googleusercontent.com</string>
+	<key>SUFeedURL</key>
+	<string>https://releases.rawctl.com/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>tyxN/T8dj8d+H62bpRYM2QRk9Y1HKxvAJmO0HY+97CE=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
+	<key>SUAllowsAutomaticUpdates</key>
+	<true/>
+	<key>SUShowReleaseNotes</key>
+	<true/>
+</dict>
+</plist>

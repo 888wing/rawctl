@@ -69,6 +69,9 @@ struct ProjectsSection: View {
             formatter.dateFormat = "yyyy-MM"
             expandedMonths.insert(formatter.string(from: Date()))
         }
+        .sheet(isPresented: $showCreateProject) {
+            CreateProjectSheet(appState: appState)
+        }
     }
 
     private func toggleMonth(_ month: String) {

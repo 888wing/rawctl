@@ -183,6 +183,16 @@ struct Catalog: Codable, Equatable {
         updatedAt = Date()
     }
 
+    mutating func updateSmartCollection(_ collection: SmartCollection) {
+        if let index = smartCollections.firstIndex(where: { $0.id == collection.id }) {
+            // Only allow updating non-built-in collections
+            if !smartCollections[index].isBuiltIn {
+                smartCollections[index] = collection
+                updatedAt = Date()
+            }
+        }
+    }
+
     // MARK: - Export Preset Management
 
     mutating func addExportPreset(_ preset: ExportPreset) {

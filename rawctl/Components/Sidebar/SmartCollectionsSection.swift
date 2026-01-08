@@ -12,6 +12,9 @@ struct SmartCollectionsSection: View {
     @ObservedObject var appState: AppState
     @State private var isExpanded = true
     @State private var showCreateCollection = false
+    @State private var collectionToEdit: SmartCollection?
+    @State private var showDeleteConfirmation = false
+    @State private var collectionToDelete: SmartCollection?
 
     var body: some View {
         DisclosureGroup("Smart Collections", isExpanded: $isExpanded) {
@@ -23,6 +26,13 @@ struct SmartCollectionsSection: View {
                         isSelected: appState.activeSmartCollection?.id == collection.id,
                         onSelect: {
                             appState.applySmartCollection(collection)
+                        },
+                        onEdit: {
+                            collectionToEdit = collection
+                        },
+                        onDelete: {
+                            collectionToDelete = collection
+                            showDeleteConfirmation = true
                         }
                     )
                 }
@@ -48,6 +58,22 @@ struct SmartCollectionsSection: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+        .sheet(isPresented: $showCreateCollection) {
+            CreateSmartCollectionSheet(appState: appState)
+        }
+        .sheet(item: $collectionToEdit) { collection in
+            EditSmartCollectionSheet(appState: appState, collection: collection)
+        }
+        .alert("Delete Collection", isPresented: $showDeleteConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete", role: .destructive) {
+                deleteCollection()
+            }
+        } message: {
+            if let collection = collectionToDelete {
+                Text("Are you sure you want to delete \"\(collection.name)\"? This cannot be undone.")
+            }
+        }
     }
 
     private var collections: [SmartCollection] {
@@ -63,6 +89,33 @@ struct SmartCollectionsSection: View {
     private func countFor(_ collection: SmartCollection) -> Int {
         collection.filter(assets: appState.assets, recipes: appState.recipes).count
     }
+
+    private func deleteCollection() {
+        guard let collection = collectionToDelete else { return }
+
+        // Clear active collection if it's being deleted
+        if appState.activeSmartCollection?.id == collection.id {
+            appState.applySmartCollection(nil)
+        }
+
+        // Remove from catalog
+        if var catalog = appState.catalog {
+            catalog.removeSmartCollection(collection.id)
+            appState.catalog = catalog
+
+            // Save catalog
+            Task {
+                do {
+                    let service = CatalogService(catalogPath: CatalogService.defaultCatalogPath)
+                    try await service.save(catalog)
+                } catch {
+                    print("[SmartCollectionsSection] Failed to save catalog: \(error)")
+                }
+            }
+        }
+
+        collectionToDelete = nil
+    }
 }
 
 /// Single smart collection row
@@ -71,6 +124,8 @@ struct SmartCollectionRow: View {
     let count: Int
     let isSelected: Bool
     let onSelect: () -> Void
+    var onEdit: (() -> Void)?
+    var onDelete: (() -> Void)?
 
     var body: some View {
         Button(action: onSelect) {
@@ -103,13 +158,13 @@ struct SmartCollectionRow: View {
         .contextMenu {
             if !collection.isBuiltIn {
                 Button("Edit Collection...") {
-                    // Edit
+                    onEdit?()
                 }
 
                 Divider()
 
                 Button("Delete Collection", role: .destructive) {
-                    // Delete
+                    onDelete?()
                 }
             }
         }

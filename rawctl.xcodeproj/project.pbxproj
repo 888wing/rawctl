@@ -6,6 +6,12 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		ABAECF882F0DBF4900DDD4E2 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = ABAECF872F0DBF4900DDD4E2 /* Sparkle */; };
+		ABAECF8B2F0FBD0700DDD4E2 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = ABAECF8A2F0FBD0700DDD4E2 /* GoogleSignIn */; };
+		ABAECF8D2F0FBD0700DDD4E2 /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = ABAECF8C2F0FBD0700DDD4E2 /* GoogleSignInSwift */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		AB433D302EEF722500534A32 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +58,9 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				ABAECF8D2F0FBD0700DDD4E2 /* GoogleSignInSwift in Frameworks */,
+				ABAECF882F0DBF4900DDD4E2 /* Sparkle in Frameworks */,
+				ABAECF8B2F0FBD0700DDD4E2 /* GoogleSignIn in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +121,9 @@
 			);
 			name = rawctl;
 			packageProductDependencies = (
+				ABAECF872F0DBF4900DDD4E2 /* Sparkle */,
+				ABAECF8A2F0FBD0700DDD4E2 /* GoogleSignIn */,
+				ABAECF8C2F0FBD0700DDD4E2 /* GoogleSignInSwift */,
 			);
 			productName = rawctl;
 			productReference = AB433D1C2EEF722400534A32 /* rawctl.app */;
@@ -195,6 +207,10 @@
 			);
 			mainGroup = AB433D132EEF722400534A32;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				ABAECF862F0DBF4900DDD4E2 /* XCRemoteSwiftPackageReference "Sparkle" */,
+				ABAECF892F0FBD0700DDD4E2 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = AB433D1D2EEF722400534A32 /* Products */;
 			projectDirPath = "";
@@ -402,6 +418,9 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = rawctl/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = RawCTL;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -429,6 +448,9 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = rawctl/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = RawCTL;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -551,6 +573,43 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		ABAECF862F0DBF4900DDD4E2 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.8.1;
+			};
+		};
+		ABAECF892F0FBD0700DDD4E2 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/google/GoogleSignIn-iOS";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 9.1.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		ABAECF872F0DBF4900DDD4E2 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = ABAECF862F0DBF4900DDD4E2 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+		ABAECF8A2F0FBD0700DDD4E2 /* GoogleSignIn */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = ABAECF892F0FBD0700DDD4E2 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
+			productName = GoogleSignIn;
+		};
+		ABAECF8C2F0FBD0700DDD4E2 /* GoogleSignInSwift */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = ABAECF892F0FBD0700DDD4E2 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
+			productName = GoogleSignInSwift;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = AB433D142EEF722400534A32 /* Project object */;
 }

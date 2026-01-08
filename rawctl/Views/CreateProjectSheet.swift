@@ -16,7 +16,7 @@ struct CreateProjectSheet: View {
     @State private var clientName: String = ""
     @State private var shootDate: Date = Date()
     @State private var projectType: ProjectType = .portrait
-    @State private var sourceFolder: URL?
+    @State private var sourceFolders: [URL] = []
     @State private var notes: String = ""
     @State private var showSaveError = false
     @State private var saveErrorMessage = ""
@@ -57,22 +57,38 @@ struct CreateProjectSheet: View {
                     }
                 }
 
-                Section("Source Folder") {
-                    HStack {
-                        if let folder = sourceFolder {
-                            Text(folder.path)
-                                .font(.system(size: 11))
+                Section("Source Folders") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if sourceFolders.isEmpty {
+                            Text("No folders selected")
                                 .foregroundColor(.secondary)
-                                .lineLimit(1)
                         } else {
-                            Text("No folder selected")
-                                .foregroundColor(.secondary)
+                            ForEach(sourceFolders, id: \.path) { folder in
+                                HStack {
+                                    Text(folder.lastPathComponent)
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.primary)
+                                    Text(folder.deletingLastPathComponent().path)
+                                        .font(.system(size: 10))
+                                        .foregroundColor(.secondary)
+                                        .lineLimit(1)
+                                    Spacer()
+                                    Button {
+                                        sourceFolders.removeAll { $0 == folder }
+                                    } label: {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .foregroundColor(.secondary)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
                         }
 
-                        Spacer()
-
-                        Button("Choose...") {
-                            selectFolder()
+                        HStack {
+                            Spacer()
+                            Button("Add Folders...") {
+                                selectFolders()
+                            }
                         }
                     }
                 }
@@ -121,19 +137,27 @@ struct CreateProjectSheet: View {
         }
     }
 
-    private func selectFolder() {
+    private func selectFolders() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
-        panel.message = "Select the folder containing your photos"
+        panel.allowsMultipleSelection = true
+        panel.message = "Select folders containing your photos (hold Cmd to select multiple)"
 
         if panel.runModal() == .OK {
-            sourceFolder = panel.url
+            // Add selected folders (avoiding duplicates)
+            for url in panel.urls {
+                if !sourceFolders.contains(url) {
+                    sourceFolders.append(url)
+                }
+            }
 
-            // Update project name from folder if not set
+            // Update project name from first folder if not set
             if projectName.isEmpty || projectName.contains("-") {
-                projectName = panel.url?.lastPathComponent ?? projectName
+                if let firstFolder = panel.urls.first {
+                    projectName = firstFolder.lastPathComponent
+                }
             }
         }
     }
@@ -147,8 +171,8 @@ struct CreateProjectSheet: View {
             notes: notes
         )
 
-        if let folder = sourceFolder {
-            project.sourceFolders = [folder]
+        if !sourceFolders.isEmpty {
+            project.sourceFolders = sourceFolders
         }
 
         // Add to catalog
