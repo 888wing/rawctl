@@ -1,6 +1,6 @@
 # rawctl
 
-A native macOS RAW photo editor built with SwiftUI and Core Image, featuring true RAW processing, non-destructive editing, and local-first AI tools.
+A native macOS RAW photo editor built with SwiftUI and Core Image, featuring true RAW processing with non-destructive editing.
 
 **Mission: Photo freedom without subscription fees.**
 
@@ -11,6 +11,15 @@ A native macOS RAW photo editor built with SwiftUI and Core Image, featuring tru
 ![Swift](https://img.shields.io/badge/Swift-5.9+-orange)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
+## 🆕 What's New (v1.1)
+
+- **Crop & Composition**: Full crop overlay with aspect ratios, straighten, rotate 90°, flip controls
+- **Resize**: Multiple resize modes (pixels, percentage, long/short edge) with presets for Instagram, Facebook, Twitter, 4K
+- **Transform Mode**: Keyboard shortcut `C` to toggle, `Enter` to commit, `Escape` to cancel
+- **Security Hardening**: Device ID tracking, rate limit handling, token replay detection
+
+Full changelog: [CHANGELOG.md](CHANGELOG.md)
+
 ## ✨ Features
 
 ### Core Philosophy
@@ -18,26 +27,19 @@ A native macOS RAW photo editor built with SwiftUI and Core Image, featuring tru
 - **Folder-Based** - No proprietary catalog, your files stay where they are
 - **Non-Destructive** - Edits stored in sidecar JSON, originals never touched
 - **Local First** - No cloud, no sync, no accounts required
-- **AI Powered** - Experimental AI features for creative editing (optional)
-
-### 🤖 AI Lab (NanoBanana)
-- **Generative Fill** - Remove objects or expand canvas using local AI models
-- **AI Layers** - Non-destructive AI edits with layer masking and blending
-- **Smart Selection** - Intelligent subject selection (Coming soon)
-- **Local History** - Track and revert AI generation steps
 
 ### 🎨 Editing Controls
 
 | Category | Controls |
 |----------|----------|
 | **Light** | Exposure (±5 EV), Contrast, Highlights, Shadows, Whites, Blacks |
-| **Tone Curve** | RGB Curves + Luma Curve with 5-point visual editor |
-| **Color** | HSL (Hue, Saturation, Luminance) Panel, Vibrance, Saturation |
+| **Tone Curve** | 5-point curve with visual editor |
 | **White Balance** | Presets (Daylight, Cloudy, Tungsten, etc.), Temperature (2000-12000K), Tint |
-| **Effects** | Vignette, Sharpness, Noise Reduction, Dehaze |
+| **Color** | Vibrance, Saturation |
+| **Effects** | Vignette, Sharpness, Noise Reduction |
 | **Split Toning** | Highlight/Shadow color grading |
-| **Composition** | Crop with aspect ratios, Rotate, Flip |
-| **Histogram** | Real-time RGB and Luma histogram |
+| **Composition** | Crop with aspect ratios, Straighten, Rotate 90°, Flip |
+| **Resize** | Pixels, Percentage, Long/Short Edge, Presets (Instagram, 4K, etc.) |
 
 ### 🏷️ Organization
 
@@ -46,15 +48,15 @@ A native macOS RAW photo editor built with SwiftUI and Core Image, featuring tru
 | **Rating** | 0-5 stars (keyboard: `1-5`, `0` to clear) |
 | **Flags** | Pick / Reject / Unflag (keyboard: `P`, `X`, `U`) |
 | **Color Labels** | 7 colors (keyboard: `6-9` for Red/Yellow/Green/Blue) |
-| **Smart Collections** | Dynamic albums based on EXIF, rating, or tags |
-| **Metadata** | View EXIF data (Camera, Lens, ISO, Aperture, Shutter) |
+| **Tags** | Custom text tags with search |
+| **Filters** | Filter by rating, flag, color, or tag |
 
 ### ⚡ Performance
 
 - **Two-Stage Loading** - Instant embedded JPEG preview, then full RAW decode
 - **GPU Acceleration** - Metal-powered Core Image processing
 - **Smart Caching** - RAW filter and thumbnail caching
-- **Render Queue** - Background export processing
+- **Prefetch** - Adjacent photos loaded in background
 
 ### 📁 Supported Formats
 
@@ -85,7 +87,7 @@ open rawctl.xcodeproj
 
 1. Click "Open Folder" or drag a folder to the sidebar
 2. Browse photos in Grid view, double-click to edit
-3. Adjust sliders in the right panel or use AI tools in the left panel
+3. Adjust sliders in the right panel
 4. Export with File → Export (⌘E)
 
 ## 📐 Architecture
@@ -98,19 +100,20 @@ rawctl/
 │   └── AppState.swift        # Global state management
 ├── Views/
 │   ├── MainLayoutView.swift  # 3-column NavigationSplitView
-│   ├── SidebarView.swift     # Folder browser & Collections
+│   ├── SidebarView.swift     # Folder browser
 │   ├── GridView.swift        # Thumbnail grid
 │   ├── SingleView.swift      # Photo preview
 │   └── InspectorView.swift   # Edit controls
 ├── Components/
-│   ├── AIGenerationPanel.swift # AI Tool interface
-│   ├── HistogramView.swift   # Real-time histogram
+│   ├── ControlSlider.swift   # Custom sliders
 │   ├── ToneCurveView.swift   # Curve editor
-│   └── HSLPanel.swift        # Color mixer
+│   ├── WhiteBalancePanel.swift # WB presets & sliders
+│   └── FilterBar.swift       # Photo filtering
 └── Services/
-     ├── ImagePipeline.swift   # Core Image rendering
-     ├── NanoBananaService.swift # AI Service integration
-     └── ExportService.swift   # Export manaager
+    ├── ImagePipeline.swift   # Core Image rendering
+    ├── SidecarService.swift  # JSON persistence
+    ├── ExportService.swift   # JPG export
+    └── ThumbnailService.swift # Thumbnail cache
 ```
 
 ## 💾 Sidecar Format
@@ -130,10 +133,6 @@ Edits are stored in `{filename}.rawctl.json`:
       "preset": "daylight",
       "temperature": 5500,
       "tint": 0
-    },
-    "hsl": {
-      "red": { "h": 0, "s": 0.1, "l": 0 },
-      "blue": { "h": 0, "s": 0.2, "l": -0.1 }
     },
     "rating": 4,
     "colorLabel": "green",
@@ -157,27 +156,35 @@ Edits are stored in `{filename}.rawctl.json`:
 | `7` | Yellow label |
 | `8` | Green label |
 | `9` | Blue label |
+| `C` | Toggle transform/crop mode |
+| `Enter` | Commit transform |
+| `Esc` | Cancel transform |
 | `⌘E` | Export |
 
 ## 🗺️ Roadmap
 
-### ✅ Completed
+### ✅ Completed (v1.1)
 - [x] RAW processing with CIRAWFilter
 - [x] Non-destructive sidecar editing
-- [x] Tone curve editor & HSL Panel
-- [x] RGB Histogram
-- [x] AI Generative Tools (NanoBanana)
-- [x] Smart Collections
+- [x] Tone curve editor
+- [x] White balance presets
 - [x] Rating, flags, color labels
-- [x] GPU Acceleration
-- [x] JPG/HEIC/TIFF Export
+- [x] Filtering and search
+- [x] Keyboard shortcuts
+- [x] Two-stage loading optimization
+- [x] JPG export with sRGB
+- [x] Crop with aspect ratios & rule-of-thirds
+- [x] Straighten, rotate 90°, flip controls
+- [x] Resize with multiple modes & presets
+- [x] Transform mode with keyboard shortcuts
 
 ### 🔜 Planned
-- [ ] Batch Processing
-- [ ] Lens Correction Profiles
-- [ ] Plugin System API
-- [ ] Masking Brush
-- [ ] Compare View (Before/After)
+- [ ] Before/After comparison
+- [ ] HSL color adjustment
+- [ ] Lens correction profiles
+- [ ] Batch export with progress
+- [ ] Undo/Redo support
+- [ ] Plugin system
 
 ## 🤝 Contributing
 
@@ -186,6 +193,13 @@ Edits are stored in `{filename}.rawctl.json`:
 3. Commit your changes (`git commit -m 'Add amazing feature'`)
 4. Push to the branch (`git push origin feature/amazing`)
 5. Open a Pull Request
+
+### Code Style
+
+- SwiftUI for all views
+- `actor` for thread-safe services
+- `@MainActor` for UI state
+- Prefer `async/await` over callbacks
 
 ## 📄 License
 
