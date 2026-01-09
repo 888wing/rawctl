@@ -12,7 +12,8 @@ struct MainLayoutView: View {
     @StateObject private var appState = AppState()
     @State private var showExportDialog = false
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
-    
+    @State private var catalogService: CatalogService?
+
     // Responsive breakpoints
     private let compactThreshold: CGFloat = 1200
     
@@ -78,6 +79,38 @@ struct MainLayoutView: View {
         }
         .sheet(isPresented: $showExportDialog) {
             ExportDialog(appState: appState)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+            // Auto-save current project state on app termination
+            saveProjectStateSync()
+        }
+    }
+
+    /// Synchronously save project state (for termination handler)
+    private func saveProjectStateSync() {
+        guard let service = catalogService,
+              var catalog = appState.catalog,
+              let currentProject = appState.currentProject else {
+            return
+        }
+
+        // Save current state to project
+        appState.saveCurrentStateToProject()
+
+        // Update catalog with modified project
+        if let updatedProject = appState.currentProject {
+            catalog.updateProject(updatedProject)
+            catalog.lastOpenedProjectId = updatedProject.id
+
+            // Synchronous save for termination
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = .prettyPrinted
+            encoder.dateEncodingStrategy = .iso8601
+
+            if let data = try? encoder.encode(catalog) {
+                try? data.write(to: service.catalogPath)
+                print("[MainLayoutView] Saved project state on termination")
+            }
         }
     }
 }
