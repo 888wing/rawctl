@@ -35,6 +35,14 @@ struct PhotoAsset: Identifiable, Hashable {
     var isRAW: Bool {
         Self.rawExtensions.contains(url.pathExtension.lowercased())
     }
+
+    /// Image dimensions from metadata (if available)
+    var imageSize: CGSize? {
+        guard let width = metadata?.width, let height = metadata?.height else {
+            return nil
+        }
+        return CGSize(width: width, height: height)
+    }
     
     /// Supported RAW file extensions (expanded list)
     static let rawExtensions: Set<String> = [

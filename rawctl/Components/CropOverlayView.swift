@@ -11,22 +11,38 @@ import SwiftUI
 struct CropOverlayView: View {
     @Binding var crop: Crop
     let imageSize: CGSize
-    
+
     @State private var dragStart: CGPoint = .zero
     @State private var dragHandle: DragHandle = .none
-    
+    @State private var initialRect: CropRect = CropRect()
+
     enum DragHandle {
         case none
         case topLeft, topRight, bottomLeft, bottomRight
         case top, bottom, left, right
         case center
     }
-    
+
+    /// Current crop dimensions in pixels
+    private var cropDimensions: (width: Int, height: Int) {
+        let w = Int(imageSize.width * crop.rect.w)
+        let h = Int(imageSize.height * crop.rect.h)
+        return (w, h)
+    }
+
+    /// Target aspect ratio (nil for free crop)
+    private var targetAspect: Double? {
+        if crop.aspect == .original {
+            return imageSize.width / imageSize.height
+        }
+        return crop.aspect.aspectRatio
+    }
+
     var body: some View {
         GeometryReader { geometry in
             let viewSize = geometry.size
             let cropRect = calculateCropRect(in: viewSize)
-            
+
             ZStack {
                 // Dimmed overlay for non-cropped areas
                 Path { path in
@@ -38,13 +54,13 @@ struct CropOverlayView: View {
                         .frame(width: cropRect.width, height: cropRect.height)
                         .position(x: cropRect.midX, y: cropRect.midY)
                 }
-                
+
                 // Crop rectangle
                 Rectangle()
                     .stroke(Color.white, lineWidth: 2)
                     .frame(width: cropRect.width, height: cropRect.height)
                     .position(x: cropRect.midX, y: cropRect.midY)
-                
+
                 // Grid lines (rule of thirds)
                 Path { path in
                     // Vertical lines
@@ -59,7 +75,25 @@ struct CropOverlayView: View {
                     path.addLine(to: CGPoint(x: cropRect.maxX, y: cropRect.minY + cropRect.height * 2 / 3))
                 }
                 .stroke(Color.white.opacity(0.5), lineWidth: 1)
-                
+
+                // Dimension label at bottom center
+                VStack(spacing: 2) {
+                    Text("\(cropDimensions.width) × \(cropDimensions.height)")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.black.opacity(0.7))
+                        .cornerRadius(4)
+
+                    if let aspect = crop.aspect.aspectRatio {
+                        Text(crop.aspect.displayName)
+                            .font(.system(size: 9))
+                            .foregroundColor(.white.opacity(0.8))
+                    }
+                }
+                .position(x: cropRect.midX, y: cropRect.maxY + 24)
+
                 // Corner handles
                 ForEach(CornerPosition.allCases, id: \.self) { corner in
                     CornerHandle(corner: corner)
@@ -69,9 +103,12 @@ struct CropOverlayView: View {
                                 .onChanged { value in
                                     handleCornerDrag(corner, value: value, viewSize: viewSize)
                                 }
+                                .onEnded { _ in
+                                    initialRect = CropRect()
+                                }
                         )
                 }
-                
+
                 // Center drag for moving the crop area
                 Rectangle()
                     .fill(Color.clear)
@@ -109,32 +146,83 @@ struct CropOverlayView: View {
     }
     
     private func handleCornerDrag(_ corner: CornerPosition, value: DragGesture.Value, viewSize: CGSize) {
+        // Store initial rect on drag start
+        if initialRect.w == 0 {
+            initialRect = crop.rect
+        }
+
         let delta = CGPoint(
             x: value.translation.width / viewSize.width,
             y: value.translation.height / viewSize.height
         )
-        
-        var newRect = crop.rect
-        
+
+        var newRect = initialRect
+
+        // Calculate new dimensions based on drag
         switch corner {
         case .topLeft:
-            newRect.x = max(0, min(crop.rect.x + crop.rect.w - 0.1, crop.rect.x + delta.x))
-            newRect.y = max(0, min(crop.rect.y + crop.rect.h - 0.1, crop.rect.y + delta.y))
-            newRect.w = crop.rect.w - (newRect.x - crop.rect.x)
-            newRect.h = crop.rect.h - (newRect.y - crop.rect.y)
+            newRect.x = max(0, min(initialRect.x + initialRect.w - 0.1, initialRect.x + delta.x))
+            newRect.y = max(0, min(initialRect.y + initialRect.h - 0.1, initialRect.y + delta.y))
+            newRect.w = initialRect.w - (newRect.x - initialRect.x)
+            newRect.h = initialRect.h - (newRect.y - initialRect.y)
         case .topRight:
-            newRect.y = max(0, min(crop.rect.y + crop.rect.h - 0.1, crop.rect.y + delta.y))
-            newRect.w = max(0.1, min(1 - crop.rect.x, crop.rect.w + delta.x))
-            newRect.h = crop.rect.h - (newRect.y - crop.rect.y)
+            newRect.y = max(0, min(initialRect.y + initialRect.h - 0.1, initialRect.y + delta.y))
+            newRect.w = max(0.1, min(1 - initialRect.x, initialRect.w + delta.x))
+            newRect.h = initialRect.h - (newRect.y - initialRect.y)
         case .bottomLeft:
-            newRect.x = max(0, min(crop.rect.x + crop.rect.w - 0.1, crop.rect.x + delta.x))
-            newRect.w = crop.rect.w - (newRect.x - crop.rect.x)
-            newRect.h = max(0.1, min(1 - crop.rect.y, crop.rect.h + delta.y))
+            newRect.x = max(0, min(initialRect.x + initialRect.w - 0.1, initialRect.x + delta.x))
+            newRect.w = initialRect.w - (newRect.x - initialRect.x)
+            newRect.h = max(0.1, min(1 - initialRect.y, initialRect.h + delta.y))
         case .bottomRight:
-            newRect.w = max(0.1, min(1 - crop.rect.x, crop.rect.w + delta.x))
-            newRect.h = max(0.1, min(1 - crop.rect.y, crop.rect.h + delta.y))
+            newRect.w = max(0.1, min(1 - initialRect.x, initialRect.w + delta.x))
+            newRect.h = max(0.1, min(1 - initialRect.y, initialRect.h + delta.y))
         }
-        
+
+        // Apply aspect ratio constraint if set
+        if let aspect = targetAspect {
+            // Convert to image-space aspect ratio
+            let imageAspect = imageSize.width / imageSize.height
+            let normalizedAspect = aspect / imageAspect
+
+            // Constrain based on which dimension changed more
+            let widthChange = abs(newRect.w - initialRect.w)
+            let heightChange = abs(newRect.h - initialRect.h)
+
+            if widthChange >= heightChange {
+                // Width is primary - adjust height
+                let targetH = newRect.w / normalizedAspect
+                switch corner {
+                case .topLeft, .topRight:
+                    // Anchor bottom edge
+                    let bottomY = initialRect.y + initialRect.h
+                    newRect.h = min(targetH, bottomY)
+                    newRect.y = bottomY - newRect.h
+                case .bottomLeft, .bottomRight:
+                    // Anchor top edge
+                    newRect.h = min(targetH, 1 - initialRect.y)
+                }
+            } else {
+                // Height is primary - adjust width
+                let targetW = newRect.h * normalizedAspect
+                switch corner {
+                case .topLeft, .bottomLeft:
+                    // Anchor right edge
+                    let rightX = initialRect.x + initialRect.w
+                    newRect.w = min(targetW, rightX)
+                    newRect.x = rightX - newRect.w
+                case .topRight, .bottomRight:
+                    // Anchor left edge
+                    newRect.w = min(targetW, 1 - initialRect.x)
+                }
+            }
+        }
+
+        // Clamp to valid bounds
+        newRect.x = max(0, newRect.x)
+        newRect.y = max(0, newRect.y)
+        newRect.w = min(newRect.w, 1 - newRect.x)
+        newRect.h = min(newRect.h, 1 - newRect.y)
+
         crop.rect = newRect
     }
     

@@ -133,8 +133,12 @@ struct SingleView: View {
                     }
                 }
                 .overlay(alignment: .bottomLeading) {
-                    // AI Edit button
-                    AIEditButton(showAIEditor: $showAIEditor, hasAsset: appState.selectedAsset != nil)
+                    // Transform and AI Edit buttons
+                    TransformToolbar(
+                        transformMode: $appState.transformMode,
+                        showAIEditor: $showAIEditor,
+                        hasAsset: appState.selectedAsset != nil
+                    )
                 }
                 
                 // Info bar
@@ -269,11 +273,36 @@ struct SingleView: View {
                     }
                     return .handled
                 }
+                // Transform mode toggle (C)
+                .onKeyPress("c") {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        appState.transformMode.toggle()
+                    }
+                    return .handled
+                }
+                // Enter to commit transform mode
+                .onKeyPress(.return) {
+                    if appState.transformMode {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            appState.transformMode = false
+                        }
+                        return .handled
+                    }
+                    return .ignored
+                }
                 // Escape to reset
                 .onKeyPress(.escape) {
                     // Exit mask painting mode first if active
                     if appState.maskPaintingMode {
                         appState.maskPaintingMode = false
+                        return .handled
+                    }
+
+                    // Exit transform mode
+                    if appState.transformMode {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            appState.transformMode = false
+                        }
                         return .handled
                     }
 
@@ -314,30 +343,57 @@ struct SingleView: View {
     
     // MARK: - AI Edit Button
 
-    private struct AIEditButton: View {
+    /// Toolbar with Transform (Crop) and AI Edit buttons
+    private struct TransformToolbar: View {
+        @Binding var transformMode: Bool
         @Binding var showAIEditor: Bool
         let hasAsset: Bool
 
         var body: some View {
             if hasAsset {
-                Button {
-                    showAIEditor = true
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 10))
-                            .foregroundColor(.yellow)
-                        Text("AI Edit")
-                            .font(.system(size: 10, weight: .medium))
+                HStack(spacing: 8) {
+                    // Crop/Transform button
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            transformMode.toggle()
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "crop")
+                                .font(.system(size: 10))
+                                .foregroundColor(transformMode ? .accentColor : .white)
+                            Text("Crop")
+                                .font(.system(size: 10, weight: .medium))
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
+                    .buttonStyle(.plain)
+                    .background(transformMode ? Color.accentColor.opacity(0.3) : .black.opacity(0.6))
+                    .foregroundColor(.white)
+                    .cornerRadius(6)
+                    .help("Enter Transform Mode (C)")
+
+                    // AI Edit button
+                    Button {
+                        showAIEditor = true
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 10))
+                                .foregroundColor(.yellow)
+                            Text("AI Edit")
+                                .font(.system(size: 10, weight: .medium))
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.plain)
+                    .background(.black.opacity(0.6))
+                    .foregroundColor(.white)
+                    .cornerRadius(6)
+                    .help("Open AI Editor (⌘⇧A)")
                 }
-                .buttonStyle(.plain)
-                .background(.black.opacity(0.6))
-                .foregroundColor(.white)
-                .cornerRadius(6)
-                .help("Open AI Editor (⌘⇧A)")
                 .padding(16)
             }
         }
@@ -433,8 +489,8 @@ struct SingleView: View {
                             toggleZoom()
                         }
                         .overlay {
-                            // Crop overlay when enabled (only in edit mode)
-                            if !showOriginal && currentCrop.wrappedValue.isEnabled {
+                            // Crop overlay when in transform mode
+                            if !showOriginal && appState.transformMode {
                                 CropOverlayView(
                                     crop: currentCrop,
                                     imageSize: image.size
@@ -459,9 +515,7 @@ struct SingleView: View {
                     ProgressView("Loading…")
                         .foregroundColor(.secondary)
                 } else {
-                    Image(systemName: "photo")
-                        .font(.system(size: 64))
-                        .foregroundColor(.secondary)
+                    EmptyStateView.noPhotoSelected
                 }
                 
                 // Before/After indicator

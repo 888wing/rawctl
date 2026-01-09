@@ -19,19 +19,26 @@ struct ExportSettings: Codable {
     /// Size options for export
     enum SizeOption: String, CaseIterable, Identifiable, Codable {
         case original = "Original"
+        case recipeResize = "Use Recipe Resize"
         case size2048 = "2048px"
         case size4096 = "4096px"
         case custom = "Custom"
-        
+
         var id: String { rawValue }
-        
+
         var maxSize: Int? {
             switch self {
             case .original: return nil
+            case .recipeResize: return nil // Uses per-photo recipe resize settings
             case .size2048: return 2048
             case .size4096: return 4096
             case .custom: return nil // Use customSize
             }
+        }
+
+        /// Whether this option uses per-photo recipe resize settings
+        var usesRecipeResize: Bool {
+            self == .recipeResize
         }
     }
     
@@ -44,11 +51,13 @@ struct ExportSettings: Codable {
         var id: String { rawValue }
     }
     
-    /// Get actual max size to use
+    /// Get actual max size to use (for non-recipe-resize options)
     func getMaxSize(customSize: Int) -> CGFloat? {
         switch sizeOption {
         case .original:
             return nil
+        case .recipeResize:
+            return nil  // Handled by per-photo recipe
         case .size2048:
             return 2048
         case .size4096:

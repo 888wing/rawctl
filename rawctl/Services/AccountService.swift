@@ -357,31 +357,61 @@ final class AccountService: ObservableObject {
         return balance.totalRemaining >= cost
     }
     
+    // MARK: - Device ID
+
+    /// Get or create persistent device identifier
+    var deviceId: String {
+        KeychainHelper.getOrCreateDeviceId()
+    }
+
     // MARK: - Network Helpers
-    
+
     private func get<T: Codable>(endpoint: String, authenticated: Bool = true) async throws -> T {
         var request = URLRequest(url: URL(string: baseURL + endpoint)!)
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        
+        request.setValue(deviceId, forHTTPHeaderField: "X-Device-ID")
+
         if authenticated, let token = accessToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
-        
+
         let (data, response) = try await URLSession.shared.data(for: request)
-        
+
         guard let httpResponse = response as? HTTPURLResponse else {
             throw AccountError.networkError
         }
-        
-        if httpResponse.statusCode == 401 {
+
+        // Handle security-related HTTP status codes
+        switch httpResponse.statusCode {
+        case 200...299:
+            break // Success, continue to decode
+
+        case 401:
+            // Check for token replay detection
+            if let errorCode = parseErrorCode(from: data), errorCode == "TOKEN_REPLAY_DETECTED" {
+                signOut()
+                throw AccountError.tokenReplayDetected
+            }
             // Try to refresh token
             if try await refreshAccessToken() {
                 return try await get(endpoint: endpoint, authenticated: authenticated)
             }
             throw AccountError.unauthorized
+
+        case 403:
+            let reason = parseErrorMessage(from: data) ?? "Access denied"
+            throw AccountError.securityBlock(reason: reason)
+
+        case 429:
+            let retryAfter = httpResponse.value(forHTTPHeaderField: "Retry-After")
+                .flatMap { Int($0) } ?? 60
+            throw AccountError.rateLimited(retryAfter: retryAfter)
+
+        default:
+            break // Other errors handled by decoder
         }
-        
+
         return try JSONDecoder().decode(T.self, from: data)
     }
     
@@ -393,26 +423,72 @@ final class AccountService: ObservableObject {
         var request = URLRequest(url: URL(string: baseURL + endpoint)!)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(deviceId, forHTTPHeaderField: "X-Device-ID")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        
+
         if authenticated, let token = accessToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
-        
+
         let (data, response) = try await URLSession.shared.data(for: request)
-        
+
         guard let httpResponse = response as? HTTPURLResponse else {
             throw AccountError.networkError
         }
-        
-        if httpResponse.statusCode == 401 {
+
+        // Handle security-related HTTP status codes
+        switch httpResponse.statusCode {
+        case 200...299:
+            break // Success, continue to decode
+
+        case 401:
+            // Check for token replay detection
+            if let errorCode = parseErrorCode(from: data), errorCode == "TOKEN_REPLAY_DETECTED" {
+                signOut()
+                throw AccountError.tokenReplayDetected
+            }
+            // Try to refresh token
             if try await refreshAccessToken() {
                 return try await post(endpoint: endpoint, body: body, authenticated: authenticated)
             }
             throw AccountError.unauthorized
+
+        case 403:
+            let reason = parseErrorMessage(from: data) ?? "Access denied"
+            throw AccountError.securityBlock(reason: reason)
+
+        case 429:
+            let retryAfter = httpResponse.value(forHTTPHeaderField: "Retry-After")
+                .flatMap { Int($0) } ?? 60
+            throw AccountError.rateLimited(retryAfter: retryAfter)
+
+        default:
+            break // Other errors handled by decoder
         }
-        
+
         return try JSONDecoder().decode(T.self, from: data)
+    }
+
+    // MARK: - Error Parsing Helpers
+
+    /// Parse error code from API error response
+    private func parseErrorCode(from data: Data) -> String? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let error = json["error"] as? [String: Any],
+              let code = error["code"] as? String else {
+            return nil
+        }
+        return code
+    }
+
+    /// Parse error message from API error response
+    private func parseErrorMessage(from data: Data) -> String? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let error = json["error"] as? [String: Any],
+              let message = error["message"] as? String else {
+            return nil
+        }
+        return message
     }
     
     private func refreshAccessToken() async throws -> Bool {
@@ -438,20 +514,37 @@ enum AccountError: LocalizedError {
     case invalidResponse
     case unauthorized
     case insufficientCredits
-    
+    case rateLimited(retryAfter: Int)
+    case securityBlock(reason: String)
+    case tokenReplayDetected
+
     var errorDescription: String? {
         switch self {
         case .networkError: return "Network error. Please check your connection."
         case .invalidResponse: return "Invalid response from server."
         case .unauthorized: return "Session expired. Please sign in again."
         case .insufficientCredits: return "Not enough credits."
+        case .rateLimited(let retryAfter): return "Too many requests. Please wait \(retryAfter) seconds."
+        case .securityBlock(let reason): return "Request blocked: \(reason)"
+        case .tokenReplayDetected: return "Security alert: Please sign in again."
         }
+    }
+
+    /// Retry-After value for rate limited errors
+    var retryAfter: Int? {
+        if case .rateLimited(let seconds) = self {
+            return seconds
+        }
+        return nil
     }
 }
 
 // MARK: - Keychain Helper
 
 struct KeychainHelper {
+    /// Keychain keys
+    private static let deviceIdKey = "rawctl_device_id"
+
     static func set(key: String, value: String) {
         let data = value.data(using: .utf8)!
         let query: [String: Any] = [
@@ -459,31 +552,68 @@ struct KeychainHelper {
             kSecAttrAccount as String: key,
             kSecValueData as String: data
         ]
-        
+
         SecItemDelete(query as CFDictionary)
         SecItemAdd(query as CFDictionary, nil)
     }
-    
+
     static func get(key: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: key,
             kSecReturnData as String: true
         ]
-        
+
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-        
+
         guard status == errSecSuccess, let data = result as? Data else { return nil }
         return String(data: data, encoding: .utf8)
     }
-    
+
     static func delete(key: String) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: key
         ]
         SecItemDelete(query as CFDictionary)
+    }
+
+    // MARK: - Device ID Management
+
+    /// Get or create a persistent device identifier
+    /// This ID is generated once and stored in Keychain for the lifetime of the app installation
+    static func getOrCreateDeviceId() -> String {
+        // Check if we already have a device ID
+        if let existingId = get(key: deviceIdKey) {
+            return existingId
+        }
+
+        // Generate a new UUID
+        let newDeviceId = UUID().uuidString
+
+        // Store with more restrictive access - only accessible on this device
+        let data = newDeviceId.data(using: .utf8)!
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: deviceIdKey,
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        ]
+
+        SecItemDelete(query as CFDictionary)
+        let status = SecItemAdd(query as CFDictionary, nil)
+
+        if status != errSecSuccess {
+            print("[KeychainHelper] Failed to store device ID: \(status)")
+        }
+
+        return newDeviceId
+    }
+
+    /// Get current device ID (returns nil if not yet created)
+    static var deviceId: String? {
+        return get(key: deviceIdKey)
     }
 }
 

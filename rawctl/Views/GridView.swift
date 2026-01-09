@@ -60,9 +60,38 @@ struct GridView: View {
     private func groupKey(for asset: PhotoAsset) -> String {
         switch appState.sortCriteria {
         case .filename:
-            // Group by first letter
-            let firstChar = asset.filename.prefix(1).uppercased()
-            return firstChar.isEmpty ? "#" : firstChar
+            // Group by camera prefix pattern (more meaningful than first letter)
+            let filename = asset.filename.uppercased()
+
+            // Common camera filename patterns
+            let patterns = [
+                "DSC_", "DSCN", "DSC-",           // Nikon
+                "IMG_", "IMG-",                   // Canon, iPhone
+                "_DSC",                           // Sony
+                "P10", "P11", "P12",              // Panasonic
+                "DSCF", "DSCN",                   // Fujifilm
+                "R0", "RICOH",                    // Ricoh
+                "GH0", "G0",                      // Panasonic GH series
+                "L10", "L1P",                     // Leica
+                "DJI_", "DJI-",                   // DJI drone
+                "GOPR", "GH0", "GX0",             // GoPro
+                "SAM_",                           // Samsung
+                "DC_", "DC-",                     // Generic
+            ]
+
+            for pattern in patterns {
+                if filename.hasPrefix(pattern) {
+                    return pattern.trimmingCharacters(in: CharacterSet(charactersIn: "_-"))
+                }
+            }
+
+            // Check for Sony _DSC pattern (appears after number)
+            if filename.contains("_DSC") {
+                return "_DSC"
+            }
+
+            // Fallback: group by file extension
+            return asset.fileExtension.uppercased()
             
         case .captureDate:
             // Group by date (YYYY-MM-DD)
@@ -119,6 +148,30 @@ struct GridView: View {
                 return displayFormatter.string(from: date)
             }
             return key
+        case .filename:
+            // Camera prefix display names
+            let cameraNames: [String: String] = [
+                "DSC": "Nikon",
+                "DSCN": "Nikon",
+                "IMG": "Canon / iPhone",
+                "_DSC": "Sony",
+                "DSCF": "Fujifilm",
+                "DJI": "DJI Drone",
+                "GOPR": "GoPro",
+                "GH0": "Panasonic GH",
+                "G0": "Panasonic G",
+                "GX0": "GoPro",
+                "SAM": "Samsung",
+                "DC": "Digital Camera",
+                "R0": "Ricoh",
+                "RICOH": "Ricoh",
+                "L10": "Leica",
+                "L1P": "Leica",
+                "P10": "Panasonic",
+                "P11": "Panasonic",
+                "P12": "Panasonic",
+            ]
+            return cameraNames[key] ?? key
         default:
             return key
         }
@@ -239,26 +292,56 @@ struct GridView: View {
     }
     
     /// Grid content view (extracted for compiler performance)
+    @ViewBuilder
     private var gridContent: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 16, pinnedViews: [.sectionHeaders]) {
-                ForEach(groupedAssets, id: \.key) { group in
-                    Section {
-                        LazyVGrid(columns: columns, spacing: 12) {
-                            ForEach(group.assets) { asset in
-                                thumbnailForAsset(asset)
+        if appState.assets.isEmpty {
+            // Empty state - no photos loaded
+            VStack {
+                Spacer()
+                EmptyStateView.noPhotos {
+                    openFolder()
+                }
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if appState.filteredAssets.isEmpty {
+            // Empty state - filter has no results
+            VStack {
+                Spacer()
+                EmptyStateView(
+                    icon: "line.3.horizontal.decrease.circle",
+                    title: "No Matching Photos",
+                    subtitle: "Try adjusting your filter criteria"
+                )
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 16, pinnedViews: [.sectionHeaders]) {
+                    ForEach(groupedAssets, id: \.key) { group in
+                        Section {
+                            LazyVGrid(columns: columns, spacing: 12) {
+                                ForEach(group.assets) { asset in
+                                    thumbnailForAsset(asset)
+                                }
                             }
+                        } header: {
+                            SectionHeader(
+                                title: groupLabel(for: group.key),
+                                count: group.assets.count,
+                                sortCriteria: appState.sortCriteria
+                            )
+                            .animation(nil, value: group.key)
                         }
-                    } header: {
-                        SectionHeader(
-                            title: groupLabel(for: group.key),
-                            count: group.assets.count,
-                            sortCriteria: appState.sortCriteria
-                        )
                     }
                 }
+                .padding(16)
+                .transaction { transaction in
+                    // Disable animations on section header re-positioning
+                    transaction.animation = nil
+                }
             }
-            .padding(16)
         }
     }
     
@@ -302,6 +385,37 @@ struct GridView: View {
                 appState.showHUD(message)
             }
         )
+    }
+
+    // MARK: - Actions
+
+    private func openFolder() {
+        guard let url = FileSystemService.selectFolder() else { return }
+
+        appState.selectedFolder = url
+        appState.isLoading = true
+        appState.loadingMessage = "Scanning folder…"
+
+        Task {
+            do {
+                let assets = try await FileSystemService.scanFolder(url)
+                await MainActor.run {
+                    appState.assets = assets
+                    appState.isLoading = false
+                    appState.recipes = [:]
+                }
+                await appState.loadAllRecipes()
+                await MainActor.run {
+                    if let first = appState.assets.first {
+                        appState.selectedAssetId = first.id
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    appState.isLoading = false
+                }
+            }
+        }
     }
 }
 

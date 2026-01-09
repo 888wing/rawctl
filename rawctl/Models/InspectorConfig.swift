@@ -18,6 +18,7 @@ enum InspectorPanel: String, CaseIterable, Identifiable, Codable {
     case color = "Color"
     case hsl = "HSL"
     case composition = "Composition"
+    case resize = "Resize"
     case effects = "Effects"
     case splitToning = "Split Toning"
     case grain = "Grain"
@@ -28,7 +29,7 @@ enum InspectorPanel: String, CaseIterable, Identifiable, Codable {
     case aiLayers = "AI Layers"
 
     var id: String { rawValue }
-    
+
     var icon: String {
         switch self {
         case .organization: return "folder"
@@ -39,6 +40,7 @@ enum InspectorPanel: String, CaseIterable, Identifiable, Codable {
         case .color: return "paintpalette"
         case .hsl: return "slider.horizontal.3"
         case .composition: return "crop"
+        case .resize: return "arrow.up.left.and.arrow.down.right"
         case .effects: return "sparkles"
         case .splitToning: return "circle.lefthalf.filled"
         case .grain: return "square.3.layers.3d"
@@ -55,7 +57,7 @@ enum InspectorPanel: String, CaseIterable, Identifiable, Codable {
         switch self {
         case .organization, .light, .toneCurve, .color, .hsl, .composition, .effects, .whiteBalance, .aiGeneration, .aiLayers:
             return true
-        case .rgbCurves, .splitToning, .grain, .transform, .lensCorrections, .calibration:
+        case .resize, .rgbCurves, .splitToning, .grain, .transform, .lensCorrections, .calibration:
             return false  // Advanced panels hidden by default
         }
     }

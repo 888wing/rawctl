@@ -99,16 +99,18 @@ actor ExportService {
     
     private func exportJob(_ job: ExportJob, to destination: URL) async throws {
         print("[Export] Starting export for: \(job.asset.filename)")
-        
-        // Determine output size
+
+        // Determine output size and whether to use recipe resize
         let maxSize = job.settings.getMaxSize(customSize: job.settings.customSize)
-        print("[Export] Max size: \(String(describing: maxSize))")
-        
+        let useRecipeResize = job.settings.sizeOption.usesRecipeResize
+        print("[Export] Max size: \(String(describing: maxSize)), useRecipeResize: \(useRecipeResize)")
+
         // Render with ImagePipeline
         guard let cgImage = await ImagePipeline.shared.renderForExport(
             for: job.asset,
             recipe: job.recipe,
-            maxSize: maxSize
+            maxSize: maxSize,
+            useRecipeResize: useRecipeResize
         ) else {
             print("[Export] ERROR: renderForExport returned nil")
             throw ExportError.renderFailed

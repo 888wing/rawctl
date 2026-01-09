@@ -47,6 +47,8 @@ struct MainLayoutView: View {
         }
         .preferredColorScheme(.dark)
         .frame(minWidth: 900, minHeight: 600)
+        .withNetworkErrorBanner()
+        .withErrorHandling()
         .task {
             // Initialize catalog on startup
             do {

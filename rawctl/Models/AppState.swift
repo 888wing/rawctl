@@ -108,6 +108,9 @@ final class AppState: ObservableObject {
     // Eyedropper mode for white balance
     @Published var eyedropperMode: Bool = false
 
+    // Transform mode for crop/rotate/resize editing
+    @Published var transformMode: Bool = false
+
     // MARK: - Catalog & Project Mode
 
     /// The loaded catalog (nil if using legacy folder mode)
@@ -435,10 +438,10 @@ final class AppState: ObservableObject {
         }
     }
     
-    @Published var sortCriteria: SortCriteria = .filename {
+    @Published var sortCriteria: SortCriteria = .captureDate {
         didSet { invalidateFilterCache() }
     }
-    @Published var sortOrder: SortOrder = .ascending {
+    @Published var sortOrder: SortOrder = .descending {
         didSet { invalidateFilterCache() }
     }
     
@@ -1048,6 +1051,166 @@ final class AppState: ObservableObject {
                         self.thumbnailLoadingProgress = .idle
                     }
                 }
+            }
+        }
+    }
+}
+
+// MARK: - Project State Persistence (v2)
+
+extension AppState {
+    /// Save current UI state to the selected project
+    func saveCurrentStateToProject() {
+        guard var project = selectedProject else { return }
+
+        // Save filter state
+        project.savedFilterState = SavedFilterState(
+            minRating: filterRating,
+            flagFilter: filterFlag,
+            colorLabel: filterColor,
+            tag: filterTag
+        )
+
+        // Save sort criteria
+        project.sortCriteria = sortCriteria.rawValue
+        project.sortAscending = (sortOrder == .ascending)
+
+        // Save view mode
+        project.savedViewMode = viewMode == .grid ? .grid : .single
+
+        // Save selected photo path
+        if let selectedId = selectedAssetId,
+           let asset = assets.first(where: { $0.id == selectedId }) {
+            project.lastSelectedPhotoPath = asset.url.path
+        } else {
+            project.lastSelectedPhotoPath = nil
+        }
+
+        // Note: gridZoomLevel is stored in GridView's @State, not AppState
+        // It would need to be propagated if we want to save it
+
+        // Update timestamps
+        project.updatedAt = Date()
+
+        // Update in catalog
+        selectedProject = project
+        catalog?.updateProject(project)
+    }
+
+    /// Restore UI state from a project
+    func restoreStateFromProject(_ project: Project) {
+        // Restore filter state
+        if let savedFilter = project.savedFilterState {
+            filterRating = savedFilter.minRating
+            filterFlag = savedFilter.flagFilter
+            filterColor = savedFilter.colorLabel
+            filterTag = savedFilter.tag
+        } else {
+            // Clear filters if no saved state
+            filterRating = 0
+            filterFlag = nil
+            filterColor = nil
+            filterTag = ""
+        }
+
+        // Restore sort criteria
+        if let savedCriteria = project.sortCriteria,
+           let criteria = SortCriteria(rawValue: savedCriteria) {
+            sortCriteria = criteria
+        }
+        if let ascending = project.sortAscending {
+            sortOrder = ascending ? .ascending : .descending
+        }
+
+        // Restore view mode
+        if let savedMode = project.savedViewMode {
+            viewMode = savedMode == .grid ? .grid : .single
+        }
+
+        // Note: lastSelectedPhotoPath will be restored after assets are loaded
+        // See restoreLastSelectedPhoto()
+    }
+
+    /// Restore the last selected photo after assets are loaded
+    func restoreLastSelectedPhoto(from project: Project) {
+        guard let photoPath = project.lastSelectedPhotoPath else { return }
+
+        // Find asset by path
+        if let asset = assets.first(where: { $0.url.path == photoPath }) {
+            selectedAssetId = asset.id
+        }
+    }
+
+    /// Load project's source folders using bookmarks
+    func loadProjectFolders(_ project: Project) async {
+        for url in project.sourceFolders {
+            if let bookmarkData = project.getBookmarkData(for: url) {
+                // Try to restore from bookmark
+                do {
+                    var isStale = false
+                    let resolvedURL = try URL(
+                        resolvingBookmarkData: bookmarkData,
+                        options: .withSecurityScope,
+                        relativeTo: nil,
+                        bookmarkDataIsStale: &isStale
+                    )
+
+                    guard resolvedURL.startAccessingSecurityScopedResource() else {
+                        print("Failed to access security-scoped resource for: \(url.path)")
+                        continue
+                    }
+
+                    // Load the folder using existing method
+                    await openFolderFromPath(resolvedURL.path)
+
+                    // If bookmark is stale, refresh it
+                    if isStale {
+                        print("Bookmark is stale for: \(url.path), consider refreshing")
+                        // Could update project.folderBookmarks here
+                    }
+                } catch {
+                    print("Failed to resolve bookmark for \(url.path): \(error)")
+                }
+            } else {
+                // No bookmark, try direct path access (may fail in sandbox)
+                await openFolderFromPath(url.path)
+            }
+        }
+    }
+
+    /// Called on app launch to restore last project
+    func restoreLastProject() async {
+        guard let catalog = catalog else { return }
+
+        // Migrate if needed
+        if catalog.version < 2 {
+            var mutableCatalog = catalog
+            mutableCatalog.migrateToV2()
+            self.catalog = mutableCatalog
+            // Save migrated catalog
+            // Note: CatalogService.save would be called by the service
+        }
+
+        // Restore last opened project
+        guard let lastProjectId = catalog.lastOpenedProjectId,
+              let project = catalog.getProject(lastProjectId) else {
+            return
+        }
+
+        // Load project folders
+        await loadProjectFolders(project)
+
+        // Restore UI state
+        restoreStateFromProject(project)
+
+        // Set as selected project
+        selectedProject = project
+
+        // Restore selected photo after a small delay (assets need to load first)
+        Task {
+            try? await Task.sleep(nanoseconds: 500_000_000)  // 0.5 second delay
+            await MainActor.run {
+                self.restoreLastSelectedPhoto(from: project)
             }
         }
     }

@@ -11,10 +11,15 @@ import CoreGraphics
 /// Configuration for the rawctl color pipeline
 struct ColorPipelineConfig {
     /// Working color space (scene-referred, wide gamut)
-    static let workingColorSpace = CGColorSpace(name: CGColorSpace.displayP3)!
+    /// Falls back to sRGB if Display P3 unavailable (older systems)
+    static let workingColorSpace: CGColorSpace = {
+        CGColorSpace(name: CGColorSpace.displayP3) ?? CGColorSpace(name: CGColorSpace.sRGB)!
+    }()
 
     /// Output color space for display
-    static let displayColorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
+    static let displayColorSpace: CGColorSpace = {
+        CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+    }()
 
     /// Internal processing precision
     static let processingBitDepth: Int = 16  // 16-bit float

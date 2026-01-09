@@ -99,12 +99,13 @@ struct ExportPreset: Identifiable, Codable, Equatable {
 
 /// Central catalog for the rawctl library
 struct Catalog: Codable, Equatable {
-    static let currentVersion = 1
+    static let currentVersion = 2  // v2: Project state persistence
 
     var version: Int
     var libraryPath: URL
     var projects: [Project]
-    var smartCollections: [SmartCollection]
+    var smartCollections: [SmartCollection]              // Global smart collections
+    var projectSmartCollections: [UUID: [SmartCollection]]?  // Per-project smart collections (v2)
     var importPreferences: ImportPreferences
     var exportPresets: [ExportPreset]
     var lastOpenedProjectId: UUID?
@@ -122,6 +123,7 @@ struct Catalog: Codable, Equatable {
             .unrated,
             .edited
         ]
+        self.projectSmartCollections = nil  // v2
         self.importPreferences = ImportPreferences()
         self.exportPresets = [
             .clientPreview,
@@ -132,6 +134,47 @@ struct Catalog: Codable, Equatable {
         self.lastOpenedProjectId = nil
         self.createdAt = Date()
         self.updatedAt = Date()
+    }
+
+    // MARK: - Version Migration
+
+    /// Migrate from v1 to v2
+    /// Safe migration: new Project fields are optional, so existing data decodes fine
+    mutating func migrateToV2() {
+        guard version < 2 else { return }
+
+        // Initialize per-project smart collections if nil
+        if projectSmartCollections == nil {
+            projectSmartCollections = [:]
+        }
+
+        // Update version
+        version = 2
+        updatedAt = Date()
+    }
+
+    /// Get smart collections for a specific project (global + project-specific)
+    func getSmartCollections(for projectId: UUID?) -> [SmartCollection] {
+        var collections = smartCollections  // Always include global collections
+
+        if let projectId = projectId,
+           let projectCollections = projectSmartCollections?[projectId] {
+            collections.append(contentsOf: projectCollections)
+        }
+
+        return collections
+    }
+
+    /// Add a smart collection to a specific project
+    mutating func addSmartCollectionToProject(_ collection: SmartCollection, projectId: UUID) {
+        if projectSmartCollections == nil {
+            projectSmartCollections = [:]
+        }
+        if projectSmartCollections?[projectId] == nil {
+            projectSmartCollections?[projectId] = []
+        }
+        projectSmartCollections?[projectId]?.append(collection)
+        updatedAt = Date()
     }
 
     // MARK: - Project Management

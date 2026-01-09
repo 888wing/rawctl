@@ -14,7 +14,11 @@ struct ColorMatrix3x3: Codable, Equatable {
     var values: [Double]
 
     init(values: [Double] = [1, 0, 0, 0, 1, 0, 0, 0, 1]) {
-        precondition(values.count == 9, "ColorMatrix3x3 requires exactly 9 values")
+        // Graceful fallback to identity if malformed data (e.g., from corrupted JSON)
+        guard values.count == 9 else {
+            self.values = [1, 0, 0, 0, 1, 0, 0, 0, 1]
+            return
+        }
         self.values = values
     }
 

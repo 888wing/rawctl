@@ -15,7 +15,26 @@ struct ExportDialog: View {
     @State private var settings = ExportSettings()
     @State private var isExporting = false
     @State private var progress = ExportService.ExportProgress()
-    
+
+    /// Current asset's original size
+    private var currentAssetSize: CGSize? {
+        appState.selectedAsset?.imageSize
+    }
+
+    /// Recipe resize dimensions for current asset (if resize is enabled)
+    private var recipeResizeDimensions: (width: Int, height: Int)? {
+        guard let asset = appState.selectedAsset,
+              let recipe = appState.recipes[asset.id],
+              recipe.resize.isEnabled,
+              let originalSize = asset.imageSize else {
+            return nil
+        }
+
+        let resize = recipe.resize
+        let outputSize = resize.calculateOutputSize(originalSize: originalSize)
+        return (Int(outputSize.width), Int(outputSize.height))
+    }
+
     var body: some View {
         VStack(spacing: 20) {
             // Header
@@ -59,18 +78,58 @@ struct ExportDialog: View {
                 
                 // Size
                 Section("Size") {
-                    Picker("Long Edge", selection: $settings.sizeOption) {
+                    Picker("Output Size", selection: $settings.sizeOption) {
                         ForEach(ExportSettings.SizeOption.allCases) { option in
-                            Text(option.rawValue).tag(option)
+                            HStack {
+                                Text(option.rawValue)
+                                if option == .recipeResize, let dims = recipeResizeDimensions {
+                                    Text("(\(dims.width)×\(dims.height))")
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            .tag(option)
                         }
                     }
-                    
+
                     if settings.sizeOption == .custom {
                         HStack {
                             TextField("Size", value: $settings.customSize, format: .number)
                                 .textFieldStyle(.roundedBorder)
                                 .frame(width: 80)
                             Text("pixels")
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    // Show info when recipe has resize configured
+                    if settings.sizeOption == .recipeResize {
+                        if let dims = recipeResizeDimensions {
+                            HStack(spacing: 4) {
+                                Image(systemName: "info.circle")
+                                    .foregroundColor(.blue)
+                                Text("Using recipe resize: \(dims.width)×\(dims.height)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        } else {
+                            HStack(spacing: 4) {
+                                Image(systemName: "exclamationmark.triangle")
+                                    .foregroundColor(.orange)
+                                Text("No resize configured in recipe, will export at original size")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+
+                    // Show original dimensions
+                    if let size = currentAssetSize {
+                        HStack(spacing: 4) {
+                            Text("Original:")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text("\(Int(size.width))×\(Int(size.height))")
+                                .font(.caption)
                                 .foregroundColor(.secondary)
                         }
                     }

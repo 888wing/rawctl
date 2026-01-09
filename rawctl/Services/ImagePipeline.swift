@@ -28,6 +28,10 @@ actor ImagePipeline {
     // Intermediate result cache (for differential rendering)
     private var intermediateCache: [String: CIImage] = [String: CIImage]()
     private var lastRecipeHash: [String: Int] = [String: Int]()
+
+    // Camera profile filter cache (v1.2) - reuse filters during scrubbing
+    private var profileToneCurveCache: [String: CIFilter] = [:]
+    private var profileShoulderCache: [String: CIFilter] = [:]
     
     // Memory management
     private let maxMemoryMB: Int = 400  // Max cache memory in MB
@@ -318,10 +322,10 @@ actor ImagePipeline {
     private func applyPostRAWRecipe(_ recipe: EditRecipe, to image: CIImage, fastMode: Bool = false) -> CIImage {
         var result = image
 
-        // Apply camera profile (v1.2) - base look before user adjustments
-        if let profile = BuiltInProfile.profile(for: recipe.profileId) {
-            result = applyCameraProfile(profile, to: result)
-        }
+        // Apply camera profile (v1.2) - base look BEFORE user adjustments
+        // Pipeline order: RAW Decode → Camera Profile → User Adjustments → Display Transform
+        let profile = BuiltInProfile.profile(for: recipe.profileId) ?? BuiltInProfile.neutral.profile
+        result = applyCameraProfile(profile, to: result)
 
         // Contrast - Enhanced S-curve for more natural, punchy contrast
         if recipe.contrast != 0 {
@@ -1518,6 +1522,8 @@ actor ImagePipeline {
         rawWhiteBalanceDefaults.removeAll()
         imageCache.removeAll()
         cacheOrder.removeAll()
+        profileToneCurveCache.removeAll()
+        profileShoulderCache.removeAll()
     }
     
     // MARK: - Utilities
@@ -1762,15 +1768,16 @@ actor ImagePipeline {
     // MARK: - Camera Profile Application (v1.2)
 
     /// Apply camera profile base tone curve and highlight shoulder
+    /// Uses cached filters to avoid allocation during slider scrubbing
     private func applyCameraProfile(_ profile: CameraProfile, to image: CIImage) -> CIImage {
         var result = image
 
-        // 1. Apply base tone curve
-        result = applyFilmicToneCurve(profile.baseToneCurve, to: result)
+        // 1. Apply base tone curve (cached)
+        result = applyFilmicToneCurve(profile.baseToneCurve, to: result, profileId: profile.id)
 
-        // 2. Apply highlight shoulder (roll-off)
+        // 2. Apply highlight shoulder (roll-off, cached)
         if profile.highlightShoulder.hasEffect {
-            result = applyHighlightShoulder(profile.highlightShoulder, to: result)
+            result = applyHighlightShoulder(profile.highlightShoulder, to: result, profileId: profile.id)
         }
 
         // 3. Apply profile look (saturation/contrast boost)
@@ -1782,45 +1789,82 @@ actor ImagePipeline {
     }
 
     /// Apply filmic tone curve using CIToneCurve
-    private func applyFilmicToneCurve(_ curve: FilmicToneCurve, to image: CIImage) -> CIImage {
+    /// - Parameters:
+    ///   - curve: The tone curve to apply
+    ///   - image: Input image
+    ///   - profileId: Optional profile ID for filter caching (improves scrubbing performance)
+    private func applyFilmicToneCurve(_ curve: FilmicToneCurve, to image: CIImage, profileId: String? = nil) -> CIImage {
         guard curve.hasEdits else { return image }
 
-        // CIToneCurve requires exactly 5 points
-        // Interpolate our 6 points to 5 for the filter
-        let points = curve.points
-        let p0 = points.first ?? CurvePoint(x: 0, y: 0)
-        let p4 = points.last ?? CurvePoint(x: 1, y: 1)
+        // Use cached filter if available (avoids allocation during scrubbing)
+        let filter: CIFilter
+        if let profileId = profileId, let cached = profileToneCurveCache[profileId] {
+            filter = cached
+        } else {
+            // CIToneCurve requires exactly 5 points
+            // Interpolate our 6 points to 5 for the filter
+            let points = curve.points
+            let p0 = points.first ?? CurvePoint(x: 0, y: 0)
+            let p4 = points.last ?? CurvePoint(x: 1, y: 1)
 
-        // Find points closest to 0.25, 0.5, 0.75
-        let p1 = points.first { $0.x >= 0.15 && $0.x <= 0.35 } ?? CurvePoint(x: 0.25, y: 0.25)
-        let p2 = points.first { $0.x >= 0.4 && $0.x <= 0.6 } ?? CurvePoint(x: 0.5, y: 0.5)
-        let p3 = points.first { $0.x >= 0.7 && $0.x <= 0.9 } ?? CurvePoint(x: 0.75, y: 0.75)
+            // Find points closest to 0.25, 0.5, 0.75
+            let p1 = points.first { $0.x >= 0.15 && $0.x <= 0.35 } ?? CurvePoint(x: 0.25, y: 0.25)
+            let p2 = points.first { $0.x >= 0.4 && $0.x <= 0.6 } ?? CurvePoint(x: 0.5, y: 0.5)
+            let p3 = points.first { $0.x >= 0.7 && $0.x <= 0.9 } ?? CurvePoint(x: 0.75, y: 0.75)
 
-        let filter = CIFilter.toneCurve()
-        filter.inputImage = image
-        filter.point0 = CGPoint(x: p0.x, y: p0.y)
-        filter.point1 = CGPoint(x: p1.x, y: p1.y)
-        filter.point2 = CGPoint(x: p2.x, y: p2.y)
-        filter.point3 = CGPoint(x: p3.x, y: p3.y)
-        filter.point4 = CGPoint(x: p4.x, y: p4.y)
+            let newFilter = CIFilter.toneCurve()
+            newFilter.point0 = CGPoint(x: p0.x, y: p0.y)
+            newFilter.point1 = CGPoint(x: p1.x, y: p1.y)
+            newFilter.point2 = CGPoint(x: p2.x, y: p2.y)
+            newFilter.point3 = CGPoint(x: p3.x, y: p3.y)
+            newFilter.point4 = CGPoint(x: p4.x, y: p4.y)
 
+            if let profileId = profileId {
+                profileToneCurveCache[profileId] = newFilter
+            }
+            filter = newFilter
+        }
+
+        filter.setValue(image, forKey: kCIInputImageKey)
         return filter.outputImage ?? image
     }
 
     /// Apply highlight shoulder (soft roll-off to prevent clipping)
-    private func applyHighlightShoulder(_ shoulder: HighlightShoulder, to image: CIImage) -> CIImage {
-        let kneeStart = shoulder.knee
-        let whitePoint = shoulder.whitePoint
+    /// - Parameters:
+    ///   - shoulder: Highlight shoulder parameters
+    ///   - image: Input image
+    ///   - profileId: Optional profile ID for filter caching (improves scrubbing performance)
+    private func applyHighlightShoulder(_ shoulder: HighlightShoulder, to image: CIImage, profileId: String? = nil) -> CIImage {
+        // Use cached filter if available (avoids allocation during scrubbing)
+        let filter: CIFilter
+        if let profileId = profileId, let cached = profileShoulderCache[profileId] {
+            filter = cached
+        } else {
+            let knee = shoulder.knee
+            let whitePoint = shoulder.whitePoint
+            let softness = shoulder.softness
 
-        // Create shoulder curve using tone curve filter
-        let filter = CIFilter.toneCurve()
-        filter.inputImage = image
-        filter.point0 = CGPoint(x: 0, y: 0)
-        filter.point1 = CGPoint(x: 0.25, y: 0.25)
-        filter.point2 = CGPoint(x: 0.5, y: 0.5)
-        filter.point3 = CGPoint(x: kneeStart, y: kneeStart * (1.0 - shoulder.softness * 0.1))
-        filter.point4 = CGPoint(x: 1.0, y: whitePoint)
+            // Create monotonic shoulder curve:
+            // - Linear from 0 to knee point
+            // - Smooth roll-off from knee to whitePoint
+            // Softness affects how early the roll-off begins (lower midpoint)
+            let newFilter = CIFilter.toneCurve()
+            newFilter.point0 = CGPoint(x: 0, y: 0)
+            newFilter.point1 = CGPoint(x: 0.25, y: 0.25)
+            // Softness pulls midpoint slightly down to start roll-off earlier
+            newFilter.point2 = CGPoint(x: 0.5, y: 0.5 - softness * 0.03)
+            // Knee point stays on y=x line to ensure monotonicity
+            newFilter.point3 = CGPoint(x: knee, y: knee)
+            // Final point compresses highlights to whitePoint
+            newFilter.point4 = CGPoint(x: 1.0, y: whitePoint)
 
+            if let profileId = profileId {
+                profileShoulderCache[profileId] = newFilter
+            }
+            filter = newFilter
+        }
+
+        filter.setValue(image, forKey: kCIInputImageKey)
         return filter.outputImage ?? image
     }
 
