@@ -53,14 +53,28 @@ struct MainLayoutView: View {
             // Initialize catalog on startup
             do {
                 let service = CatalogService(catalogPath: CatalogService.defaultCatalogPath)
-                let catalog = try await service.loadOrCreate(libraryPath: CatalogService.defaultLibraryPath)
+                var catalog = try await service.loadOrCreate(libraryPath: CatalogService.defaultLibraryPath)
+
+                // Migrate catalog to v2 if needed
+                if catalog.version < 2 {
+                    catalog.migrateToV2()
+                    try? await service.save(catalog)
+                }
+
                 appState.catalog = catalog
+
+                // Try to restore last project first (v2 feature)
+                if catalog.lastOpenedProjectId != nil {
+                    await appState.restoreLastProject()
+                } else {
+                    // Fall back to legacy folder-based startup
+                    await appState.loadStartupFolder()
+                }
             } catch {
                 print("[MainLayoutView] Failed to load catalog: \(error)")
+                // Fall back to legacy folder-based startup
+                await appState.loadStartupFolder()
             }
-
-            // Load last opened or default folder on startup
-            await appState.loadStartupFolder()
         }
         .sheet(isPresented: $showExportDialog) {
             ExportDialog(appState: appState)
