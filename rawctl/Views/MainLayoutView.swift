@@ -54,6 +54,8 @@ struct MainLayoutView: View {
             // Initialize catalog on startup
             do {
                 let service = CatalogService(catalogPath: CatalogService.defaultCatalogPath)
+                self.catalogService = service  // Store for auto-save on termination
+
                 var catalog = try await service.loadOrCreate(libraryPath: CatalogService.defaultLibraryPath)
 
                 // Migrate catalog to v2 if needed
