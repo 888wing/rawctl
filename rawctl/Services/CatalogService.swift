@@ -9,7 +9,7 @@ import Foundation
 
 /// Service for loading and saving the catalog
 actor CatalogService {
-    let catalogPath: URL  // Internal access for auto-save on termination
+    nonisolated let catalogPath: URL  // Nonisolated for sync access during termination
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
 
