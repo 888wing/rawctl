@@ -29,7 +29,8 @@ struct EditRecipe: Codable, Equatable {
     
     // Composition
     var crop: Crop = Crop()
-    
+    var resize: Resize = Resize()
+
     // MARK: - Advanced Effects (P0)
     var rgbCurves: RGBCurves = RGBCurves()
     var vignette: Vignette = Vignette()
@@ -48,7 +49,10 @@ struct EditRecipe: Codable, Equatable {
     var dehaze: Double = 0            // -100 to +100 (remove haze)
     var texture: Double = 0           // -100 to +100 (fine detail)
     var calibration: CameraCalibration = CameraCalibration()  // Camera calibration
-    
+
+    // MARK: - Camera Profile (v1.2)
+    var profileId: String = BuiltInProfile.neutral.rawValue
+
     // MARK: - Metadata & Organization
     var rating: Int = 0               // 0-5 stars
     var colorLabel: ColorLabel = .none
@@ -63,13 +67,13 @@ struct EditRecipe: Codable, Equatable {
     var hasEdits: Bool {
         exposure != 0 || contrast != 0 || highlights != 0 || shadows != 0 ||
         whites != 0 || blacks != 0 || whiteBalance.hasEdits ||
-        vibrance != 0 || saturation != 0 || crop.isEnabled ||
+        vibrance != 0 || saturation != 0 || crop.isEnabled || resize.hasEffect ||
         toneCurve.hasEdits || rgbCurves.hasEdits ||
         vignette.hasEffect || splitToning.hasEffect ||
         sharpness > 0 || noiseReduction > 0 || grain.hasEffect ||
         chromaticAberration.hasEffect || perspective.hasEdits ||
         hsl.hasEdits || clarity != 0 || dehaze != 0 || texture != 0 ||
-        calibration.hasEdits
+        calibration.hasEdits || profileId != BuiltInProfile.neutral.rawValue
     }
     
     /// Check if has any organization metadata
@@ -139,7 +143,8 @@ struct EditRecipe: Codable, Equatable {
         
         // Composition
         crop = try container.decodeIfPresent(Crop.self, forKey: .crop) ?? Crop()
-        
+        resize = try container.decodeIfPresent(Resize.self, forKey: .resize) ?? Resize()
+
         // Advanced Effects - NEW in v2
         rgbCurves = try container.decodeIfPresent(RGBCurves.self, forKey: .rgbCurves) ?? RGBCurves()
         vignette = try container.decodeIfPresent(Vignette.self, forKey: .vignette) ?? Vignette()
@@ -158,7 +163,10 @@ struct EditRecipe: Codable, Equatable {
         dehaze = try container.decodeIfPresent(Double.self, forKey: .dehaze) ?? 0.0
         texture = try container.decodeIfPresent(Double.self, forKey: .texture) ?? 0.0
         calibration = try container.decodeIfPresent(CameraCalibration.self, forKey: .calibration) ?? CameraCalibration()
-        
+
+        // Camera Profile (v1.2)
+        profileId = try container.decodeIfPresent(String.self, forKey: .profileId) ?? BuiltInProfile.neutral.rawValue
+
         // Metadata
         rating = try container.decodeIfPresent(Int.self, forKey: .rating) ?? 0
         colorLabel = try container.decodeIfPresent(ColorLabel.self, forKey: .colorLabel) ?? .none
@@ -174,10 +182,11 @@ struct EditRecipe: Codable, Equatable {
         case exposure, contrast, highlights, shadows, whites, blacks
         case toneCurve, whiteBalance
         case vibrance, saturation
-        case crop
+        case crop, resize
         case rgbCurves, vignette, splitToning, sharpness, noiseReduction, grain
         case chromaticAberration, perspective
         case hsl, clarity, dehaze, texture, calibration
+        case profileId  // v1.2
         case rating, colorLabel, flag, tags
     }
 }
@@ -237,24 +246,46 @@ struct Crop: Codable, Equatable {
     var isEnabled: Bool = false
     var aspect: Aspect = .free
     var rect: CropRect = CropRect()
-    var rotationDegrees: Int = 0
-    
+    var rotationDegrees: Int = 0           // 90° increments (0, 90, 180, 270)
+    var straightenAngle: Double = 0        // -45° to +45° continuous
+    var flipHorizontal: Bool = false
+    var flipVertical: Bool = false
+
     enum Aspect: String, Codable, CaseIterable, Identifiable {
         case free = "free"
+        case original = "original"
         case square = "1:1"
         case ratio4x3 = "4:3"
         case ratio3x2 = "3:2"
         case ratio16x9 = "16:9"
-        
+        case ratio5x4 = "5:4"
+        case ratio7x5 = "7:5"
+
         var id: String { rawValue }
-        
+
         var displayName: String {
             switch self {
             case .free: return "Free"
+            case .original: return "Original"
             case .square: return "1:1"
             case .ratio4x3: return "4:3"
             case .ratio3x2: return "3:2"
             case .ratio16x9: return "16:9"
+            case .ratio5x4: return "5:4"
+            case .ratio7x5: return "7:5"
+            }
+        }
+
+        /// Returns the aspect ratio as a Double (width/height), or nil for free/original
+        var aspectRatio: Double? {
+            switch self {
+            case .free, .original: return nil
+            case .square: return 1.0
+            case .ratio4x3: return 4.0 / 3.0
+            case .ratio3x2: return 3.0 / 2.0
+            case .ratio16x9: return 16.0 / 9.0
+            case .ratio5x4: return 5.0 / 4.0
+            case .ratio7x5: return 7.0 / 5.0
             }
         }
     }
@@ -266,6 +297,161 @@ struct CropRect: Codable, Equatable {
     var y: Double = 0.0
     var w: Double = 1.0
     var h: Double = 1.0
+}
+
+// MARK: - Resize
+
+/// Resize settings for non-destructive output sizing
+struct Resize: Codable, Equatable {
+    var isEnabled: Bool = false
+    var mode: ResizeMode = .pixels
+    var width: Int = 0                    // 0 = auto-calculate from aspect
+    var height: Int = 0                   // 0 = auto-calculate from aspect
+    var percentage: Double = 100          // 1-200%
+    var preset: ResizePreset = .none
+    var longEdge: Int = 0                 // For longEdge mode
+    var shortEdge: Int = 0                // For shortEdge mode
+    var maintainAspectRatio: Bool = true
+
+    enum ResizeMode: String, Codable, CaseIterable {
+        case pixels = "pixels"
+        case percentage = "percentage"
+        case preset = "preset"
+        case longEdge = "longEdge"
+        case shortEdge = "shortEdge"
+
+        var displayName: String {
+            switch self {
+            case .pixels: return "Pixels"
+            case .percentage: return "Percentage"
+            case .preset: return "Preset"
+            case .longEdge: return "Long Edge"
+            case .shortEdge: return "Short Edge"
+            }
+        }
+    }
+
+    enum ResizePreset: String, Codable, CaseIterable, Identifiable {
+        case none = "none"
+        case instagram = "instagram"
+        case instagramPortrait = "instagramPortrait"
+        case facebookCover = "facebookCover"
+        case twitterHeader = "twitterHeader"
+        case wallpaper4K = "wallpaper4K"
+        case wallpaper2K = "wallpaper2K"
+        case web1080 = "web1080"
+
+        var id: String { rawValue }
+
+        var displayName: String {
+            switch self {
+            case .none: return "None"
+            case .instagram: return "Instagram (1080×1080)"
+            case .instagramPortrait: return "Instagram Portrait (1080×1350)"
+            case .facebookCover: return "Facebook Cover (1640×856)"
+            case .twitterHeader: return "Twitter Header (1500×500)"
+            case .wallpaper4K: return "4K Wallpaper (3840×2160)"
+            case .wallpaper2K: return "2K Wallpaper (2560×1440)"
+            case .web1080: return "Web 1080p (1920×1080)"
+            }
+        }
+
+        var dimensions: (width: Int, height: Int)? {
+            switch self {
+            case .none: return nil
+            case .instagram: return (1080, 1080)
+            case .instagramPortrait: return (1080, 1350)
+            case .facebookCover: return (1640, 856)
+            case .twitterHeader: return (1500, 500)
+            case .wallpaper4K: return (3840, 2160)
+            case .wallpaper2K: return (2560, 1440)
+            case .web1080: return (1920, 1080)
+            }
+        }
+    }
+
+    /// Check if resize has meaningful settings
+    var hasEffect: Bool {
+        guard isEnabled else { return false }
+        switch mode {
+        case .pixels:
+            return width > 0 || height > 0
+        case .percentage:
+            return percentage != 100
+        case .preset:
+            return preset != .none
+        case .longEdge:
+            return longEdge > 0
+        case .shortEdge:
+            return shortEdge > 0
+        }
+    }
+
+    /// Calculate output size given original dimensions
+    func calculateOutputSize(originalSize: CGSize) -> CGSize {
+        guard isEnabled else { return originalSize }
+
+        let originalWidth = originalSize.width
+        let originalHeight = originalSize.height
+        let aspectRatio = originalWidth / originalHeight
+
+        switch mode {
+        case .pixels:
+            if width > 0 && height > 0 {
+                if maintainAspectRatio {
+                    // Fit within bounds
+                    let scaleW = CGFloat(width) / originalWidth
+                    let scaleH = CGFloat(height) / originalHeight
+                    let scale = min(scaleW, scaleH)
+                    return CGSize(width: originalWidth * scale, height: originalHeight * scale)
+                } else {
+                    return CGSize(width: CGFloat(width), height: CGFloat(height))
+                }
+            } else if width > 0 {
+                return CGSize(width: CGFloat(width), height: CGFloat(width) / aspectRatio)
+            } else if height > 0 {
+                return CGSize(width: CGFloat(height) * aspectRatio, height: CGFloat(height))
+            }
+            return originalSize
+
+        case .percentage:
+            let scale = percentage / 100.0
+            return CGSize(width: originalWidth * scale, height: originalHeight * scale)
+
+        case .preset:
+            guard let dims = preset.dimensions else { return originalSize }
+            if maintainAspectRatio {
+                let scaleW = CGFloat(dims.width) / originalWidth
+                let scaleH = CGFloat(dims.height) / originalHeight
+                let scale = min(scaleW, scaleH)
+                return CGSize(width: originalWidth * scale, height: originalHeight * scale)
+            } else {
+                return CGSize(width: CGFloat(dims.width), height: CGFloat(dims.height))
+            }
+
+        case .longEdge:
+            guard longEdge > 0 else { return originalSize }
+            let isLandscape = originalWidth >= originalHeight
+            if isLandscape {
+                let scale = CGFloat(longEdge) / originalWidth
+                return CGSize(width: CGFloat(longEdge), height: originalHeight * scale)
+            } else {
+                let scale = CGFloat(longEdge) / originalHeight
+                return CGSize(width: originalWidth * scale, height: CGFloat(longEdge))
+            }
+
+        case .shortEdge:
+            guard shortEdge > 0 else { return originalSize }
+            let isLandscape = originalWidth >= originalHeight
+            if isLandscape {
+                let scale = CGFloat(shortEdge) / originalHeight
+                return CGSize(width: originalWidth * scale, height: CGFloat(shortEdge))
+            } else {
+                let scale = CGFloat(shortEdge) / originalWidth
+                return CGSize(width: CGFloat(shortEdge), height: originalHeight * scale)
+            }
+        }
+    }
 }
 
 // MARK: - HSL Adjustment
@@ -488,7 +674,7 @@ struct RecipeSnapshot: Codable, Equatable, Identifiable {
 
 /// Complete sidecar file structure
 struct SidecarFile: Codable {
-    var schemaVersion: Int = 3 // v3: Added AI edits support
+    var schemaVersion: Int = 5 // v5: Added profileId for camera profiles
     var asset: AssetInfo
     var edit: EditRecipe
     var snapshots: [RecipeSnapshot] = []

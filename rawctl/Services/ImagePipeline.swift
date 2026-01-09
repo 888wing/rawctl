@@ -317,7 +317,12 @@ actor ImagePipeline {
     ///   - fastMode: Skip expensive filters for responsive scrubbing
     private func applyPostRAWRecipe(_ recipe: EditRecipe, to image: CIImage, fastMode: Bool = false) -> CIImage {
         var result = image
-        
+
+        // Apply camera profile (v1.2) - base look before user adjustments
+        if let profile = BuiltInProfile.profile(for: recipe.profileId) {
+            result = applyCameraProfile(profile, to: result)
+        }
+
         // Contrast - Enhanced S-curve for more natural, punchy contrast
         if recipe.contrast != 0 {
             result = applyEnhancedContrast(recipe.contrast, to: result)
@@ -414,12 +419,9 @@ actor ImagePipeline {
             result = applyTexture(recipe.texture, to: result)
         }
         
-        // Rotation
-        if recipe.crop.rotationDegrees != 0 {
-            let radians = CGFloat(recipe.crop.rotationDegrees) * .pi / 180.0
-            result = result.transformed(by: CGAffineTransform(rotationAngle: radians))
-        }
-        
+        // Rotation (90° + straighten + flips)
+        result = applyRotation(recipe.crop, to: result)
+
         // Crop
         if recipe.crop.isEnabled {
             let extent = result.extent
@@ -431,10 +433,128 @@ actor ImagePipeline {
             )
             result = result.cropped(to: cropRect)
         }
-        
+
         return result
     }
-    
+
+    /// Apply all rotation transforms (90° increments, straighten, flips)
+    private func applyRotation(_ crop: Crop, to image: CIImage) -> CIImage {
+        var result = image
+
+        // 1. Apply 90° rotation
+        if crop.rotationDegrees != 0 {
+            let radians = CGFloat(crop.rotationDegrees) * .pi / 180.0
+            result = result.transformed(by: CGAffineTransform(rotationAngle: radians))
+        }
+
+        // 2. Apply straighten angle (fine rotation around center)
+        if crop.straightenAngle != 0 {
+            let radians = CGFloat(crop.straightenAngle) * .pi / 180.0
+            let center = CGPoint(x: result.extent.midX, y: result.extent.midY)
+            let transform = CGAffineTransform(translationX: center.x, y: center.y)
+                .rotated(by: radians)
+                .translatedBy(x: -center.x, y: -center.y)
+            result = result.transformed(by: transform)
+        }
+
+        // 3. Apply flips
+        if crop.flipHorizontal {
+            let center = CGPoint(x: result.extent.midX, y: result.extent.midY)
+            let transform = CGAffineTransform(translationX: center.x, y: center.y)
+                .scaledBy(x: -1, y: 1)
+                .translatedBy(x: -center.x, y: -center.y)
+            result = result.transformed(by: transform)
+        }
+        if crop.flipVertical {
+            let center = CGPoint(x: result.extent.midX, y: result.extent.midY)
+            let transform = CGAffineTransform(translationX: center.x, y: center.y)
+                .scaledBy(x: 1, y: -1)
+                .translatedBy(x: -center.x, y: -center.y)
+            result = result.transformed(by: transform)
+        }
+
+        return result
+    }
+
+    /// Apply resize settings to image (used at export time)
+    /// - Parameters:
+    ///   - resize: Resize settings from recipe
+    ///   - image: Input CIImage
+    ///   - originalSize: Original image dimensions for percentage/edge calculations
+    /// - Returns: Resized CIImage
+    func applyResize(_ resize: Resize, to image: CIImage, originalSize: CGSize? = nil) -> CIImage {
+        guard resize.hasEffect else { return image }
+
+        let extent = image.extent
+        let currentWidth = extent.width
+        let currentHeight = extent.height
+        let sourceSize = originalSize ?? CGSize(width: currentWidth, height: currentHeight)
+
+        var targetWidth: CGFloat = currentWidth
+        var targetHeight: CGFloat = currentHeight
+
+        switch resize.mode {
+        case .pixels:
+            if resize.width > 0 && resize.height > 0 {
+                targetWidth = CGFloat(resize.width)
+                targetHeight = CGFloat(resize.height)
+            } else if resize.width > 0 {
+                // Auto-calculate height maintaining aspect ratio
+                targetWidth = CGFloat(resize.width)
+                targetHeight = targetWidth * currentHeight / currentWidth
+            } else if resize.height > 0 {
+                // Auto-calculate width maintaining aspect ratio
+                targetHeight = CGFloat(resize.height)
+                targetWidth = targetHeight * currentWidth / currentHeight
+            }
+
+        case .percentage:
+            let scale = resize.percentage / 100.0
+            targetWidth = sourceSize.width * CGFloat(scale)
+            targetHeight = sourceSize.height * CGFloat(scale)
+
+        case .preset:
+            if let dims = resize.preset.dimensions {
+                targetWidth = CGFloat(dims.width)
+                targetHeight = CGFloat(dims.height)
+            }
+
+        case .longEdge:
+            guard resize.longEdge > 0 else { return image }
+            let longEdge = CGFloat(resize.longEdge)
+            if currentWidth >= currentHeight {
+                targetWidth = longEdge
+                targetHeight = longEdge * currentHeight / currentWidth
+            } else {
+                targetHeight = longEdge
+                targetWidth = longEdge * currentWidth / currentHeight
+            }
+
+        case .shortEdge:
+            guard resize.shortEdge > 0 else { return image }
+            let shortEdge = CGFloat(resize.shortEdge)
+            if currentWidth <= currentHeight {
+                targetWidth = shortEdge
+                targetHeight = shortEdge * currentHeight / currentWidth
+            } else {
+                targetHeight = shortEdge
+                targetWidth = shortEdge * currentWidth / currentHeight
+            }
+        }
+
+        // Apply scaling
+        let scaleX = targetWidth / currentWidth
+        let scaleY = targetHeight / currentHeight
+
+        // Use Lanczos for high-quality resizing
+        let filter = CIFilter.lanczosScaleTransform()
+        filter.inputImage = image
+        filter.scale = Float(min(scaleX, scaleY))  // Use uniform scale if maintaining aspect
+        filter.aspectRatio = resize.maintainAspectRatio ? 1.0 : Float(scaleX / scaleY)
+
+        return filter.outputImage ?? image
+    }
+
     /// Full recipe for non-RAW images
     private func applyFullRecipe(_ recipe: EditRecipe, to image: CIImage, fastMode: Bool = false) -> CIImage {
         var result = image
@@ -501,12 +621,9 @@ actor ImagePipeline {
             result = filter.outputImage ?? result
         }
         
-        // Rotation
-        if recipe.crop.rotationDegrees != 0 {
-            let radians = CGFloat(recipe.crop.rotationDegrees) * .pi / 180.0
-            result = result.transformed(by: CGAffineTransform(rotationAngle: radians))
-        }
-        
+        // Rotation (90° + straighten + flips)
+        result = applyRotation(recipe.crop, to: result)
+
         // Crop
         if recipe.crop.isEnabled {
             let extent = result.extent
@@ -518,7 +635,7 @@ actor ImagePipeline {
             )
             result = result.cropped(to: cropRect)
         }
-        
+
         // === P0 ADVANCED EFFECTS ===
         
         // Tone Curve (luminance curve)
@@ -1317,15 +1434,21 @@ actor ImagePipeline {
     // MARK: - Export
     
     /// Render full resolution with recipe for export (true RAW)
+    /// - Parameters:
+    ///   - asset: Photo asset to render
+    ///   - recipe: Edit recipe to apply
+    ///   - maxSize: Optional export-time size override (long edge)
+    ///   - useRecipeResize: Whether to apply recipe's resize settings (default: true)
     func renderForExport(
         for asset: PhotoAsset,
         recipe: EditRecipe,
-        maxSize: CGFloat? = nil
+        maxSize: CGFloat? = nil,
+        useRecipeResize: Bool = true
     ) async -> CGImage? {
         let ext = asset.url.pathExtension.lowercased()
-        
+
         var outputImage: CIImage?
-        
+
         if PhotoAsset.rawExtensions.contains(ext) {
             // RAW export with full quality
             guard let filter = CIFilter(imageURL: asset.url, options: nil) else {
@@ -1345,14 +1468,19 @@ actor ImagePipeline {
             }
             outputImage = applyFullRecipe(recipe, to: loaded)
         }
-        
+
         guard var image = outputImage else { return nil }
-        
-        // Scale if needed
+
+        // Apply recipe resize settings only when requested
+        if useRecipeResize && recipe.resize.hasEffect {
+            image = applyResize(recipe.resize, to: image)
+        }
+
+        // Scale if needed (export-time override)
         if let maxSize = maxSize {
             image = scaleImage(image, maxSize: maxSize)
         }
-        
+
         let extent = image.extent
         return context.createCGImage(image, from: extent)
     }
@@ -1629,5 +1757,103 @@ actor ImagePipeline {
         }
         
         return gradientImage.cropped(to: extent)
+    }
+
+    // MARK: - Camera Profile Application (v1.2)
+
+    /// Apply camera profile base tone curve and highlight shoulder
+    private func applyCameraProfile(_ profile: CameraProfile, to image: CIImage) -> CIImage {
+        var result = image
+
+        // 1. Apply base tone curve
+        result = applyFilmicToneCurve(profile.baseToneCurve, to: result)
+
+        // 2. Apply highlight shoulder (roll-off)
+        if profile.highlightShoulder.hasEffect {
+            result = applyHighlightShoulder(profile.highlightShoulder, to: result)
+        }
+
+        // 3. Apply profile look (saturation/contrast boost)
+        if let look = profile.look {
+            result = applyProfileLook(look, to: result)
+        }
+
+        return result
+    }
+
+    /// Apply filmic tone curve using CIToneCurve
+    private func applyFilmicToneCurve(_ curve: FilmicToneCurve, to image: CIImage) -> CIImage {
+        guard curve.hasEdits else { return image }
+
+        // CIToneCurve requires exactly 5 points
+        // Interpolate our 6 points to 5 for the filter
+        let points = curve.points
+        let p0 = points.first ?? CurvePoint(x: 0, y: 0)
+        let p4 = points.last ?? CurvePoint(x: 1, y: 1)
+
+        // Find points closest to 0.25, 0.5, 0.75
+        let p1 = points.first { $0.x >= 0.15 && $0.x <= 0.35 } ?? CurvePoint(x: 0.25, y: 0.25)
+        let p2 = points.first { $0.x >= 0.4 && $0.x <= 0.6 } ?? CurvePoint(x: 0.5, y: 0.5)
+        let p3 = points.first { $0.x >= 0.7 && $0.x <= 0.9 } ?? CurvePoint(x: 0.75, y: 0.75)
+
+        let filter = CIFilter.toneCurve()
+        filter.inputImage = image
+        filter.point0 = CGPoint(x: p0.x, y: p0.y)
+        filter.point1 = CGPoint(x: p1.x, y: p1.y)
+        filter.point2 = CGPoint(x: p2.x, y: p2.y)
+        filter.point3 = CGPoint(x: p3.x, y: p3.y)
+        filter.point4 = CGPoint(x: p4.x, y: p4.y)
+
+        return filter.outputImage ?? image
+    }
+
+    /// Apply highlight shoulder (soft roll-off to prevent clipping)
+    private func applyHighlightShoulder(_ shoulder: HighlightShoulder, to image: CIImage) -> CIImage {
+        let kneeStart = shoulder.knee
+        let whitePoint = shoulder.whitePoint
+
+        // Create shoulder curve using tone curve filter
+        let filter = CIFilter.toneCurve()
+        filter.inputImage = image
+        filter.point0 = CGPoint(x: 0, y: 0)
+        filter.point1 = CGPoint(x: 0.25, y: 0.25)
+        filter.point2 = CGPoint(x: 0.5, y: 0.5)
+        filter.point3 = CGPoint(x: kneeStart, y: kneeStart * (1.0 - shoulder.softness * 0.1))
+        filter.point4 = CGPoint(x: 1.0, y: whitePoint)
+
+        return filter.outputImage ?? image
+    }
+
+    /// Apply profile look adjustments
+    private func applyProfileLook(_ look: ProfileLook, to image: CIImage) -> CIImage {
+        var result = image
+
+        // Apply saturation boost
+        if look.saturationBoost != 0 {
+            let filter = CIFilter.colorControls()
+            filter.inputImage = result
+            filter.saturation = Float(1.0 + look.saturationBoost)
+            result = filter.outputImage ?? result
+        }
+
+        // Apply contrast boost using simple S-curve
+        if look.contrastBoost != 0 {
+            let filter = CIFilter.colorControls()
+            filter.inputImage = result
+            filter.contrast = Float(1.0 + look.contrastBoost * 0.5)
+            result = filter.outputImage ?? result
+        }
+
+        // Apply warmth shift (temperature adjustment)
+        if look.warmthShift != 0 {
+            let filter = CIFilter.temperatureAndTint()
+            filter.inputImage = result
+            // Warmth: positive = warmer (higher temp), negative = cooler
+            filter.neutral = CIVector(x: 6500 + CGFloat(look.warmthShift * 1000), y: 0)
+            filter.targetNeutral = CIVector(x: 6500, y: 0)
+            result = filter.outputImage ?? result
+        }
+
+        return result
     }
 }

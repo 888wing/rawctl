@@ -97,6 +97,7 @@ struct InspectorView: View {
                             localRecipe.clarity = recipe.clarity
                             localRecipe.dehaze = recipe.dehaze
                             localRecipe.texture = recipe.texture
+                            localRecipe.profileId = recipe.profileId
                             appState.showHUD("Settings applied")
                         }
                     },
@@ -162,6 +163,13 @@ struct InspectorView: View {
                 if panelConfig.isVisible(.light) {
                 DisclosureGroup("Light", isExpanded: $lightExpanded) {
                     VStack(spacing: controlSpacing) {
+                        // Camera Profile (v1.2)
+                        ProfilePicker(selectedProfileId: $localRecipe.profileId)
+                            .padding(.bottom, 4)
+
+                        Divider()
+                            .padding(.bottom, 4)
+
                         ControlSlider(
                             label: "Exposure",
                             value: $localRecipe.exposure,
@@ -296,37 +304,18 @@ struct InspectorView: View {
                 
                 Divider()
                 
-                // Composition section
+                // Composition section - Crop, Rotate, Flip
                 if panelConfig.isVisible(.composition) {
                 DisclosureGroup("Composition", isExpanded: $compositionExpanded) {
                     VStack(spacing: 12) {
-                        // Rotation buttons
-                        HStack {
-                            Button {
-                                localRecipe.crop.rotationDegrees = (localRecipe.crop.rotationDegrees - 90 + 360) % 360
-                            } label: {
-                                Label("Rotate Left", systemImage: "rotate.left")
-                            }
-                            
-                            Spacer()
-                            
-                            Button {
-                                localRecipe.crop.rotationDegrees = (localRecipe.crop.rotationDegrees + 90) % 360
-                            } label: {
-                                Label("Rotate Right", systemImage: "rotate.right")
-                            }
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        
                         // Crop toggle and aspect ratio
                         HStack {
                             Toggle("Crop", isOn: $localRecipe.crop.isEnabled)
                                 .toggleStyle(.switch)
                                 .controlSize(.small)
-                            
+
                             Spacer()
-                            
+
                             if localRecipe.crop.isEnabled {
                                 Picker("Aspect", selection: $localRecipe.crop.aspect) {
                                     ForEach(Crop.Aspect.allCases) { aspect in
@@ -337,12 +326,85 @@ struct InspectorView: View {
                                 .controlSize(.small)
                             }
                         }
+
+                        // Straighten slider (-45° to +45°)
+                        ControlSlider(
+                            label: "Straighten",
+                            value: $localRecipe.crop.straightenAngle,
+                            range: -45...45,
+                            format: "%.1f°",
+                            onDragStart: { pushHistory() }
+                        )
+
+                        // Rotation and Flip buttons
+                        HStack(spacing: 8) {
+                            // 90° rotation buttons
+                            HStack(spacing: 4) {
+                                Button {
+                                    pushHistory()
+                                    localRecipe.crop.rotationDegrees = (localRecipe.crop.rotationDegrees - 90 + 360) % 360
+                                } label: {
+                                    Image(systemName: "rotate.left")
+                                }
+                                .help("Rotate 90° left")
+
+                                Button {
+                                    pushHistory()
+                                    localRecipe.crop.rotationDegrees = (localRecipe.crop.rotationDegrees + 90) % 360
+                                } label: {
+                                    Image(systemName: "rotate.right")
+                                }
+                                .help("Rotate 90° right")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+
+                            Spacer()
+
+                            // Flip buttons
+                            HStack(spacing: 4) {
+                                Button {
+                                    pushHistory()
+                                    localRecipe.crop.flipHorizontal.toggle()
+                                } label: {
+                                    Image(systemName: "arrow.left.and.right.righttriangle.left.righttriangle.right")
+                                }
+                                .help("Flip horizontal")
+                                .background(localRecipe.crop.flipHorizontal ? Color.accentColor.opacity(0.3) : Color.clear)
+                                .cornerRadius(4)
+
+                                Button {
+                                    pushHistory()
+                                    localRecipe.crop.flipVertical.toggle()
+                                } label: {
+                                    Image(systemName: "arrow.up.and.down.righttriangle.up.righttriangle.down")
+                                }
+                                .help("Flip vertical")
+                                .background(localRecipe.crop.flipVertical ? Color.accentColor.opacity(0.3) : Color.clear)
+                                .cornerRadius(4)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
                     }
                     .padding(.top, 6)
                 }
                 .contextMenu { panelContextMenu(.composition) }
                 }
-                
+
+                // Resize section
+                if panelConfig.isVisible(.resize) {
+                DisclosureGroup("Resize") {
+                    ResizePanel(
+                        resize: $localRecipe.resize,
+                        originalSize: appState.selectedAsset?.imageSize,
+                        onDragStart: { pushHistory() }
+                    )
+                    .padding(.top, 6)
+                }
+                .contextMenu { panelContextMenu(.resize) }
+                }
+
                 // Effects section (P0)
                 if panelConfig.isVisible(.effects) {
                 DisclosureGroup("Effects") {
