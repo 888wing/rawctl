@@ -11,12 +11,13 @@ A native macOS RAW photo editor built with SwiftUI and Core Image, featuring tru
 ![Swift](https://img.shields.io/badge/Swift-5.9+-orange)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-## 🆕 What's New (v1.1)
+## 🆕 What's New (v1.2)
 
-- **Crop & Composition**: Full crop overlay with aspect ratios, straighten, rotate 90°, flip controls
-- **Resize**: Multiple resize modes (pixels, percentage, long/short edge) with presets for Instagram, Facebook, Twitter, 4K
-- **Transform Mode**: Keyboard shortcut `C` to toggle, `Enter` to commit, `Escape` to cancel
-- **Security Hardening**: Device ID tracking, rate limit handling, token replay detection
+- **Camera Profiles**: 3 built-in profiles (Neutral, Vivid, Portrait) with 4-stage color pipeline
+- **Filmic Tone Curves**: Natural highlight roll-off with soft clipping
+- **Camera Brand Detection**: Photos grouped by manufacturer (Nikon, Canon, Sony, Fujifilm, etc.)
+- **Default Sort**: Now sorts by Capture Date (newest first) instead of filename
+- **Bug Fixes**: Crop button responsiveness, GridView animation glitches
 
 Full changelog: [CHANGELOG.md](CHANGELOG.md)
 
@@ -163,7 +164,7 @@ Edits are stored in `{filename}.rawctl.json`:
 
 ## 🗺️ Roadmap
 
-### ✅ Completed (v1.1)
+### ✅ Completed (v1.2)
 - [x] RAW processing with CIRAWFilter
 - [x] Non-destructive sidecar editing
 - [x] Tone curve editor
@@ -177,6 +178,9 @@ Edits are stored in `{filename}.rawctl.json`:
 - [x] Straighten, rotate 90°, flip controls
 - [x] Resize with multiple modes & presets
 - [x] Transform mode with keyboard shortcuts
+- [x] Camera profiles (Neutral, Vivid, Portrait)
+- [x] 4-stage color pipeline with filmic tone curves
+- [x] Camera brand detection for filename sorting
 
 ### 🔜 Planned
 - [ ] Before/After comparison
