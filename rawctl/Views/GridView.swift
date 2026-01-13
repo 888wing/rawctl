@@ -11,10 +11,28 @@ import SwiftUI
 struct GridView: View {
     @ObservedObject var appState: AppState
     @State private var thumbnailSize: CGFloat = 160
-    
+
+    // Marquee selection coordinate space
+    private let gridCoordinateSpace = "gridContent"
+
     // Thumbnail size constraints
     private let minThumbnailSize: CGFloat = 80
     private let maxThumbnailSize: CGFloat = 280
+
+    // MARK: - Cached DateFormatters (performance optimization)
+    // Creating DateFormatters is expensive; reuse static instances
+    private static let groupKeyDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+
+    private static let displayDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.locale = Locale(identifier: "zh-Hant")
+        return formatter
+    }()
     
     // Responsive grid columns
     private var columns: [GridItem] {
@@ -94,21 +112,17 @@ struct GridView: View {
             return asset.fileExtension.uppercased()
             
         case .captureDate:
-            // Group by date (YYYY-MM-DD)
+            // Group by date (YYYY-MM-DD) - using cached formatter
             let date = asset.metadata?.dateTime ?? asset.creationDate ?? asset.modificationDate
             if let d = date {
-                let formatter = DateFormatter()
-                formatter.dateFormat = "yyyy-MM-dd"
-                return formatter.string(from: d)
+                return Self.groupKeyDateFormatter.string(from: d)
             }
             return "Unknown Date"
-            
+
         case .modificationDate:
-            // Group by date (YYYY-MM-DD)
+            // Group by date (YYYY-MM-DD) - using cached formatter
             if let d = asset.modificationDate {
-                let formatter = DateFormatter()
-                formatter.dateFormat = "yyyy-MM-dd"
-                return formatter.string(from: d)
+                return Self.groupKeyDateFormatter.string(from: d)
             }
             return "Unknown Date"
             
@@ -138,14 +152,9 @@ struct GridView: View {
     private func groupLabel(for key: String) -> String {
         switch appState.sortCriteria {
         case .captureDate, .modificationDate:
-            // Format date nicely
-            let formatter = DateFormatter()
-            formatter.dateFormat = "yyyy-MM-dd"
-            if let date = formatter.date(from: key) {
-                let displayFormatter = DateFormatter()
-                displayFormatter.dateStyle = .medium
-                displayFormatter.locale = Locale(identifier: "zh-Hant")
-                return displayFormatter.string(from: date)
+            // Format date nicely - using cached formatters
+            if let date = Self.groupKeyDateFormatter.date(from: key) {
+                return Self.displayDateFormatter.string(from: date)
             }
             return key
         case .filename:
@@ -290,6 +299,26 @@ struct GridView: View {
             appState.selectedAssetId = asset.id
         }
     }
+
+    /// Handle marquee selection completion
+    private func handleMarqueeSelection(_ selectedIds: Set<UUID>) {
+        // Add all selected thumbnails to multi-selection
+        for id in selectedIds {
+            if !appState.isSelected(id) {
+                appState.toggleSelection(id)
+            }
+        }
+
+        // Enable selection mode if not already
+        if !appState.isSelectionMode && !selectedIds.isEmpty {
+            appState.isSelectionMode = true
+        }
+
+        // Show HUD feedback
+        if !selectedIds.isEmpty {
+            appState.showHUD("Selected \(selectedIds.count) photos")
+        }
+    }
     
     /// Grid content view (extracted for compiler performance)
     @ViewBuilder
@@ -324,6 +353,10 @@ struct GridView: View {
                             LazyVGrid(columns: columns, spacing: 12) {
                                 ForEach(group.assets) { asset in
                                     thumbnailForAsset(asset)
+                                        .trackThumbnailFrame(
+                                            id: asset.id,
+                                            coordinateSpace: .named(gridCoordinateSpace)
+                                        )
                                 }
                             }
                         } header: {
@@ -341,6 +374,11 @@ struct GridView: View {
                     // Disable animations on section header re-positioning
                     transaction.animation = nil
                 }
+                .coordinateSpace(name: gridCoordinateSpace)
+                .marqueeSelection(
+                    coordinateSpace: .named(gridCoordinateSpace),
+                    onSelectionComplete: handleMarqueeSelection
+                )
             }
         }
     }
@@ -365,7 +403,7 @@ struct GridView: View {
                 recipe.rating = rating
                 appState.recipes[asset.id] = recipe
                 Task { @MainActor in
-                    await SidecarService.shared.saveRecipe(recipe, snapshots: [], for: asset.url)
+                    await SidecarService.shared.saveRecipeOnly(recipe, for: asset.url)
                 }
                 appState.showHUD(rating > 0 ? "Rating: \(String(repeating: "★", count: rating))" : "Rating cleared")
             },
@@ -374,7 +412,7 @@ struct GridView: View {
                 recipe.flag = flag
                 appState.recipes[asset.id] = recipe
                 Task { @MainActor in
-                    await SidecarService.shared.saveRecipe(recipe, snapshots: [], for: asset.url)
+                    await SidecarService.shared.saveRecipeOnly(recipe, for: asset.url)
                 }
                 let message: String
                 switch flag {
@@ -383,8 +421,135 @@ struct GridView: View {
                 case .none: message = "Flag cleared"
                 }
                 appState.showHUD(message)
+            },
+            contextMenuContent: {
+                // Determine target assets (multi-select or single)
+                let targetIds = appState.selectedAssetIds.isEmpty || !appState.isSelected(asset.id)
+                    ? [asset.id]
+                    : Array(appState.selectedAssetIds)
+                let count = targetIds.count
+                let countLabel = count > 1 ? " (\(count) photos)" : ""
+
+                // MARK: - Rating
+                Menu("Rating\(countLabel)") {
+                    ForEach(1...5, id: \.self) { stars in
+                        Button {
+                            applyRatingToAssets(targetIds, rating: stars)
+                        } label: {
+                            Label(String(repeating: "★", count: stars), systemImage: "star.fill")
+                        }
+                    }
+                    Divider()
+                    Button("Clear Rating") {
+                        applyRatingToAssets(targetIds, rating: 0)
+                    }
+                }
+
+                // MARK: - Flag
+                Menu("Flag\(countLabel)") {
+                    Button {
+                        applyFlagToAssets(targetIds, flag: .pick)
+                    } label: {
+                        Label("Pick", systemImage: "flag.fill")
+                    }
+                    Button {
+                        applyFlagToAssets(targetIds, flag: .reject)
+                    } label: {
+                        Label("Reject", systemImage: "xmark")
+                    }
+                    Divider()
+                    Button("Unflag") {
+                        applyFlagToAssets(targetIds, flag: .none)
+                    }
+                }
+
+                // MARK: - Color Label
+                Menu("Color Label\(countLabel)") {
+                    ForEach(ColorLabel.allCases, id: \.self) { label in
+                        Button {
+                            applyColorLabelToAssets(targetIds, label: label)
+                        } label: {
+                            HStack {
+                                if label != .none {
+                                    Circle()
+                                        .fill(Color(red: label.color.r, green: label.color.g, blue: label.color.b))
+                                        .frame(width: 12, height: 12)
+                                }
+                                Text(label.displayName)
+                            }
+                        }
+                    }
+                }
+
+                Divider()
+
+                // MARK: - Quick Actions
+                if count > 1 {
+                    Button("Select All") {
+                        appState.selectAll()
+                    }
+                    Button("Deselect All") {
+                        appState.clearMultiSelection()
+                    }
+                }
             }
         )
+    }
+
+    // MARK: - Context Menu Actions
+
+    private func applyRatingToAssets(_ ids: [UUID], rating: Int) {
+        for id in ids {
+            var recipe = appState.recipes[id] ?? EditRecipe()
+            recipe.rating = rating
+            appState.recipes[id] = recipe
+            if let asset = appState.assets.first(where: { $0.id == id }) {
+                Task { @MainActor in
+                    await SidecarService.shared.saveRecipeOnly(recipe, for: asset.url)
+                }
+            }
+        }
+        let message = rating > 0
+            ? "Rating: \(String(repeating: "★", count: rating)) (\(ids.count) photos)"
+            : "Rating cleared (\(ids.count) photos)"
+        appState.showHUD(message)
+    }
+
+    private func applyFlagToAssets(_ ids: [UUID], flag: Flag) {
+        for id in ids {
+            var recipe = appState.recipes[id] ?? EditRecipe()
+            recipe.flag = flag
+            appState.recipes[id] = recipe
+            if let asset = appState.assets.first(where: { $0.id == id }) {
+                Task { @MainActor in
+                    await SidecarService.shared.saveRecipeOnly(recipe, for: asset.url)
+                }
+            }
+        }
+        let message: String
+        switch flag {
+        case .pick: message = "Flagged as Pick (\(ids.count) photos)"
+        case .reject: message = "Flagged as Reject (\(ids.count) photos)"
+        case .none: message = "Unflagged (\(ids.count) photos)"
+        }
+        appState.showHUD(message)
+    }
+
+    private func applyColorLabelToAssets(_ ids: [UUID], label: ColorLabel) {
+        for id in ids {
+            var recipe = appState.recipes[id] ?? EditRecipe()
+            recipe.colorLabel = label
+            appState.recipes[id] = recipe
+            if let asset = appState.assets.first(where: { $0.id == id }) {
+                Task { @MainActor in
+                    await SidecarService.shared.saveRecipeOnly(recipe, for: asset.url)
+                }
+            }
+        }
+        let message = label != .none
+            ? "Label: \(label.displayName) (\(ids.count) photos)"
+            : "Label cleared (\(ids.count) photos)"
+        appState.showHUD(message)
     }
 
     // MARK: - Actions
@@ -547,7 +712,7 @@ struct SectionHeader: View {
 }
 
 /// Single thumbnail in the grid - Enhanced with better hover effects
-struct GridThumbnail: View {
+struct GridThumbnail<ContextMenuContent: View>: View {
     let asset: PhotoAsset
     let size: CGFloat
     let isSelected: Bool
@@ -558,7 +723,8 @@ struct GridThumbnail: View {
     let onDoubleTap: () -> Void
     var onRatingChange: ((Int) -> Void)? = nil
     var onFlagChange: ((Flag) -> Void)? = nil
-    
+    @ViewBuilder let contextMenuContent: () -> ContextMenuContent
+
     @State private var thumbnail: NSImage?
     @State private var isHovering = false
     
@@ -739,24 +905,19 @@ struct GridThumbnail: View {
         .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isHovering)
         .animation(.spring(response: 0.2, dampingFraction: 0.8), value: isSelected)
         .contentShape(Rectangle())
-        .simultaneousGesture(
-            TapGesture(count: 2).onEnded {
+        // Context menu applied BEFORE AppKit overlay to ensure right-click events are received
+        .contextMenu {
+            contextMenuContent()
+        }
+        // Use AppKit click handler for instant response (eliminates ~200-300ms SwiftUI gesture delay)
+        .appKitClickHandler(
+            onTap: { modifiers in
+                onTap(modifiers)
+            },
+            onDoubleTap: {
                 onDoubleTap()
             }
         )
-        .simultaneousGesture(
-            TapGesture(count: 1).modifiers(.command).onEnded {
-                onTap(.command)
-            }
-        )
-        .simultaneousGesture(
-            TapGesture(count: 1).modifiers(.shift).onEnded {
-                onTap(.shift)
-            }
-        )
-        .onTapGesture {
-            onTap([])
-        }
         .onHover { hovering in
             withAnimation(.spring(response: 0.2)) {
                 isHovering = hovering
