@@ -11,10 +11,26 @@ import SwiftUI
 struct CropOverlayView: View {
     @Binding var crop: Crop
     let imageSize: CGSize
+    var gridOverlay: GridOverlay = .thirds
 
     @State private var dragStart: CGPoint = .zero
     @State private var dragHandle: DragHandle = .none
     @State private var initialRect: CropRect = CropRect()
+
+    /// Local state for crop rect during drag - prevents continuous pipeline renders
+    @State private var localRect: CropRect? = nil
+
+    /// Background drag state (for drawing new crop area)
+    @State private var isDrawingNewRect = false
+    @State private var drawStartPoint: CGPoint = .zero
+
+    /// Whether user is currently dragging the crop handles
+    private var isDragging: Bool { localRect != nil }
+
+    /// The rect to display - use localRect during drag, otherwise use binding
+    private var displayRect: CropRect {
+        localRect ?? crop.rect
+    }
 
     enum DragHandle {
         case none
@@ -23,10 +39,10 @@ struct CropOverlayView: View {
         case center
     }
 
-    /// Current crop dimensions in pixels
+    /// Current crop dimensions in pixels (uses displayRect for live feedback)
     private var cropDimensions: (width: Int, height: Int) {
-        let w = Int(imageSize.width * crop.rect.w)
-        let h = Int(imageSize.height * crop.rect.h)
+        let w = Int(imageSize.width * displayRect.w)
+        let h = Int(imageSize.height * displayRect.h)
         return (w, h)
     }
 
@@ -44,7 +60,7 @@ struct CropOverlayView: View {
             let cropRect = calculateCropRect(in: viewSize)
 
             ZStack {
-                // Dimmed overlay for non-cropped areas
+                // Dimmed overlay for non-cropped areas - with background drag gesture
                 Path { path in
                     path.addRect(CGRect(origin: .zero, size: viewSize))
                 }
@@ -54,6 +70,16 @@ struct CropOverlayView: View {
                         .frame(width: cropRect.width, height: cropRect.height)
                         .position(x: cropRect.midX, y: cropRect.midY)
                 }
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 5)
+                        .onChanged { value in
+                            handleBackgroundDrag(value: value, viewSize: viewSize)
+                        }
+                        .onEnded { _ in
+                            commitBackgroundDrag()
+                        }
+                )
 
                 // Crop rectangle
                 Rectangle()
@@ -61,20 +87,11 @@ struct CropOverlayView: View {
                     .frame(width: cropRect.width, height: cropRect.height)
                     .position(x: cropRect.midX, y: cropRect.midY)
 
-                // Grid lines (rule of thirds)
-                Path { path in
-                    // Vertical lines
-                    path.move(to: CGPoint(x: cropRect.minX + cropRect.width / 3, y: cropRect.minY))
-                    path.addLine(to: CGPoint(x: cropRect.minX + cropRect.width / 3, y: cropRect.maxY))
-                    path.move(to: CGPoint(x: cropRect.minX + cropRect.width * 2 / 3, y: cropRect.minY))
-                    path.addLine(to: CGPoint(x: cropRect.minX + cropRect.width * 2 / 3, y: cropRect.maxY))
-                    // Horizontal lines
-                    path.move(to: CGPoint(x: cropRect.minX, y: cropRect.minY + cropRect.height / 3))
-                    path.addLine(to: CGPoint(x: cropRect.maxX, y: cropRect.minY + cropRect.height / 3))
-                    path.move(to: CGPoint(x: cropRect.minX, y: cropRect.minY + cropRect.height * 2 / 3))
-                    path.addLine(to: CGPoint(x: cropRect.maxX, y: cropRect.minY + cropRect.height * 2 / 3))
+                // Grid overlay (supports multiple types)
+                if gridOverlay != .none {
+                    drawGridOverlay(type: gridOverlay, in: cropRect)
+                        .stroke(Color.white.opacity(0.4), lineWidth: 1)
                 }
-                .stroke(Color.white.opacity(0.5), lineWidth: 1)
 
                 // Dimension label at bottom center
                 VStack(spacing: 2) {
@@ -104,7 +121,7 @@ struct CropOverlayView: View {
                                     handleCornerDrag(corner, value: value, viewSize: viewSize)
                                 }
                                 .onEnded { _ in
-                                    initialRect = CropRect()
+                                    commitCornerDrag()
                                 }
                         )
                 }
@@ -120,19 +137,25 @@ struct CropOverlayView: View {
                                 handleCenterDrag(value: value, viewSize: viewSize)
                             }
                             .onEnded { _ in
-                                dragStart = .zero
+                                commitCenterDrag()
                             }
                     )
             }
         }
+        .onChange(of: crop.aspect) { oldAspect, newAspect in
+            withAnimation(.easeInOut(duration: 0.2)) {
+                applyAspectRatio(newAspect)
+            }
+        }
     }
-    
+
     private func calculateCropRect(in viewSize: CGSize) -> CGRect {
+        // Use displayRect for immediate visual feedback during drag
         CGRect(
-            x: viewSize.width * crop.rect.x,
-            y: viewSize.height * crop.rect.y,
-            width: viewSize.width * crop.rect.w,
-            height: viewSize.height * crop.rect.h
+            x: viewSize.width * displayRect.x,
+            y: viewSize.height * displayRect.y,
+            width: viewSize.width * displayRect.w,
+            height: viewSize.height * displayRect.h
         )
     }
     
@@ -146,8 +169,9 @@ struct CropOverlayView: View {
     }
     
     private func handleCornerDrag(_ corner: CornerPosition, value: DragGesture.Value, viewSize: CGSize) {
-        // Store initial rect on drag start
-        if initialRect.w == 0 {
+        // Initialize local state on drag start (prevents continuous binding updates)
+        if localRect == nil {
+            localRect = crop.rect
             initialRect = crop.rect
         }
 
@@ -223,24 +247,359 @@ struct CropOverlayView: View {
         newRect.w = min(newRect.w, 1 - newRect.x)
         newRect.h = min(newRect.h, 1 - newRect.y)
 
-        crop.rect = newRect
+        // Update local state only (no binding update = no pipeline trigger)
+        localRect = newRect
+    }
+
+    /// Commit the local rect to the binding when drag ends
+    private func commitCornerDrag() {
+        guard let finalRect = localRect else { return }
+
+        // Commit to binding - triggers single pipeline render
+        crop.rect = finalRect
+
+        // Auto-enable crop when rect is modified from default
+        if !crop.isEnabled && finalRect != CropRect() {
+            crop.isEnabled = true
+        }
+
+        // Clear local state
+        localRect = nil
+        initialRect = CropRect()
     }
     
+    /// Handle center drag - Lightroom style (drag image under fixed frame)
+    /// Dragging right moves the image right, which means cropping more from the left
     private func handleCenterDrag(value: DragGesture.Value, viewSize: CGSize) {
-        if dragStart == .zero {
+        // Initialize local state on drag start (prevents continuous binding updates)
+        if localRect == nil {
+            localRect = crop.rect
             dragStart = CGPoint(x: crop.rect.x, y: crop.rect.y)
         }
-        
+
+        guard var currentLocalRect = localRect else { return }
+
+        // Lightroom style: invert the delta direction
+        // Dragging image right = crop rect moves left (relative to image)
         let delta = CGPoint(
-            x: value.translation.width / viewSize.width,
-            y: value.translation.height / viewSize.height
+            x: -value.translation.width / viewSize.width,
+            y: -value.translation.height / viewSize.height
         )
-        
-        let newX = max(0, min(1 - crop.rect.w, dragStart.x + delta.x))
-        let newY = max(0, min(1 - crop.rect.h, dragStart.y + delta.y))
-        
-        crop.rect.x = newX
-        crop.rect.y = newY
+
+        currentLocalRect.x = max(0, min(1 - currentLocalRect.w, dragStart.x + delta.x))
+        currentLocalRect.y = max(0, min(1 - currentLocalRect.h, dragStart.y + delta.y))
+
+        // Update local state only (no binding update = no pipeline trigger)
+        localRect = currentLocalRect
+    }
+
+    /// Commit the center drag to the binding when drag ends
+    private func commitCenterDrag() {
+        guard let finalRect = localRect else { return }
+
+        // Commit to binding - triggers single pipeline render
+        crop.rect = finalRect
+
+        // Auto-enable crop when position is modified from default
+        if !crop.isEnabled && finalRect != CropRect() {
+            crop.isEnabled = true
+        }
+
+        // Clear local state
+        localRect = nil
+        dragStart = .zero
+    }
+
+    // MARK: - Background Drag (Draw New Crop Area)
+
+    /// Handle background drag - draw a new crop area from scratch
+    private func handleBackgroundDrag(value: DragGesture.Value, viewSize: CGSize) {
+        if !isDrawingNewRect {
+            // Start drawing new crop area
+            isDrawingNewRect = true
+            drawStartPoint = CGPoint(
+                x: value.startLocation.x / viewSize.width,
+                y: value.startLocation.y / viewSize.height
+            )
+            // Initialize local rect
+            localRect = CropRect(
+                x: drawStartPoint.x,
+                y: drawStartPoint.y,
+                w: 0,
+                h: 0
+            )
+        }
+
+        // Calculate new rect from start point to current location
+        let currentPoint = CGPoint(
+            x: value.location.x / viewSize.width,
+            y: value.location.y / viewSize.height
+        )
+
+        var newRect = CropRect(
+            x: min(drawStartPoint.x, currentPoint.x),
+            y: min(drawStartPoint.y, currentPoint.y),
+            w: abs(currentPoint.x - drawStartPoint.x),
+            h: abs(currentPoint.y - drawStartPoint.y)
+        )
+
+        // Apply aspect ratio constraint if locked
+        if let ratio = targetAspect {
+            newRect = constrainNewRectToAspect(newRect, ratio: ratio, anchorPoint: drawStartPoint)
+        }
+
+        // Clamp to bounds
+        newRect.x = max(0, min(1 - newRect.w, newRect.x))
+        newRect.y = max(0, min(1 - newRect.h, newRect.y))
+        newRect.w = min(newRect.w, 1 - newRect.x)
+        newRect.h = min(newRect.h, 1 - newRect.y)
+
+        localRect = newRect
+    }
+
+    /// Constrain a new rect to aspect ratio while keeping anchor point
+    private func constrainNewRectToAspect(_ rect: CropRect, ratio: Double, anchorPoint: CGPoint) -> CropRect {
+        let imageAspect = imageSize.width / imageSize.height
+        let normalizedAspect = ratio / imageAspect
+
+        var newRect = rect
+
+        // Determine which dimension to adjust based on current rect shape
+        let currentAspect = rect.w / max(rect.h, 0.001) * imageAspect
+
+        if currentAspect > ratio {
+            // Too wide - adjust width
+            newRect.w = rect.h * normalizedAspect
+        } else {
+            // Too tall - adjust height
+            newRect.h = rect.w / normalizedAspect
+        }
+
+        // Recalculate position based on anchor point
+        if anchorPoint.x < rect.x + rect.w / 2 {
+            // Anchor is on left side
+            newRect.x = rect.x
+        } else {
+            // Anchor is on right side - adjust x to keep right edge
+            newRect.x = rect.x + rect.w - newRect.w
+        }
+
+        if anchorPoint.y < rect.y + rect.h / 2 {
+            // Anchor is on top side
+            newRect.y = rect.y
+        } else {
+            // Anchor is on bottom side - adjust y to keep bottom edge
+            newRect.y = rect.y + rect.h - newRect.h
+        }
+
+        return newRect
+    }
+
+    /// Commit background drag - finalize the new crop area
+    private func commitBackgroundDrag() {
+        guard let finalRect = localRect, isDrawingNewRect else { return }
+
+        // Only commit if rect has meaningful size (avoid accidental clicks)
+        // Minimum 2% of image in each dimension
+        if finalRect.w > 0.02 && finalRect.h > 0.02 {
+            crop.rect = finalRect
+            crop.isEnabled = true
+        }
+
+        // Clear state
+        isDrawingNewRect = false
+        localRect = nil
+        drawStartPoint = .zero
+    }
+
+    // MARK: - Aspect Ratio Application
+
+    /// Apply aspect ratio immediately when changed
+    private func applyAspectRatio(_ aspect: Crop.Aspect) {
+        // Free aspect - no change needed
+        guard let ratio = aspect.aspectRatio ?? (aspect == .original ? imageSize.width / imageSize.height : nil) else {
+            return
+        }
+
+        // Calculate new rect centered on current crop
+        let currentCenter = CGPoint(
+            x: crop.rect.x + crop.rect.w / 2,
+            y: crop.rect.y + crop.rect.h / 2
+        )
+
+        // Maintain similar area while applying new aspect ratio
+        let currentArea = crop.rect.w * crop.rect.h
+
+        // Calculate new dimensions
+        // For normalized coordinates: w * imageAspect / h = targetAspect
+        let imageAspect = imageSize.width / imageSize.height
+        let normalizedRatio = ratio / imageAspect
+
+        var newW = sqrt(currentArea * normalizedRatio)
+        var newH = newW / normalizedRatio
+
+        // Clamp to image bounds
+        if newW > 1.0 {
+            newW = 1.0
+            newH = newW / normalizedRatio
+        }
+        if newH > 1.0 {
+            newH = 1.0
+            newW = newH * normalizedRatio
+        }
+
+        // Ensure minimum size
+        newW = max(0.1, newW)
+        newH = max(0.1, newH)
+
+        // Center the new rect
+        let newX = max(0, min(1 - newW, currentCenter.x - newW / 2))
+        let newY = max(0, min(1 - newH, currentCenter.y - newH / 2))
+
+        crop.rect = CropRect(x: newX, y: newY, w: newW, h: newH)
+
+        // Auto-enable crop when aspect is changed from default
+        if !crop.isEnabled && aspect != .free {
+            crop.isEnabled = true
+        }
+    }
+
+    // MARK: - Grid Overlay Drawing
+
+    /// Draw the selected grid overlay type
+    private func drawGridOverlay(type: GridOverlay, in rect: CGRect) -> Path {
+        switch type {
+        case .none:
+            return Path()
+        case .thirds:
+            return drawThirdsGrid(in: rect)
+        case .phi:
+            return drawPhiGrid(in: rect)
+        case .diagonal:
+            return drawDiagonalGrid(in: rect)
+        case .triangle:
+            return drawGoldenTriangle(in: rect)
+        case .spiral:
+            return drawGoldenSpiral(in: rect)
+        }
+    }
+
+    /// Rule of thirds grid
+    private func drawThirdsGrid(in rect: CGRect) -> Path {
+        var path = Path()
+        // Vertical lines
+        path.move(to: CGPoint(x: rect.minX + rect.width / 3, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.minX + rect.width / 3, y: rect.maxY))
+        path.move(to: CGPoint(x: rect.minX + rect.width * 2 / 3, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.minX + rect.width * 2 / 3, y: rect.maxY))
+        // Horizontal lines
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY + rect.height / 3))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY + rect.height / 3))
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY + rect.height * 2 / 3))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY + rect.height * 2 / 3))
+        return path
+    }
+
+    /// Golden ratio grid (phi = 1.618)
+    private func drawPhiGrid(in rect: CGRect) -> Path {
+        var path = Path()
+        let phi: CGFloat = 1.618
+        let w = rect.width
+        let h = rect.height
+
+        // Vertical lines at w/phi and w - w/phi
+        let vLine1 = w / phi
+        let vLine2 = w - vLine1
+        path.move(to: CGPoint(x: rect.minX + vLine1, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.minX + vLine1, y: rect.maxY))
+        path.move(to: CGPoint(x: rect.minX + vLine2, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.minX + vLine2, y: rect.maxY))
+
+        // Horizontal lines at h/phi and h - h/phi
+        let hLine1 = h / phi
+        let hLine2 = h - hLine1
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY + hLine1))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY + hLine1))
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY + hLine2))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY + hLine2))
+
+        return path
+    }
+
+    /// Diagonal grid (corner to corner)
+    private func drawDiagonalGrid(in rect: CGRect) -> Path {
+        var path = Path()
+        // Main diagonals
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        path.move(to: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        return path
+    }
+
+    /// Golden triangle overlay
+    private func drawGoldenTriangle(in rect: CGRect) -> Path {
+        var path = Path()
+
+        // Main diagonal
+        path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+
+        // Perpendicular from top-left corner to diagonal
+        let perpX1 = rect.minX + rect.width * 0.382
+        let perpY1 = rect.minY + rect.height * 0.382
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.addLine(to: CGPoint(x: perpX1, y: rect.maxY - perpY1))
+
+        // Perpendicular from bottom-right corner to diagonal
+        let perpX2 = rect.maxX - rect.width * 0.382
+        let perpY2 = rect.maxY - rect.height * 0.382
+        path.move(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: perpX2, y: perpY2))
+
+        return path
+    }
+
+    /// Golden spiral (Fibonacci approximation)
+    private func drawGoldenSpiral(in rect: CGRect) -> Path {
+        var path = Path()
+        let phi: CGFloat = 1.618
+
+        // Draw the phi grid lines first
+        let vLine1 = rect.width / phi
+        path.move(to: CGPoint(x: rect.minX + vLine1, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.minX + vLine1, y: rect.maxY))
+
+        let hLine1 = rect.height / phi
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY + hLine1))
+        path.addLine(to: CGPoint(x: rect.minX + vLine1, y: rect.minY + hLine1))
+
+        // Approximate spiral with arcs (simplified)
+        let centerX = rect.minX + vLine1
+        let centerY = rect.minY + hLine1
+
+        // First arc (largest)
+        let radius1 = rect.height - hLine1
+        path.move(to: CGPoint(x: centerX, y: rect.maxY))
+        path.addArc(
+            center: CGPoint(x: centerX, y: centerY),
+            radius: radius1,
+            startAngle: .degrees(90),
+            endAngle: .degrees(180),
+            clockwise: false
+        )
+
+        // Second arc
+        let radius2 = vLine1 * 0.618
+        path.addArc(
+            center: CGPoint(x: rect.minX + radius2, y: centerY),
+            radius: radius2,
+            startAngle: .degrees(180),
+            endAngle: .degrees(270),
+            clockwise: false
+        )
+
+        return path
     }
 }
 
@@ -310,10 +669,33 @@ extension View {
     }
 }
 
-#Preview {
+#Preview("Rule of Thirds") {
     CropOverlayView(
         crop: .constant(Crop(isEnabled: true, rect: CropRect(x: 0.1, y: 0.1, w: 0.8, h: 0.8))),
-        imageSize: CGSize(width: 800, height: 600)
+        imageSize: CGSize(width: 800, height: 600),
+        gridOverlay: .thirds
+    )
+    .frame(width: 400, height: 300)
+    .background(Color.gray)
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Golden Ratio") {
+    CropOverlayView(
+        crop: .constant(Crop(isEnabled: true, rect: CropRect(x: 0.1, y: 0.1, w: 0.8, h: 0.8))),
+        imageSize: CGSize(width: 800, height: 600),
+        gridOverlay: .phi
+    )
+    .frame(width: 400, height: 300)
+    .background(Color.gray)
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Golden Spiral") {
+    CropOverlayView(
+        crop: .constant(Crop(isEnabled: true, rect: CropRect(x: 0.1, y: 0.1, w: 0.8, h: 0.8))),
+        imageSize: CGSize(width: 800, height: 600),
+        gridOverlay: .spiral
     )
     .frame(width: 400, height: 300)
     .background(Color.gray)

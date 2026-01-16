@@ -308,6 +308,30 @@ struct InspectorView: View {
                 if panelConfig.isVisible(.composition) {
                 DisclosureGroup("Composition", isExpanded: $compositionExpanded) {
                     VStack(spacing: 12) {
+                        // Crop preview thumbnail
+                        CropPreviewThumbnail(
+                            crop: $localRecipe.crop,
+                            previewImage: appState.currentPreviewImage,
+                            onTap: {
+                                // Save history before entering transform mode
+                                pushHistory()
+                                appState.transformMode = true
+                            }
+                        )
+
+                        // Edit Crop button
+                        Button {
+                            pushHistory()
+                            appState.transformMode = true
+                        } label: {
+                            Label("Edit Crop", systemImage: "crop")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+
+                        Divider()
+
                         // Crop toggle and aspect ratio
                         HStack {
                             Toggle("Crop", isOn: $localRecipe.crop.isEnabled)
@@ -770,10 +794,19 @@ struct InspectorView: View {
                 localRecipe = appState.recipes[id] ?? EditRecipe()
             }
         }
-        .onChange(of: localRecipe) { _, newRecipe in
+        .onChange(of: localRecipe) { oldRecipe, newRecipe in
             if let id = appState.selectedAssetId {
+                // Skip if the recipe hasn't actually changed (prevents feedback loops)
+                if appState.recipes[id] == newRecipe {
+                    return
+                }
+
+                // Debug: Track profile changes
+                if oldRecipe.profileId != newRecipe.profileId {
+                    print("[Inspector] Profile changed: \(oldRecipe.profileId) → \(newRecipe.profileId)")
+                }
                 appState.recipes[id] = newRecipe
-                
+
                 // Debounce save - only save after user stops adjusting
                 saveTask?.cancel()
                 saveTask = Task {
