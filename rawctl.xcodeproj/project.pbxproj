@@ -30,6 +30,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		AB0968B72F19093000E1E264 /* rawctl.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = rawctl.xcodeproj; sourceTree = "<group>"; };
 		AB433D1C2EEF722400534A32 /* rawctl.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = rawctl.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AB433D2F2EEF722500534A32 /* rawctlTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = rawctlTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AB433D392EEF722500534A32 /* rawctlUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = rawctlUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -81,6 +82,11 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		AB0968B92F19093000E1E264 /* Products */ = {
+			isa = PBXGroup;
+			name = Products;
+			sourceTree = "<group>";
+		};
 		AB433D132EEF722400534A32 = {
 			isa = PBXGroup;
 			children = (
@@ -214,6 +220,12 @@
 			preferredProjectObjectVersion = 77;
 			productRefGroup = AB433D1D2EEF722400534A32 /* Products */;
 			projectDirPath = "";
+			projectReferences = (
+				{
+					ProductGroup = AB0968B92F19093000E1E264 /* Products */;
+					ProjectRef = AB0968B72F19093000E1E264 /* rawctl.xcodeproj */;
+				},
+			);
 			projectRoot = "";
 			targets = (
 				AB433D1B2EEF722400534A32 /* rawctl */,
@@ -339,7 +351,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MACOSX_DEPLOYMENT_TARGET = 15.4;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -397,7 +409,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MACOSX_DEPLOYMENT_TARGET = 15.4;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = macosx;
@@ -473,7 +485,7 @@
 				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = DTR8DL89SD;
 				GENERATE_INFOPLIST_FILE = YES;
-				MACOSX_DEPLOYMENT_TARGET = 15.4;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = Shacoworkshop.rawctlTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -491,7 +503,7 @@
 				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = DTR8DL89SD;
 				GENERATE_INFOPLIST_FILE = YES;
-				MACOSX_DEPLOYMENT_TARGET = 15.4;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = Shacoworkshop.rawctlTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";

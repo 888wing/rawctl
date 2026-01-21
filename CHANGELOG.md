@@ -49,6 +49,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Installation
+- **Fixed macOS 15.1 users unable to install**: Deployment target was incorrectly set to 15.4 instead of 14.0, preventing users on earlier macOS versions from installing
+
 #### Crop System
 - **Fixed crop region deviating from user selection**: Crop selection was displaced because of coordinate system mismatch
   - Root cause: SwiftUI uses top-left origin (Y increases downward) but CIImage uses bottom-left origin (Y increases upward)
