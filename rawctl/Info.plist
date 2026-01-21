@@ -27,5 +27,7 @@
 	<true/>
 	<key>SUShowReleaseNotes</key>
 	<true/>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
 </dict>
 </plist>
