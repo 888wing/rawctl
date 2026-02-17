@@ -30,14 +30,30 @@ struct MaskingPanel: View {
 
             Spacer()
 
-            Button {
-                addNewNode()
+            Menu {
+                Button {
+                    addNewNode(maskType: .radial(centerX: 0.5, centerY: 0.5, radius: 0.3))
+                } label: {
+                    Label("Radial Mask", systemImage: "circle")
+                }
+                Button {
+                    addNewNode(maskType: .linear(angle: 90, position: 0.5, falloff: 20))
+                } label: {
+                    Label("Linear Mask", systemImage: "line.diagonal")
+                }
+                Button {
+                    addNewNode(maskType: .brush(data: Data()))
+                } label: {
+                    Label("Brush Mask", systemImage: "paintbrush")
+                }
             } label: {
                 Image(systemName: "plus")
                     .font(.caption.bold())
                     .frame(width: 20, height: 20)
             }
-            .buttonStyle(.plain)
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(width: 20, height: 20)
             .foregroundColor(.secondary)
             .help("Add local adjustment")
         }
@@ -78,15 +94,14 @@ struct MaskingPanel: View {
 
     // MARK: - Actions
 
-    /// Adds a new ColorNode with a default centered radial mask.
+    /// Adds a new ColorNode with the specified mask type.
     /// Internal (not private) to allow unit testing without a test wrapper.
-    func addNewNode() {
-        let mask = NodeMask(type: .radial(centerX: 0.5, centerY: 0.5, radius: 0.3))
+    func addNewNode(maskType: NodeMask.MaskType = .radial(centerX: 0.5, centerY: 0.5, radius: 0.3)) {
         var node = ColorNode(
             name: "Local \(appState.currentLocalNodes.count + 1)",
             type: .serial
         )
-        node.mask = mask
+        node.mask = NodeMask(type: maskType)
         appState.addLocalNode(node)
     }
 }
