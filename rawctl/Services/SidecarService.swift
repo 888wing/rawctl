@@ -152,6 +152,40 @@ actor SidecarService {
         }
     }
 
+    // MARK: - v6: localNodes save/load
+
+    /// Save recipe and optional local adjustment nodes to sidecar file (immediate, throwing).
+    /// Uses a default of nil for localNodes so all existing callers compile unchanged.
+    func save(recipe: EditRecipe, localNodes: [ColorNode]? = nil, for assetURL: URL) throws {
+        let sidecarURL = FileSystemService.sidecarURL(for: assetURL)
+
+        var sidecar: SidecarFile
+        if FileManager.default.fileExists(atPath: sidecarURL.path),
+           let data = try? Data(contentsOf: sidecarURL),
+           let existing = try? JSONDecoder().decode(SidecarFile.self, from: data) {
+            sidecar = existing
+            sidecar.edit = recipe
+        } else {
+            sidecar = SidecarFile(for: assetURL, recipe: recipe)
+        }
+
+        sidecar.localNodes = localNodes
+        sidecar.updatedAt = Date().timeIntervalSince1970
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(sidecar)
+        try data.write(to: sidecarURL, options: .atomic)
+    }
+
+    /// Load recipe and local adjustment nodes from sidecar file (throwing).
+    func load(for assetURL: URL) throws -> (recipe: EditRecipe, localNodes: [ColorNode]?) {
+        let sidecarURL = FileSystemService.sidecarURL(for: assetURL)
+        let data = try Data(contentsOf: sidecarURL)
+        let sidecar = try JSONDecoder().decode(SidecarFile.self, from: data)
+        return (recipe: sidecar.edit, localNodes: sidecar.localNodes)
+    }
+
     /// Delete sidecar file
     func deleteSidecar(for assetURL: URL) async {
         let sidecarURL = FileSystemService.sidecarURL(for: assetURL)

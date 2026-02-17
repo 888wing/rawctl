@@ -70,4 +70,31 @@ final class NodeGraphTests: XCTestCase {
         XCTAssertEqual(decoded.localNodes?.first?.name, "Brighten Face")
         XCTAssertEqual(decoded.localNodes?.first?.adjustments.exposure, 0.8)
     }
+
+    // MARK: - SidecarService v6
+
+    func test_sidecarService_roundtrip_localNodes() async throws {
+        let tmpDir = FileManager.default.temporaryDirectory
+        let fakePhotoURL = tmpDir.appendingPathComponent("svc_roundtrip_test.ARW")
+        FileManager.default.createFile(atPath: fakePhotoURL.path, contents: Data("fake".utf8))
+        defer { try? FileManager.default.removeItem(at: fakePhotoURL) }
+
+        var recipe = EditRecipe()
+        recipe.exposure = 0.5
+
+        var node = ColorNode(name: "Sky", type: .serial)
+        node.mask = NodeMask(type: .linear(angle: 0, position: 0.3, falloff: 0.4))
+        node.adjustments.exposure = -0.5
+
+        // Save with localNodes
+        let service = SidecarService()
+        try await service.save(recipe: recipe, localNodes: [node], for: fakePhotoURL)
+
+        // Load
+        let loaded = try await service.load(for: fakePhotoURL)
+        XCTAssertEqual(loaded.recipe.exposure, 0.5)
+        XCTAssertEqual(loaded.localNodes?.count, 1)
+        XCTAssertEqual(loaded.localNodes?.first?.name, "Sky")
+        XCTAssertEqual(loaded.localNodes?.first?.adjustments.exposure, -0.5)
+    }
 }
