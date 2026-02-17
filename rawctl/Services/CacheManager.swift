@@ -203,7 +203,8 @@ actor CacheManager {
         var filesToDelete: [URL] = []
         var totalSize: Int64 = 0
         
-        for case let fileURL as URL in enumerator {
+        // Avoid `DirectoryEnumerator` Sequence iteration in async context (Swift 6 `noasync`).
+        while let fileURL = enumerator.nextObject() as? URL {
             guard let resourceValues = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]),
                   let modificationDate = resourceValues.contentModificationDate,
                   modificationDate < cutoffDate else {

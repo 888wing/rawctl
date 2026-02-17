@@ -158,12 +158,14 @@ struct SidebarView: View {
                     appState.isLoading = false
                     appState.recipes = [:]
                     folderManager.updateFolderState(source.id, isLoaded: true, assetCount: assets.count)
-                }
-                await appState.loadAllRecipes()
-                await MainActor.run {
+                    // Select first photo immediately for responsive UI
                     if let first = appState.assets.first {
                         appState.selectedAssetId = first.id
                     }
+                }
+                // Load recipes in background (non-blocking)
+                Task {
+                    await appState.loadAllRecipes()
                 }
             } catch {
                 await MainActor.run {
@@ -278,12 +280,14 @@ struct SidebarView: View {
                     appState.assets = assets
                     appState.isLoading = false
                     appState.recipes = [:]
-                }
-                await appState.loadAllRecipes()
-                await MainActor.run {
+                    // Select first photo immediately for responsive UI
                     if let first = appState.assets.first {
                         appState.selectedAssetId = first.id
                     }
+                }
+                // Load recipes in background (non-blocking)
+                Task {
+                    await appState.loadAllRecipes()
                 }
             } catch {
                 await MainActor.run {

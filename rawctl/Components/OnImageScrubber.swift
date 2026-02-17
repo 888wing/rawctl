@@ -132,7 +132,7 @@ struct OnImageScrubberModifier: ViewModifier {
             .gesture(scrubGesture)
             .onKeyPress(phases: .down) { keyPress in
                 let key = keyPress.characters.uppercased()
-                if let param = ScrubParameter.allCases.first(where: { $0.rawValue == key }) {
+                if ScrubParameter.allCases.contains(where: { $0.rawValue == key }) {
                     pressedKeys.insert(key)
                     return .handled
                 }

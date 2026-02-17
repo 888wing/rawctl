@@ -22,6 +22,7 @@ struct SingleView: View {
     @State private var isSliderDragging = false    // Track if user is dragging a slider
     @State private var isProcessingPreview = false // Track if preview is being rendered
     @State private var showAIEditor = false        // AI Editor sheet
+    @State private var cropGridOverlay: GridOverlay = .thirds  // Crop grid overlay type
     @FocusState private var isFocused: Bool
     
     // Expose for histogram
@@ -77,6 +78,7 @@ struct SingleView: View {
                             zoomOffset: $zoomOffset,
                             dragOffset: $dragOffset,
                             currentCrop: currentCrop,
+                            gridOverlay: cropGridOverlay,
                             appState: appState,
                             geometry: geometry,
                             toggleZoom: toggleZoom
@@ -137,8 +139,48 @@ struct SingleView: View {
                     TransformToolbar(
                         transformMode: $appState.transformMode,
                         showAIEditor: $showAIEditor,
-                        hasAsset: appState.selectedAsset != nil
+                        hasAsset: appState.selectedAsset != nil,
+                        onEnterTransformMode: {
+                            // Save history before crop changes for undo support
+                            if let id = appState.selectedAssetId,
+                               let recipe = appState.recipes[id] {
+                                appState.pushHistory(recipe)
+                            }
+                        }
                     )
+                }
+                .overlay(alignment: .top) {
+                    // Crop toolbar when in transform mode
+                    if appState.transformMode, appState.selectedAsset != nil {
+                        CropToolbar(
+                            crop: currentCrop,
+                            gridOverlay: $cropGridOverlay,
+                            imageSize: previewImage?.size ?? CGSize(width: 1000, height: 1000),
+                            onConfirm: {
+                                // Enable crop when confirmed with changes
+                                if currentCrop.wrappedValue.rect != CropRect() {
+                                    currentCrop.wrappedValue.isEnabled = true
+                                }
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    appState.transformMode = false
+                                }
+                            },
+                            onCancel: {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    appState.transformMode = false
+                                }
+                            },
+                            onReset: {
+                                // Save history before reset for undo support
+                                if let id = appState.selectedAssetId,
+                                   let recipe = appState.recipes[id] {
+                                    appState.pushHistory(recipe)
+                                }
+                                currentCrop.wrappedValue = Crop()
+                            }
+                        )
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                    }
                 }
                 
                 // Info bar
@@ -168,23 +210,29 @@ struct SingleView: View {
                     }
                 }
             }
-            .onChange(of: appState.recipes) { _, newRecipes in
-                // Debounce preview updates (only edited, not original)
-                if let id = appState.selectedAssetId, let recipe = newRecipes[id] {
-                    print("[DEBUG] Recipe changed - WB temp: \(recipe.whiteBalance.temperature)K, hasEdits: \(recipe.whiteBalance.hasEdits)")
+            .onChange(of: appState.recipes) { oldRecipes, newRecipes in
+                // Only update if the selected asset's recipe actually changed
+                guard let id = appState.selectedAssetId else { return }
+
+                let oldRecipe = oldRecipes[id]
+                let newRecipe = newRecipes[id]
+
+                // Skip if recipes are equal (prevents unnecessary re-renders)
+                if oldRecipe == newRecipe {
+                    return
                 }
+
                 previewTask?.cancel()
                 // Show processing indicator when starting a new render
                 isProcessingPreview = true
                 previewTask = Task {
-                    // Ultra-responsive: 16ms (1 frame) during slider drag, 50ms otherwise
-                    let delay: UInt64 = isSliderDragging ? 16_000_000 : 50_000_000
+                    // Keep drag rendering responsive while reducing render thrash.
+                    let delay: UInt64 = isSliderDragging ? 24_000_000 : 70_000_000
                     try? await Task.sleep(nanoseconds: delay)
                     guard !Task.isCancelled else {
                         isProcessingPreview = false
                         return
                     }
-                    print("[DEBUG] Calling loadPreview() - dragging: \(isSliderDragging)")
                     await loadPreview()
                     isProcessingPreview = false
                 }
@@ -193,11 +241,30 @@ struct SingleView: View {
                 // Switch preview quality based on slider drag state
                 if let isDragging = notification.object as? Bool {
                     isSliderDragging = isDragging
-                    appState.previewQuality = isDragging ? .fast : .full
+                    let targetQuality: AppState.PreviewQuality = isDragging ? .fast : .full
+                    if appState.previewQuality != targetQuality {
+                        appState.previewQuality = targetQuality
+                    }
                 }
             }
-            .onChange(of: appState.previewQuality) { _, _ in
-                // Immediately reload at new quality when quality changes
+            .onChange(of: appState.previewQuality) { _, newQuality in
+                // Finalize with full-quality render after slider release.
+                guard newQuality == .full else { return }
+                previewTask?.cancel()
+                previewTask = Task {
+                    await loadPreview()
+                }
+            }
+            .onChange(of: appState.transformMode) { _, isActive in
+                if isActive {
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        zoomScale = 1.0
+                        zoomOffset = .zero
+                        dragOffset = .zero
+                        appState.isZoomed = false
+                    }
+                }
+
                 previewTask?.cancel()
                 previewTask = Task {
                     await loadPreview()
@@ -245,6 +312,9 @@ struct SingleView: View {
                 .opacity(0)
             }
         }
+        // UI test hook
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("singleView")
     }
     
     // MARK: - Keyboard Shortcuts Modifier
@@ -275,6 +345,13 @@ struct SingleView: View {
                 }
                 // Transform mode toggle (C)
                 .onKeyPress("c") {
+                    // Save history before entering transform mode for undo support
+                    if !appState.transformMode {
+                        if let id = appState.selectedAssetId,
+                           let recipe = appState.recipes[id] {
+                            appState.pushHistory(recipe)
+                        }
+                    }
                     withAnimation(.easeInOut(duration: 0.2)) {
                         appState.transformMode.toggle()
                     }
@@ -348,12 +425,17 @@ struct SingleView: View {
         @Binding var transformMode: Bool
         @Binding var showAIEditor: Bool
         let hasAsset: Bool
+        let onEnterTransformMode: () -> Void
 
         var body: some View {
             if hasAsset {
                 HStack(spacing: 8) {
                     // Crop/Transform button
                     Button {
+                        // Save history before entering transform mode for undo support
+                        if !transformMode {
+                            onEnterTransformMode()
+                        }
                         withAnimation(.easeInOut(duration: 0.2)) {
                             transformMode.toggle()
                         }
@@ -439,12 +521,94 @@ struct SingleView: View {
         @Binding var zoomOffset: CGSize
         @Binding var dragOffset: CGSize
         let currentCrop: Binding<Crop>
+        let gridOverlay: GridOverlay
         let appState: AppState
         let geometry: GeometryProxy
         let toggleZoom: () -> Void
 
         @State private var imageViewSize: CGSize = .zero
-        
+        @State private var magnifyGestureScale: CGFloat = 1.0
+        @State private var lastMagnifyScale: CGFloat = 1.0
+
+        // Zoom constants
+        private let minZoomScale: CGFloat = 0.25
+        private let maxZoomScale: CGFloat = 8.0
+
+        /// Calculate actual pixel scale (fittedScale * userScale)
+        private func calculateFittedScale(imageSize: CGSize, viewSize: CGSize) -> CGFloat {
+            let widthRatio = viewSize.width / imageSize.width
+            let heightRatio = viewSize.height / imageSize.height
+            return min(widthRatio, heightRatio)
+        }
+
+        /// Zoom percentage display
+        private var zoomPercentageText: String {
+            let percentage = Int(zoomScale * 100)
+            return "\(percentage)%"
+        }
+
+        /// Clamp offset to keep image within view bounds when zoomed
+        private func clampOffset(_ offset: CGSize, imageSize: CGSize, viewSize: CGSize) -> CGSize {
+            guard zoomScale > 1.0 else { return .zero }
+
+            // Calculate the scaled image dimensions
+            let fittedScale = calculateFittedScale(imageSize: imageSize, viewSize: viewSize)
+            let scaledWidth = imageSize.width * fittedScale * zoomScale
+            let scaledHeight = imageSize.height * fittedScale * zoomScale
+
+            // Calculate max allowed offset (half of overflow in each direction)
+            let maxOffsetX = max(0, (scaledWidth - viewSize.width) / 2)
+            let maxOffsetY = max(0, (scaledHeight - viewSize.height) / 2)
+
+            return CGSize(
+                width: min(max(offset.width, -maxOffsetX), maxOffsetX),
+                height: min(max(offset.height, -maxOffsetY), maxOffsetY)
+            )
+        }
+
+        /// Handle scroll wheel zoom with anchor point at cursor
+        private func handleScrollWheelZoom(event: NSEvent, imageSize: CGSize, viewSize: CGSize) {
+            let delta = event.scrollingDeltaY
+            guard abs(delta) > 0.1 else { return }
+
+            // Calculate zoom factor (smaller delta = finer control)
+            let zoomFactor: CGFloat = 1.0 + (delta * 0.01)
+            let newScale = min(max(zoomScale * zoomFactor, minZoomScale), maxZoomScale)
+
+            // Get cursor position relative to view center
+            let cursorInWindow = event.locationInWindow
+            // Convert to view coordinates (origin at center)
+            let viewCenter = CGPoint(x: viewSize.width / 2, y: viewSize.height / 2)
+
+            // Calculate the point we want to keep fixed (in image space)
+            let pointInView = CGPoint(
+                x: cursorInWindow.x - viewCenter.x - zoomOffset.width,
+                y: -(cursorInWindow.y - viewCenter.y) - zoomOffset.height  // Flip Y
+            )
+
+            // Calculate new offset to keep anchor point fixed
+            let scaleRatio = newScale / zoomScale
+            let newOffset = CGSize(
+                width: zoomOffset.width - pointInView.x * (scaleRatio - 1),
+                height: zoomOffset.height + pointInView.y * (scaleRatio - 1)
+            )
+
+            // Apply zoom
+            withAnimation(.interactiveSpring(response: 0.15, dampingFraction: 0.8)) {
+                zoomScale = newScale
+                if newScale > 1.0 {
+                    zoomOffset = clampOffset(newOffset, imageSize: imageSize, viewSize: viewSize)
+                    dragOffset = zoomOffset
+                    appState.isZoomed = true
+                } else {
+                    zoomOffset = .zero
+                    dragOffset = .zero
+                    appState.isZoomed = false
+                }
+            }
+            lastMagnifyScale = newScale
+        }
+
         var body: some View {
             ZStack {
                 Color.black
@@ -473,10 +637,12 @@ struct SingleView: View {
                             DragGesture()
                                 .onChanged { value in
                                     if zoomScale > 1.0 {
-                                        zoomOffset = CGSize(
+                                        let newOffset = CGSize(
                                             width: dragOffset.width + value.translation.width,
                                             height: dragOffset.height + value.translation.height
                                         )
+                                        // Clamp pan to image bounds
+                                        zoomOffset = clampOffset(newOffset, imageSize: image.size, viewSize: geometry.size)
                                     }
                                 }
                                 .onEnded { value in
@@ -485,17 +651,51 @@ struct SingleView: View {
                                     }
                                 }
                         )
+                        .gesture(
+                            // Pinch/magnify gesture for trackpad zoom
+                            MagnifyGesture()
+                                .onChanged { value in
+                                    let newScale = lastMagnifyScale * value.magnification
+                                    zoomScale = min(max(newScale, minZoomScale), maxZoomScale)
+                                }
+                                .onEnded { value in
+                                    lastMagnifyScale = zoomScale
+                                    if zoomScale <= 1.0 {
+                                        // Reset offset when zoomed out to fit
+                                        withAnimation(.spring(response: 0.3)) {
+                                            zoomOffset = .zero
+                                            dragOffset = .zero
+                                        }
+                                        appState.isZoomed = false
+                                    } else {
+                                        appState.isZoomed = true
+                                        // Clamp offset after zoom
+                                        let clamped = clampOffset(zoomOffset, imageSize: image.size, viewSize: geometry.size)
+                                        if clamped != zoomOffset {
+                                            withAnimation(.spring(response: 0.2)) {
+                                                zoomOffset = clamped
+                                                dragOffset = clamped
+                                            }
+                                        }
+                                    }
+                                }
+                        )
                         .onTapGesture(count: 2) {
                             toggleZoom()
+                        }
+                        .onScrollWheel { event in
+                            // Scroll wheel zoom at cursor position
+                            handleScrollWheelZoom(event: event, imageSize: image.size, viewSize: geometry.size)
                         }
                         .overlay {
                             // Crop overlay when in transform mode
                             if !showOriginal && appState.transformMode {
                                 CropOverlayView(
                                     crop: currentCrop,
-                                    imageSize: image.size
+                                    imageSize: image.size,
+                                    gridOverlay: gridOverlay
                                 )
-                                .padding(20)
+                                .padding(20 * zoomScale)
                             }
                             
                             // Clipping warnings
@@ -542,27 +742,68 @@ struct SingleView: View {
                     HStack {
                         Spacer()
                         HStack(spacing: 4) {
-                            Button(action: { withAnimation { zoomScale = 1.0; zoomOffset = .zero; dragOffset = .zero } }) {
-                                Text("Fit")
-                                    .font(.system(size: 10, weight: .medium))
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                            }
-                            .buttonStyle(.plain)
-                            .background(zoomScale == 1.0 ? Color.accentColor : Color.black.opacity(0.5))
-                            .foregroundColor(.white)
-                            .cornerRadius(4)
+                            // Fit to view
+                            ZoomButton(
+                                label: "Fit",
+                                isActive: zoomScale == 1.0,
+                                action: {
+                                    withAnimation(.spring(response: 0.3)) {
+                                        zoomScale = 1.0
+                                        zoomOffset = .zero
+                                        dragOffset = .zero
+                                        lastMagnifyScale = 1.0
+                                        appState.isZoomed = false
+                                    }
+                                }
+                            )
 
-                            Button(action: { withAnimation { zoomScale = 2.0; dragOffset = zoomOffset } }) {
-                                Text("100%")
-                                    .font(.system(size: 10, weight: .medium))
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                            }
-                            .buttonStyle(.plain)
-                            .background(zoomScale == 2.0 ? Color.accentColor : Color.black.opacity(0.5))
-                            .foregroundColor(.white)
-                            .cornerRadius(4)
+                            // 50% zoom
+                            ZoomButton(
+                                label: "50%",
+                                isActive: abs(zoomScale - 0.5) < 0.05,
+                                action: {
+                                    withAnimation(.spring(response: 0.3)) {
+                                        zoomScale = 0.5
+                                        zoomOffset = .zero
+                                        dragOffset = .zero
+                                        lastMagnifyScale = 0.5
+                                        appState.isZoomed = false
+                                    }
+                                }
+                            )
+
+                            // 100% (1:1 pixel mapping - 2x scale when fit is ~50%)
+                            ZoomButton(
+                                label: "100%",
+                                isActive: abs(zoomScale - 2.0) < 0.1,
+                                action: {
+                                    withAnimation(.spring(response: 0.3)) {
+                                        zoomScale = 2.0
+                                        lastMagnifyScale = 2.0
+                                        appState.isZoomed = true
+                                    }
+                                }
+                            )
+
+                            // 200% zoom
+                            ZoomButton(
+                                label: "200%",
+                                isActive: abs(zoomScale - 4.0) < 0.1,
+                                action: {
+                                    withAnimation(.spring(response: 0.3)) {
+                                        zoomScale = 4.0
+                                        lastMagnifyScale = 4.0
+                                        appState.isZoomed = true
+                                    }
+                                }
+                            )
+
+                            // Current zoom percentage indicator
+                            Text(zoomPercentageText)
+                                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                .foregroundColor(.white.opacity(0.7))
+                                .frame(minWidth: 40)
+                                .padding(.horizontal, 4)
                         }
                         .padding(8)
                         .background(.black.opacity(0.5))
@@ -579,6 +820,26 @@ struct SingleView: View {
                     }
                 }
             }
+        }
+    }
+
+    /// Zoom level button component
+    private struct ZoomButton: View {
+        let label: String
+        let isActive: Bool
+        let action: () -> Void
+
+        var body: some View {
+            Button(action: action) {
+                Text(label)
+                    .font(.system(size: 10, weight: .medium))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+            }
+            .buttonStyle(.plain)
+            .background(isActive ? Color.accentColor : Color.black.opacity(0.5))
+            .foregroundColor(.white)
+            .cornerRadius(4)
         }
     }
 
@@ -679,6 +940,12 @@ struct SingleView: View {
         
         // Get recipe for this specific asset
         let recipe = appState.recipes[asset.id] ?? EditRecipe()
+        var previewRecipe = recipe
+
+        // While editing crop, preview the full transformed frame so overlay and output stay aligned.
+        if appState.transformMode {
+            previewRecipe.crop.isEnabled = false
+        }
         
         // ===== P1: TWO-STAGE LOADING =====
         
@@ -697,31 +964,37 @@ struct SingleView: View {
         
         // Stage 2: Load full edited version
         // Always do this when there are edits (to apply them)
-        let hasEdits = recipe.hasEdits
+        let hasEdits = previewRecipe.hasEdits
         let needsFullRender = hasEdits || isInitialLoad || appState.previewQuality == .full
-        
-        print("[DEBUG-LOAD] hasEdits: \(hasEdits), needsFullRender: \(needsFullRender), WB temp: \(recipe.whiteBalance.temperature)K")
-        
+
         if needsFullRender {
             // Use quality-aware resolution
-            let maxSize = appState.previewQuality.maxSize
-            
-            print("[DEBUG-LOAD] Calling renderPreview with WB temp: \(recipe.whiteBalance.temperature)K")
+            let isFastMode = appState.previewQuality == .fast || isSliderDragging
+            // While scrubbing sliders, prefer lower-resolution preview to keep interactions responsive.
+            let maxSize: CGFloat = isFastMode
+                ? min(appState.previewQuality.maxSize, 720)
+                : appState.previewQuality.maxSize
+            let sliderSignpostId = PerformanceSignposts.signposter.makeSignpostID()
+            let sliderSignpostState = isSliderDragging
+                ? PerformanceSignposts.begin("sliderDragRender", id: sliderSignpostId)
+                : nil
+            defer { PerformanceSignposts.end("sliderDragRender", sliderSignpostState) }
             
             // Use ImagePipeline for preview with recipe applied
             let fullPreview = await ImagePipeline.shared.renderPreview(
                 for: asset,
-                recipe: recipe,
-                maxSize: maxSize
+                recipe: previewRecipe,
+                maxSize: maxSize,
+                fastMode: isFastMode
             )
             
             // Only update if we got a result
             if let full = fullPreview {
-                print("[DEBUG-LOAD] Got preview result, updating image")
                 previewImage = full
-                appState.currentPreviewImage = full
-            } else {
-                print("[DEBUG-LOAD] renderPreview returned nil")
+                // Keep histogram updates off the hot path during slider drags.
+                if !isSliderDragging || appState.currentPreviewImage == nil {
+                    appState.currentPreviewImage = full
+                }
             }
         }
         
@@ -1146,8 +1419,47 @@ private struct AIGenerationProgressOverlay: View {
     }
 }
 
+// MARK: - Scroll Wheel Modifier
+
+/// View extension for handling scroll wheel events (macOS)
+extension View {
+    func onScrollWheel(action: @escaping (NSEvent) -> Void) -> some View {
+        self.background(
+            ScrollWheelHandler(action: action)
+        )
+    }
+}
+
+/// NSViewRepresentable to capture scroll wheel events
+private struct ScrollWheelHandler: NSViewRepresentable {
+    let action: (NSEvent) -> Void
+
+    func makeNSView(context: Context) -> ScrollWheelNSView {
+        let view = ScrollWheelNSView()
+        view.action = action
+        return view
+    }
+
+    func updateNSView(_ nsView: ScrollWheelNSView, context: Context) {
+        nsView.action = action
+    }
+}
+
+/// Custom NSView that captures scroll wheel events
+private class ScrollWheelNSView: NSView {
+    var action: ((NSEvent) -> Void)?
+
+    override func scrollWheel(with event: NSEvent) {
+        // Only handle trackpad/mouse wheel scroll (ignore momentum events).
+        if event.momentumPhase == [] {
+            action?(event)
+        }
+    }
+
+    override var acceptsFirstResponder: Bool { true }
+}
+
 #Preview {
     SingleView(appState: AppState())
         .preferredColorScheme(.dark)
 }
-

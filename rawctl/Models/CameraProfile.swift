@@ -40,30 +40,55 @@ struct ProfileLook: Codable, Equatable {
 
 /// Built-in rawctl profiles
 enum BuiltInProfile: String, CaseIterable, Identifiable {
+    case original = "rawctl.original"
     case neutral = "rawctl.neutral"
     case vivid = "rawctl.vivid"
     case portrait = "rawctl.portrait"
+    case landscape = "rawctl.landscape"
+    case cinematic = "rawctl.cinematic"
+    case monochrome = "rawctl.monochrome"
+    case night = "rawctl.night"
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
+        case .original: return "Original"
         case .neutral: return "rawctl Neutral"
         case .vivid: return "rawctl Vivid"
         case .portrait: return "rawctl Portrait"
+        case .landscape: return "rawctl Landscape"
+        case .cinematic: return "rawctl Cinematic"
+        case .monochrome: return "rawctl B&W"
+        case .night: return "rawctl Night"
         }
     }
 
     var icon: String {
         switch self {
+        case .original: return "camera"
         case .neutral: return "circle.lefthalf.filled"
         case .vivid: return "paintpalette"
         case .portrait: return "person.crop.circle"
+        case .landscape: return "mountain.2"
+        case .cinematic: return "film"
+        case .monochrome: return "circle.lefthalf.striped.horizontal"
+        case .night: return "moon.stars"
         }
     }
 
     var profile: CameraProfile {
         switch self {
+        case .original:
+            return CameraProfile(
+                id: rawValue,
+                name: "Original",
+                manufacturer: "rawctl",
+                colorMatrix: .identity,
+                baseToneCurve: .linear,
+                highlightShoulder: .none,
+                look: nil
+            )
         case .neutral:
             return CameraProfile(
                 id: rawValue,
@@ -93,6 +118,46 @@ enum BuiltInProfile: String, CaseIterable, Identifiable {
                 baseToneCurve: .filmicSoft,
                 highlightShoulder: .soft,
                 look: ProfileLook(saturationBoost: -0.05, warmthShift: 0.02)
+            )
+        case .landscape:
+            return CameraProfile(
+                id: rawValue,
+                name: "rawctl Landscape",
+                manufacturer: "rawctl",
+                colorMatrix: .identity,
+                baseToneCurve: .filmicVivid,
+                highlightShoulder: .vivid,
+                look: ProfileLook(saturationBoost: 0.2, contrastBoost: 0.12, warmthShift: -0.03)
+            )
+        case .cinematic:
+            return CameraProfile(
+                id: rawValue,
+                name: "rawctl Cinematic",
+                manufacturer: "rawctl",
+                colorMatrix: .identity,
+                baseToneCurve: .filmicSoft,
+                highlightShoulder: .soft,
+                look: ProfileLook(saturationBoost: -0.1, contrastBoost: 0.16, warmthShift: -0.02)
+            )
+        case .monochrome:
+            return CameraProfile(
+                id: rawValue,
+                name: "rawctl B&W",
+                manufacturer: "rawctl",
+                colorMatrix: .identity,
+                baseToneCurve: .filmicNeutral,
+                highlightShoulder: .neutral,
+                look: ProfileLook(saturationBoost: -1.0, contrastBoost: 0.15)
+            )
+        case .night:
+            return CameraProfile(
+                id: rawValue,
+                name: "rawctl Night",
+                manufacturer: "rawctl",
+                colorMatrix: .identity,
+                baseToneCurve: .filmicSoft,
+                highlightShoulder: .neutral,
+                look: ProfileLook(saturationBoost: -0.12, contrastBoost: 0.08, warmthShift: -0.08)
             )
         }
     }

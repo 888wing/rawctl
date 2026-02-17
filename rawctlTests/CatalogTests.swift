@@ -15,7 +15,7 @@ struct CatalogTests {
         let libraryPath = URL(fileURLWithPath: "/Users/test/Pictures/rawctl")
         let catalog = Catalog(libraryPath: libraryPath)
 
-        #expect(catalog.version == 1)
+        #expect(catalog.version == Catalog.currentVersion)
         #expect(catalog.projects.isEmpty)
         #expect(catalog.smartCollections.count == 5) // Built-in collections
     }

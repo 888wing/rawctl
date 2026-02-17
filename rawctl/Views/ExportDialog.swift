@@ -213,6 +213,7 @@ struct ExportDialog: View {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
+        panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
         panel.message = "Choose export destination folder"
         panel.prompt = "Select"

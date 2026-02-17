@@ -82,12 +82,6 @@ struct NetworkErrorBanner: View {
         }
     }
 
-    // Call this to show the banner with animation
-    func show() -> NetworkErrorBanner {
-        var banner = self
-        banner.isVisible = true
-        return banner
-    }
 }
 
 // MARK: - View Modifier for Easy Integration

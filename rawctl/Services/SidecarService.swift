@@ -6,13 +6,21 @@
 //
 
 import Foundation
-import Combine
 
 /// Service for reading and writing sidecar JSON files
 actor SidecarService {
     static let shared = SidecarService()
     
-    private var saveTask: Task<Void, Never>?
+    private struct PendingSave {
+        let requestId: UUID
+        let assetURL: URL
+        let recipe: EditRecipe
+        let snapshots: [RecipeSnapshot]
+    }
+
+    // Debounce per-asset to avoid cancelling saves across photos.
+    private var pendingSaves: [URL: PendingSave] = [:]      // sidecarURL -> save payload
+    private var saveTasks: [URL: Task<Void, Never>] = [:]   // sidecarURL -> debounce task
     private let debounceInterval: TimeInterval = 0.3 // 300ms debounce
     
     /// Read recipe and snapshots from sidecar file
@@ -55,25 +63,58 @@ actor SidecarService {
     
     /// Save recipe and snapshots to sidecar file (debounced)
     func saveRecipe(_ recipe: EditRecipe, snapshots: [RecipeSnapshot], for assetURL: URL) async {
-        // Cancel any pending save
-        saveTask?.cancel()
-        
-        // Create debounced save task
-        saveTask = Task {
+        let sidecarURL = FileSystemService.sidecarURL(for: assetURL)
+
+        // Cancel any pending save for this asset only.
+        saveTasks[sidecarURL]?.cancel()
+
+        let requestId = UUID()
+        pendingSaves[sidecarURL] = PendingSave(
+            requestId: requestId,
+            assetURL: assetURL,
+            recipe: recipe,
+            snapshots: snapshots
+        )
+
+        // Create debounced save task (keyed by sidecar URL).
+        saveTasks[sidecarURL] = Task { [debounceInterval] in
             try? await Task.sleep(nanoseconds: UInt64(debounceInterval * 1_000_000_000))
-            
             guard !Task.isCancelled else { return }
-            
-            await performSave(recipe, snapshots: snapshots, for: assetURL)
+            await self.performPendingSave(sidecarURL: sidecarURL, requestId: requestId)
         }
     }
-    
+
+    private func performPendingSave(sidecarURL: URL, requestId: UUID) async {
+        guard let pending = pendingSaves[sidecarURL],
+              pending.requestId == requestId else {
+            return
+        }
+
+        // Clear pending state before saving to avoid retaining large payloads.
+        pendingSaves[sidecarURL] = nil
+        saveTasks[sidecarURL] = nil
+
+        await performSave(pending.recipe, snapshots: pending.snapshots, for: pending.assetURL)
+    }
+
     private func performSave(_ recipe: EditRecipe, snapshots: [RecipeSnapshot], for assetURL: URL) async {
         let sidecarURL = FileSystemService.sidecarURL(for: assetURL)
-        
-        var sidecar = SidecarFile(for: assetURL, recipe: recipe)
-        sidecar.snapshots = snapshots
-        
+
+        // Preserve existing AI edits and other sidecar fields when saving.
+        var sidecar: SidecarFile
+        if FileManager.default.fileExists(atPath: sidecarURL.path),
+           let data = try? Data(contentsOf: sidecarURL),
+           let existing = try? JSONDecoder().decode(SidecarFile.self, from: data) {
+            sidecar = existing
+            sidecar.edit = recipe
+            sidecar.snapshots = snapshots
+        } else {
+            sidecar = SidecarFile(for: assetURL, recipe: recipe)
+            sidecar.snapshots = snapshots
+        }
+
+        sidecar.updatedAt = Date().timeIntervalSince1970
+
         do {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -84,6 +125,33 @@ actor SidecarService {
         }
     }
     
+    /// Save recipe only to sidecar file (preserves existing snapshots and AI edits)
+    func saveRecipeOnly(_ recipe: EditRecipe, for assetURL: URL) async {
+        let sidecarURL = FileSystemService.sidecarURL(for: assetURL)
+
+        // Load existing sidecar to preserve snapshots and AI edits
+        var sidecar: SidecarFile
+        if FileManager.default.fileExists(atPath: sidecarURL.path),
+           let data = try? Data(contentsOf: sidecarURL),
+           let existing = try? JSONDecoder().decode(SidecarFile.self, from: data) {
+            sidecar = existing
+            sidecar.edit = recipe
+        } else {
+            sidecar = SidecarFile(for: assetURL, recipe: recipe)
+        }
+
+        sidecar.updatedAt = Date().timeIntervalSince1970
+
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(sidecar)
+            try data.write(to: sidecarURL, options: .atomic)
+        } catch {
+            print("[SidecarService] Failed to save recipe: \(error)")
+        }
+    }
+
     /// Delete sidecar file
     func deleteSidecar(for assetURL: URL) async {
         let sidecarURL = FileSystemService.sidecarURL(for: assetURL)

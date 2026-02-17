@@ -236,6 +236,29 @@ struct Catalog: Codable, Equatable {
         }
     }
 
+    /// Ensure built-in smart collections use canonical stable IDs.
+    /// Returns `true` when catalog content changed.
+    @discardableResult
+    mutating func normalizeBuiltInSmartCollections() -> Bool {
+        let canonicalBuiltIns: [SmartCollection] = [
+            .fiveStars,
+            .picks,
+            .rejects,
+            .unrated,
+            .edited
+        ]
+        let customCollections = smartCollections.filter { !$0.isBuiltIn }
+        let normalized = canonicalBuiltIns + customCollections
+
+        guard smartCollections != normalized else {
+            return false
+        }
+
+        smartCollections = normalized
+        updatedAt = Date()
+        return true
+    }
+
     // MARK: - Export Preset Management
 
     mutating func addExportPreset(_ preset: ExportPreset) {

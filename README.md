@@ -11,13 +11,13 @@ A native macOS RAW photo editor built with SwiftUI and Core Image, featuring tru
 ![Swift](https://img.shields.io/badge/Swift-5.9+-orange)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-## 🆕 What's New (v1.2)
+## 🆕 What's New (v1.4)
 
-- **Camera Profiles**: 3 built-in profiles (Neutral, Vivid, Portrait) with 4-stage color pipeline
-- **Filmic Tone Curves**: Natural highlight roll-off with soft clipping
-- **Camera Brand Detection**: Photos grouped by manufacturer (Nikon, Canon, Sony, Fujifilm, etc.)
-- **Default Sort**: Now sorts by Capture Date (newest first) instead of filename
-- **Bug Fixes**: Crop button responsiveness, GridView animation glitches
+- **Crop System Optimization**: Draw new crop areas by dragging on dark region, instant aspect ratio application, CropPreviewThumbnail in Inspector
+- **Enhanced Zoom Controls**: Scroll wheel and pinch gesture zoom (25%-800%), zoom-to-cursor anchor point, Fit/50%/100%/200% quick buttons
+- **Lightroom-Style Crop Toolbar**: Aspect ratio picker, grid overlay picker (Rule of Thirds, Golden Ratio, Diagonals, Golden Spiral), straighten slider, flip/rotate buttons
+- **Performance**: Fixed severe slowdown when loading 800+ images via concurrency-limited thumbnail generation
+- **Installation Fix**: Fixed macOS 15.1 users unable to install (deployment target corrected to 14.0)
 
 Full changelog: [CHANGELOG.md](CHANGELOG.md)
 
@@ -164,7 +164,7 @@ Edits are stored in `{filename}.rawctl.json`:
 
 ## 🗺️ Roadmap
 
-### ✅ Completed (v1.2)
+### ✅ Completed (v1.4)
 - [x] RAW processing with CIRAWFilter
 - [x] Non-destructive sidecar editing
 - [x] Tone curve editor
@@ -174,13 +174,16 @@ Edits are stored in `{filename}.rawctl.json`:
 - [x] Keyboard shortcuts
 - [x] Two-stage loading optimization
 - [x] JPG export with sRGB
-- [x] Crop with aspect ratios & rule-of-thirds
+- [x] Crop with aspect ratios & multiple grid overlays
 - [x] Straighten, rotate 90°, flip controls
 - [x] Resize with multiple modes & presets
 - [x] Transform mode with keyboard shortcuts
 - [x] Camera profiles (Neutral, Vivid, Portrait)
-- [x] 4-stage color pipeline with filmic tone curves
-- [x] Camera brand detection for filename sorting
+- [x] Project workflow system
+- [x] Lightroom catalog import
+- [x] Enhanced zoom controls (scroll wheel, pinch, 25%-800%)
+- [x] Lightroom-style crop toolbar
+- [x] Concurrency-limited thumbnail generation
 
 ### 🔜 Planned
 - [ ] Before/After comparison

@@ -48,7 +48,8 @@ struct CameraProfileTests {
 
     @Test func builtInProfilesExist() async throws {
         let profiles = BuiltInProfile.allProfiles
-        #expect(profiles.count == 3)
+        #expect(profiles.count == BuiltInProfile.allCases.count)
+        #expect(profiles.count >= 8)
     }
 
     @Test func neutralProfileIsDefault() async throws {
@@ -61,6 +62,10 @@ struct CameraProfileTests {
         let vivid = BuiltInProfile.profile(for: "rawctl.vivid")
         #expect(vivid != nil)
         #expect(vivid?.name == "rawctl Vivid")
+
+        let original = BuiltInProfile.profile(for: "rawctl.original")
+        #expect(original != nil)
+        #expect(original?.name == "Original")
 
         let invalid = BuiltInProfile.profile(for: "invalid.profile")
         #expect(invalid == nil)

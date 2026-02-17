@@ -77,7 +77,7 @@ struct SmartCollectionsSection: View {
     }
 
     private var collections: [SmartCollection] {
-        appState.catalog?.smartCollections ?? [
+        appState.catalog?.getSmartCollections(for: appState.selectedProject?.id) ?? [
             .fiveStars,
             .picks,
             .rejects,

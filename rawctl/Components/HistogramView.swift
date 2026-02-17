@@ -161,11 +161,59 @@ struct HistogramData {
     let luminance: [Double]
     
     static let binCount = 64
+    private static let targetSampleCount = 50_000
+
+    private static func renderIntoSRGBA8(_ image: NSImage) -> (pixels: Data, width: Int, height: Int)? {
+        let sourceCGImage: CGImage?
+        if let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+            sourceCGImage = cgImage
+        } else if let tiff = image.tiffRepresentation,
+                  let bitmapRep = NSBitmapImageRep(data: tiff),
+                  let cgImage = bitmapRep.cgImage {
+            sourceCGImage = cgImage
+        } else {
+            sourceCGImage = nil
+        }
+
+        guard let sourceCGImage else { return nil }
+
+        let width = sourceCGImage.width
+        let height = sourceCGImage.height
+        guard width > 0, height > 0 else { return nil }
+
+        let bytesPerPixel = 4
+        let bytesPerRow = width * bytesPerPixel
+        var rgbaPixels = Data(count: bytesPerRow * height)
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+
+        let success = rgbaPixels.withUnsafeMutableBytes { buffer -> Bool in
+            guard let baseAddress = buffer.baseAddress else { return false }
+            guard let context = CGContext(
+                data: baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: bytesPerRow,
+                space: colorSpace,
+                bitmapInfo: bitmapInfo
+            ) else {
+                return false
+            }
+
+            context.interpolationQuality = .low
+            context.draw(sourceCGImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+
+        guard success else { return nil }
+        return (rgbaPixels, width, height)
+    }
     
     static func compute(from image: NSImage) async -> HistogramData {
-        // Get bitmap representation
-        guard let tiffData = image.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiffData) else {
+        // Render into a canonical 8-bit sRGB RGBA buffer.
+        // This avoids NSColor component extraction crashes on unsupported color spaces.
+        guard let raster = renderIntoSRGBA8(image) else {
             return empty()
         }
         
@@ -173,36 +221,37 @@ struct HistogramData {
         var greenBins = [Double](repeating: 0, count: binCount)
         var blueBins = [Double](repeating: 0, count: binCount)
         var lumBins = [Double](repeating: 0, count: binCount)
-        
-        let width = bitmap.pixelsWide
-        let height = bitmap.pixelsHigh
-        
-        // Sample every Nth pixel for performance
-        let step = max(1, (width * height) / 50000)
-        var sampleCount = 0
-        
-        for y in stride(from: 0, to: height, by: Int(sqrt(Double(step)))) {
-            for x in stride(from: 0, to: width, by: Int(sqrt(Double(step)))) {
-                guard let color = bitmap.colorAt(x: x, y: y) else { continue }
-                
-                let r = color.redComponent
-                let g = color.greenComponent
-                let b = color.blueComponent
-                
-                // Bin indices (0-63)
-                let rBin = min(binCount - 1, Int(r * Double(binCount - 1)))
-                let gBin = min(binCount - 1, Int(g * Double(binCount - 1)))
-                let bBin = min(binCount - 1, Int(b * Double(binCount - 1)))
-                
-                // Luminance (standard weights)
-                let lum = 0.299 * r + 0.587 * g + 0.114 * b
-                let lumBin = min(binCount - 1, Int(lum * Double(binCount - 1)))
-                
-                redBins[rBin] += 1
-                greenBins[gBin] += 1
-                blueBins[bBin] += 1
-                lumBins[lumBin] += 1
-                sampleCount += 1
+
+        let width = raster.width
+        let height = raster.height
+        let bytesPerRow = width * 4
+        let pixelCount = max(1, width * height)
+        let strideStep = max(1, Int(sqrt(Double(pixelCount) / Double(targetSampleCount))))
+
+        raster.pixels.withUnsafeBytes { rawBuffer in
+            guard let bytes = rawBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
+                return
+            }
+
+            for y in stride(from: 0, to: height, by: strideStep) {
+                let rowOffset = y * bytesPerRow
+                for x in stride(from: 0, to: width, by: strideStep) {
+                    let offset = rowOffset + x * 4
+                    let r = Double(bytes[offset]) / 255.0
+                    let g = Double(bytes[offset + 1]) / 255.0
+                    let b = Double(bytes[offset + 2]) / 255.0
+
+                    let rBin = min(binCount - 1, Int(r * Double(binCount - 1)))
+                    let gBin = min(binCount - 1, Int(g * Double(binCount - 1)))
+                    let bBin = min(binCount - 1, Int(b * Double(binCount - 1)))
+                    let lum = 0.299 * r + 0.587 * g + 0.114 * b
+                    let lumBin = min(binCount - 1, Int(lum * Double(binCount - 1)))
+
+                    redBins[rBin] += 1
+                    greenBins[gBin] += 1
+                    blueBins[bBin] += 1
+                    lumBins[lumBin] += 1
+                }
             }
         }
         

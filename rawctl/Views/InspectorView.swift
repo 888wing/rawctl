@@ -315,20 +315,25 @@ struct InspectorView: View {
                             onTap: {
                                 // Save history before entering transform mode
                                 pushHistory()
-                                appState.transformMode = true
+                                if appState.switchToSingleViewIfPossible() {
+                                    appState.transformMode = true
+                                }
                             }
                         )
 
                         // Edit Crop button
                         Button {
                             pushHistory()
-                            appState.transformMode = true
+                            if appState.switchToSingleViewIfPossible() {
+                                appState.transformMode = true
+                            }
                         } label: {
                             Label("Edit Crop", systemImage: "crop")
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
+                        .accessibilityIdentifier("inspector.edit.crop")
 
                         Divider()
 
@@ -996,4 +1001,3 @@ struct InspectorView: View {
         .frame(width: 300)
         .preferredColorScheme(.dark)
 }
-

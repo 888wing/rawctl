@@ -181,75 +181,30 @@ struct BrushToolbar: View {
     let onUndo: () -> Void
     
     var body: some View {
+        ViewThatFits(in: .horizontal) {
+            regularToolbar
+                .frame(minWidth: 760)
+            compactToolbar
+        }
+        .background(.ultraThinMaterial)
+    }
+
+    private var regularToolbar: some View {
         HStack(spacing: 16) {
             // Brush/Eraser toggle
-            HStack(spacing: 4) {
-                ToolButton(
-                    icon: "paintbrush.pointed.fill",
-                    label: "Brush",
-                    isSelected: !mask.isEraserMode
-                ) {
-                    mask.isEraserMode = false
-                }
-                
-                ToolButton(
-                    icon: "eraser.fill",
-                    label: "Eraser",
-                    isSelected: mask.isEraserMode
-                ) {
-                    mask.isEraserMode = true
-                }
-            }
-            .padding(4)
-            .background(Color(white: 0.15))
-            .cornerRadius(8)
+            toolToggleGroup
             
             Divider()
                 .frame(height: 24)
             
             // Brush size
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Size")
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
-                
-                HStack(spacing: 8) {
-                    Slider(value: $mask.brushSize, in: 5...100)
-                        .frame(width: 100)
-                    
-                    Text("\(Int(mask.brushSize))")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(.secondary)
-                        .frame(width: 30, alignment: .trailing)
-                }
-            }
+            brushSizeControl
             
             Divider()
                 .frame(height: 24)
             
             // Actions
-            HStack(spacing: 8) {
-                Button {
-                    onUndo()
-                } label: {
-                    Image(systemName: "arrow.uturn.backward")
-                        .font(.system(size: 12))
-                }
-                .buttonStyle(.bordered)
-                .disabled(mask.strokes.isEmpty)
-                .help("Undo last stroke")
-                
-                Button {
-                    onClear()
-                } label: {
-                    Image(systemName: "trash")
-                        .font(.system(size: 12))
-                }
-                .buttonStyle(.bordered)
-                .tint(.red)
-                .disabled(mask.isEmpty)
-                .help("Clear all strokes")
-            }
+            actionButtons
             
             Spacer()
             
@@ -262,7 +217,91 @@ struct BrushToolbar: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(.ultraThinMaterial)
+    }
+
+    private var compactToolbar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 12) {
+                toolToggleGroup
+                Divider().frame(height: 24)
+                brushSizeControl
+                Divider().frame(height: 24)
+                actionButtons
+                if !mask.strokes.isEmpty {
+                    Text("\(mask.strokes.count) strokes")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+        }
+    }
+
+    private var toolToggleGroup: some View {
+        HStack(spacing: 4) {
+            ToolButton(
+                icon: "paintbrush.pointed.fill",
+                label: "Brush",
+                isSelected: !mask.isEraserMode
+            ) {
+                mask.isEraserMode = false
+            }
+
+            ToolButton(
+                icon: "eraser.fill",
+                label: "Eraser",
+                isSelected: mask.isEraserMode
+            ) {
+                mask.isEraserMode = true
+            }
+        }
+        .padding(4)
+        .background(Color(white: 0.15))
+        .cornerRadius(8)
+    }
+
+    private var brushSizeControl: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Size")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+
+            HStack(spacing: 8) {
+                Slider(value: $mask.brushSize, in: 5...100)
+                    .frame(width: 120)
+
+                Text("\(Int(mask.brushSize))")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .frame(width: 30, alignment: .trailing)
+            }
+        }
+    }
+
+    private var actionButtons: some View {
+        HStack(spacing: 8) {
+            Button {
+                onUndo()
+            } label: {
+                Image(systemName: "arrow.uturn.backward")
+                    .font(.system(size: 12))
+            }
+            .buttonStyle(.bordered)
+            .disabled(mask.strokes.isEmpty)
+            .help("Undo last stroke")
+
+            Button {
+                onClear()
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 12))
+            }
+            .buttonStyle(.bordered)
+            .tint(.red)
+            .disabled(mask.isEmpty)
+            .help("Clear all strokes")
+        }
     }
 }
 

@@ -265,7 +265,7 @@ struct GridView: View {
             }
         )
         .background(Color(nsColor: NSColor(calibratedWhite: 0.08, alpha: 1.0)))
-        // Keyboard shortcuts
+        // Keyboard shortcuts (note: macOS SwiftUI receives keys without .focusable() when view is active)
         .onKeyPress(.escape) {
             appState.clearMultiSelection()
             appState.isSelectionMode = false
@@ -277,6 +277,8 @@ struct GridView: View {
             }
             return .handled
         }
+        // Note: Rating (0-5), Flag (P/X/U), Color label (6-9) shortcuts are in WorkspaceView
+        // because GridView doesn't receive keyboard focus without .focusable() which causes performance issues
         .sheet(isPresented: $showExportDialog) {
             ExportDialog(appState: appState)
         }
@@ -294,9 +296,29 @@ struct GridView: View {
             // Selection mode: normal click toggles selection
             appState.toggleSelection(asset.id)
         } else {
-            // Normal click: single selection
-            appState.clearMultiSelection()
-            appState.selectedAssetId = asset.id
+            // Normal click behavior:
+            // - If clicking on an already multi-selected photo, just set it as primary (don't clear)
+            // - If clicking on a non-selected photo, clear multi-selection and select it
+            let isInMultiSelection = appState.isSelected(asset.id)
+            let hasMultiSelection = appState.selectionCount > 1
+            let isNewSelection = appState.selectedAssetId != asset.id
+
+            if isInMultiSelection && hasMultiSelection {
+                // Clicking on a photo that's part of multi-selection:
+                // Set as primary selection but keep multi-selection intact
+                appState.selectedAssetId = asset.id
+            } else {
+                // Clicking on non-selected photo or single selection:
+                // Clear multi-selection and select this one
+                appState.clearMultiSelection()
+                appState.selectedAssetId = asset.id
+            }
+
+            // Prefetch for SingleView only when selecting a different photo
+            // (avoid redundant prefetch work)
+            if isNewSelection {
+                appState.prefetchForSingleView(asset)
+            }
         }
     }
 
@@ -324,61 +346,71 @@ struct GridView: View {
     @ViewBuilder
     private var gridContent: some View {
         if appState.assets.isEmpty {
-            // Empty state - no photos loaded
-            VStack {
-                Spacer()
-                EmptyStateView.noPhotos {
-                    openFolder()
-                }
-                Spacer()
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            emptyStateNoPhotos
         } else if appState.filteredAssets.isEmpty {
-            // Empty state - filter has no results
-            VStack {
-                Spacer()
-                EmptyStateView(
-                    icon: "line.3.horizontal.decrease.circle",
-                    title: "No Matching Photos",
-                    subtitle: "Try adjusting your filter criteria"
-                )
-                Spacer()
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            emptyStateNoResults
         } else {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 16, pinnedViews: [.sectionHeaders]) {
-                    ForEach(groupedAssets, id: \.key) { group in
-                        Section {
-                            LazyVGrid(columns: columns, spacing: 12) {
-                                ForEach(group.assets) { asset in
-                                    thumbnailForAsset(asset)
-                                        .trackThumbnailFrame(
-                                            id: asset.id,
-                                            coordinateSpace: .named(gridCoordinateSpace)
-                                        )
-                                }
-                            }
-                        } header: {
-                            SectionHeader(
-                                title: groupLabel(for: group.key),
-                                count: group.assets.count,
-                                sortCriteria: appState.sortCriteria
-                            )
-                            .animation(nil, value: group.key)
-                        }
+            scrollableGridContent
+        }
+    }
+
+    /// Empty state when no photos are loaded
+    private var emptyStateNoPhotos: some View {
+        VStack {
+            Spacer()
+            EmptyStateView.noPhotos {
+                openFolder()
+            }
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Empty state when filter has no results
+    private var emptyStateNoResults: some View {
+        VStack {
+            Spacer()
+            EmptyStateView(
+                icon: "line.3.horizontal.decrease.circle",
+                title: "No Matching Photos",
+                subtitle: "Try adjusting your filter criteria"
+            )
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Scrollable grid content with sections
+    private var scrollableGridContent: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 16, pinnedViews: [.sectionHeaders]) {
+                ForEach(groupedAssets, id: \.key) { group in
+                    Section {
+                        gridForGroup(group.assets)
+                    } header: {
+                        SectionHeader(
+                            title: groupLabel(for: group.key),
+                            count: group.assets.count,
+                            sortCriteria: appState.sortCriteria
+                        )
+                        .animation(nil, value: group.key)
                     }
                 }
-                .padding(16)
-                .transaction { transaction in
-                    // Disable animations on section header re-positioning
-                    transaction.animation = nil
-                }
-                .coordinateSpace(name: gridCoordinateSpace)
-                .marqueeSelection(
-                    coordinateSpace: .named(gridCoordinateSpace),
-                    onSelectionComplete: handleMarqueeSelection
-                )
+            }
+            .padding(16)
+            .transaction { transaction in
+                transaction.animation = nil
+            }
+            .coordinateSpace(name: gridCoordinateSpace)
+        }
+        .accessibilityIdentifier("grid.scroll")
+    }
+
+    /// Grid for a group of assets
+    private func gridForGroup(_ assets: [PhotoAsset]) -> some View {
+        LazyVGrid(columns: columns, spacing: 12) {
+            ForEach(assets) { asset in
+                thumbnailForAsset(asset)
             }
         }
     }
@@ -569,11 +601,15 @@ struct GridView: View {
                     appState.isLoading = false
                     appState.recipes = [:]
                 }
-                await appState.loadAllRecipes()
+                // Select first photo immediately for responsive UI
                 await MainActor.run {
                     if let first = appState.assets.first {
                         appState.selectedAssetId = first.id
                     }
+                }
+                // Load recipes in background (non-blocking)
+                Task {
+                    await appState.loadAllRecipes()
                 }
             } catch {
                 await MainActor.run {
@@ -591,26 +627,29 @@ struct SelectionBar: View {
     
     var body: some View {
         if appState.isSelectionMode || appState.selectionCount > 0 {
-            HStack(spacing: 12) {
-                // Selection mode toggle
-                selectionModeToggle
-                
-                // Selection count
-                if appState.selectionCount > 0 {
-                    Text("\(appState.selectionCount) selected")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    // Selection mode toggle
+                    selectionModeToggle
+
+                    // Selection count
+                    if appState.selectionCount > 0 {
+                        Text("\(appState.selectionCount) selected")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    // Quick actions when items selected
+                    if appState.selectionCount > 0 {
+                        Divider()
+                            .frame(height: 16)
+                        actionButtons
+                    }
                 }
-                
-                Spacer()
-                
-                // Quick actions when items selected
-                if appState.selectionCount > 0 {
-                    actionButtons
-                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .fixedSize(horizontal: true, vertical: false)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
             .background(appState.isSelectionMode ? Color.accentColor.opacity(0.15) : Color.accentColor.opacity(0.1))
         }
     }
@@ -905,10 +944,6 @@ struct GridThumbnail<ContextMenuContent: View>: View {
         .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isHovering)
         .animation(.spring(response: 0.2, dampingFraction: 0.8), value: isSelected)
         .contentShape(Rectangle())
-        // Context menu applied BEFORE AppKit overlay to ensure right-click events are received
-        .contextMenu {
-            contextMenuContent()
-        }
         // Use AppKit click handler for instant response (eliminates ~200-300ms SwiftUI gesture delay)
         .appKitClickHandler(
             onTap: { modifiers in
@@ -918,13 +953,37 @@ struct GridThumbnail<ContextMenuContent: View>: View {
                 onDoubleTap()
             }
         )
+        // Context menu applied AFTER AppKit overlay - outermost layer receives right-clicks
+        .contextMenu {
+            contextMenuContent()
+        }
+        // UI test hooks
+        .accessibilityElement(children: .ignore)
+        .accessibilityIdentifier("grid.thumbnail.\(asset.filename)")
+        .accessibilityLabel(asset.filename)
         .onHover { hovering in
             withAnimation(.spring(response: 0.2)) {
                 isHovering = hovering
             }
         }
-        .task {
-            thumbnail = await ThumbnailService.shared.thumbnail(for: asset, size: size * 2)
+        // Use asset.id for initial load, only re-render when visual edits change
+        .task(id: asset.id) {
+            // Initial thumbnail load (fast - from cache or embedded preview)
+            if thumbnail == nil {
+                thumbnail = await ThumbnailService.shared.thumbnail(for: asset, size: size * 2)
+            }
+        }
+        .task(id: hasEdits) {
+            // Only re-render when hasEdits status changes (not on every recipe change)
+            if hasEdits {
+                // Render with recipe applied (shows actual edits)
+                thumbnail = await ImagePipeline.shared.renderPreview(
+                    for: asset,
+                    recipe: recipe,
+                    maxSize: size * 2,
+                    fastMode: true  // Use fast mode for grid performance
+                )
+            }
         }
     }
     
@@ -976,4 +1035,3 @@ struct ShimmerLoadingView: View {
     GridView(appState: AppState())
         .preferredColorScheme(.dark)
 }
-

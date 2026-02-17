@@ -188,7 +188,8 @@ final class MemoryCardService {
         } else {
             print("[MemoryCard] No DCIM folder found, scanning root: \(url.path)")
         }
-        
+
+        appState.cancelBackgroundAssetLoading(resetThumbnailProgress: true)
         appState.selectedFolder = scanURL
         appState.isLoading = true
         appState.loadingMessage = "Scanning memory card..."
@@ -200,16 +201,17 @@ final class MemoryCardService {
             appState.assets = assets
             appState.recipes = [:]
             appState.isLoading = false
-            
-            // Load all recipes
-            await appState.loadAllRecipes()
-            
+
+            // Select first photo immediately for responsive UI
             if let first = appState.assets.first {
                 appState.selectedAssetId = first.id
                 print("[MemoryCard] Selected first asset: \(first.filename)")
             } else {
                 print("[MemoryCard] No assets found!")
             }
+
+            // Load recipes + thumbnails through cancellable background pipeline.
+            appState.schedulePostScanBackgroundWork(expectedFolder: scanURL)
         } catch {
             print("[MemoryCard] Error scanning: \(error)")
             appState.isLoading = false

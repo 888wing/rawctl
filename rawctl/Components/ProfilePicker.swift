@@ -10,6 +10,7 @@ import SwiftUI
 /// Picker for selecting camera profiles
 struct ProfilePicker: View {
     @Binding var selectedProfileId: String
+    private let gridColumns = [GridItem(.adaptive(minimum: 74, maximum: 120), spacing: 8)]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -17,7 +18,7 @@ struct ProfilePicker: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
 
-            HStack(spacing: 8) {
+            LazyVGrid(columns: gridColumns, alignment: .leading, spacing: 8) {
                 ForEach(BuiltInProfile.allCases) { profile in
                     ProfileButton(
                         profile: profile,

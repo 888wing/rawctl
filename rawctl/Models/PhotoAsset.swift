@@ -76,27 +76,55 @@ struct PhotoAsset: Identifiable, Hashable {
     ])
     
     /// Create fingerprint from file attributes (size + modification time)
+    static func createFingerprint(fileSize: Int64, modificationDate: Date?) -> String {
+        let mtime = modificationDate?.timeIntervalSince1970 ?? 0
+        return "\(fileSize)-\(Int(mtime))"
+    }
+
+    /// Create fingerprint from file attributes (size + modification time)
     static func createFingerprint(for url: URL) -> String? {
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path) else {
             return nil
         }
         let size = attrs[.size] as? Int64 ?? 0
-        let mtime = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
-        return "\(size)-\(Int(mtime))"
+        let modificationDate = attrs[.modificationDate] as? Date
+        return createFingerprint(fileSize: size, modificationDate: modificationDate)
+    }
+
+    init(
+        url: URL,
+        fileSize: Int64,
+        creationDate: Date?,
+        modificationDate: Date?,
+        fingerprint: String? = nil
+    ) {
+        self.id = UUID()
+        self.url = url
+        self.fileSize = fileSize
+        self.creationDate = creationDate
+        self.modificationDate = modificationDate
+        self.fingerprint = fingerprint ?? Self.createFingerprint(fileSize: fileSize, modificationDate: modificationDate)
+        self.metadata = nil
     }
     
     init(url: URL) {
-        self.id = UUID()
-        self.url = url
-        self.fingerprint = Self.createFingerprint(for: url) ?? UUID().uuidString
-        self.metadata = nil
-        
-        // Load file attributes for sorting
-        if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path) {
-            self.fileSize = attrs[.size] as? Int64 ?? 0
-            self.creationDate = attrs[.creationDate] as? Date
-            self.modificationDate = attrs[.modificationDate] as? Date
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path) else {
+            self.init(
+                url: url,
+                fileSize: 0,
+                creationDate: nil,
+                modificationDate: nil,
+                fingerprint: UUID().uuidString
+            )
+            return
         }
+
+        self.init(
+            url: url,
+            fileSize: attrs[.size] as? Int64 ?? 0,
+            creationDate: attrs[.creationDate] as? Date,
+            modificationDate: attrs[.modificationDate] as? Date
+        )
     }
 }
 

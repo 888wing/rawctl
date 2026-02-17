@@ -196,7 +196,14 @@ struct SmartCollection: Identifiable, Codable, Equatable {
 
     // MARK: - Built-in Collections
 
+    private static let fiveStarsId = UUID(uuidString: "00000000-0000-0000-0000-000000000501")!
+    private static let picksId = UUID(uuidString: "00000000-0000-0000-0000-000000000502")!
+    private static let rejectsId = UUID(uuidString: "00000000-0000-0000-0000-000000000503")!
+    private static let unratedId = UUID(uuidString: "00000000-0000-0000-0000-000000000504")!
+    private static let editedId = UUID(uuidString: "00000000-0000-0000-0000-000000000505")!
+
     static let fiveStars = SmartCollection(
+        id: fiveStarsId,
         name: "5 Stars",
         icon: "star.fill",
         rules: [FilterRule(field: .rating, operation: .equals, value: "5")],
@@ -204,6 +211,7 @@ struct SmartCollection: Identifiable, Codable, Equatable {
     )
 
     static let picks = SmartCollection(
+        id: picksId,
         name: "Picks",
         icon: "flag.fill",
         rules: [FilterRule(field: .flag, operation: .equals, value: "pick")],
@@ -211,6 +219,7 @@ struct SmartCollection: Identifiable, Codable, Equatable {
     )
 
     static let rejects = SmartCollection(
+        id: rejectsId,
         name: "Rejects",
         icon: "xmark.circle.fill",
         rules: [FilterRule(field: .flag, operation: .equals, value: "reject")],
@@ -218,6 +227,7 @@ struct SmartCollection: Identifiable, Codable, Equatable {
     )
 
     static let unrated = SmartCollection(
+        id: unratedId,
         name: "Unrated",
         icon: "star.slash",
         rules: [FilterRule(field: .rating, operation: .equals, value: "0")],
@@ -225,6 +235,7 @@ struct SmartCollection: Identifiable, Codable, Equatable {
     )
 
     static let edited = SmartCollection(
+        id: editedId,
         name: "Edited",
         icon: "slider.horizontal.3",
         rules: [FilterRule(field: .hasEdits, operation: .equals, value: "true")],

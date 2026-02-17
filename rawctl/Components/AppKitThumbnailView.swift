@@ -102,11 +102,16 @@ final class ThumbnailNSView: NSView {
     // MARK: - Hit Testing
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        // Check current event type - if it's a right-click related event, don't intercept
+        // Check current event type - if it's a right-click or Control+click, don't intercept
         if let currentEvent = NSApp.currentEvent {
             switch currentEvent.type {
             case .rightMouseDown, .rightMouseUp, .rightMouseDragged:
                 return nil  // Pass through to SwiftUI for context menu
+            case .leftMouseDown, .leftMouseUp:
+                // Control+click is macOS alternative to right-click
+                if currentEvent.modifierFlags.contains(.control) {
+                    return nil  // Pass through to SwiftUI for context menu
+                }
             default:
                 break
             }
@@ -196,6 +201,7 @@ extension View {
     ///   - onTap: Called on single click with modifier keys
     ///   - onDoubleTap: Called on double click
     /// - Returns: View with AppKit click handling overlay
+    /// - Note: Apply this BEFORE .contextMenu to ensure right-clicks reach SwiftUI's context menu
     func appKitClickHandler(
         onTap: @escaping (EventModifiers) -> Void,
         onDoubleTap: @escaping () -> Void

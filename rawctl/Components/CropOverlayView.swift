@@ -7,6 +7,54 @@
 
 import SwiftUI
 
+enum CropOverlayGeometry {
+    static func imageDisplayRect(imageSize: CGSize, viewSize: CGSize) -> CGRect {
+        guard imageSize.width > 0, imageSize.height > 0, viewSize.width > 0, viewSize.height > 0 else {
+            return CGRect(origin: .zero, size: viewSize)
+        }
+
+        let imageAspect = imageSize.width / imageSize.height
+        let viewAspect = viewSize.width / viewSize.height
+
+        if imageAspect > viewAspect {
+            let fittedHeight = viewSize.width / imageAspect
+            return CGRect(
+                x: 0,
+                y: (viewSize.height - fittedHeight) / 2,
+                width: viewSize.width,
+                height: fittedHeight
+            )
+        } else {
+            let fittedWidth = viewSize.height * imageAspect
+            return CGRect(
+                x: (viewSize.width - fittedWidth) / 2,
+                y: 0,
+                width: fittedWidth,
+                height: viewSize.height
+            )
+        }
+    }
+
+    static func cropRect(for normalizedRect: CropRect, in imageRect: CGRect) -> CGRect {
+        CGRect(
+            x: imageRect.minX + imageRect.width * normalizedRect.x,
+            y: imageRect.minY + imageRect.height * normalizedRect.y,
+            width: imageRect.width * normalizedRect.w,
+            height: imageRect.height * normalizedRect.h
+        )
+    }
+
+    static func normalizedPoint(_ point: CGPoint, in imageRect: CGRect) -> CGPoint {
+        guard imageRect.width > 0, imageRect.height > 0 else { return .zero }
+        let x = (point.x - imageRect.minX) / imageRect.width
+        let y = (point.y - imageRect.minY) / imageRect.height
+        return CGPoint(
+            x: min(1, max(0, x)),
+            y: min(1, max(0, y))
+        )
+    }
+}
+
 /// Crop overlay view with draggable handles
 struct CropOverlayView: View {
     @Binding var crop: Crop
@@ -57,7 +105,8 @@ struct CropOverlayView: View {
     var body: some View {
         GeometryReader { geometry in
             let viewSize = geometry.size
-            let cropRect = calculateCropRect(in: viewSize)
+            let imageRect = CropOverlayGeometry.imageDisplayRect(imageSize: imageSize, viewSize: viewSize)
+            let cropRect = calculateCropRect(in: imageRect)
 
             ZStack {
                 // Dimmed overlay for non-cropped areas - with background drag gesture
@@ -74,7 +123,7 @@ struct CropOverlayView: View {
                 .gesture(
                     DragGesture(minimumDistance: 5)
                         .onChanged { value in
-                            handleBackgroundDrag(value: value, viewSize: viewSize)
+                            handleBackgroundDrag(value: value, imageRect: imageRect)
                         }
                         .onEnded { _ in
                             commitBackgroundDrag()
@@ -103,7 +152,7 @@ struct CropOverlayView: View {
                         .background(Color.black.opacity(0.7))
                         .cornerRadius(4)
 
-                    if let aspect = crop.aspect.aspectRatio {
+                    if crop.aspect.aspectRatio != nil {
                         Text(crop.aspect.displayName)
                             .font(.system(size: 9))
                             .foregroundColor(.white.opacity(0.8))
@@ -118,7 +167,7 @@ struct CropOverlayView: View {
                         .gesture(
                             DragGesture()
                                 .onChanged { value in
-                                    handleCornerDrag(corner, value: value, viewSize: viewSize)
+                                    handleCornerDrag(corner, value: value, imageRect: imageRect)
                                 }
                                 .onEnded { _ in
                                     commitCornerDrag()
@@ -134,7 +183,7 @@ struct CropOverlayView: View {
                     .gesture(
                         DragGesture()
                             .onChanged { value in
-                                handleCenterDrag(value: value, viewSize: viewSize)
+                                handleCenterDrag(value: value, imageRect: imageRect)
                             }
                             .onEnded { _ in
                                 commitCenterDrag()
@@ -149,14 +198,10 @@ struct CropOverlayView: View {
         }
     }
 
-    private func calculateCropRect(in viewSize: CGSize) -> CGRect {
-        // Use displayRect for immediate visual feedback during drag
-        CGRect(
-            x: viewSize.width * displayRect.x,
-            y: viewSize.height * displayRect.y,
-            width: viewSize.width * displayRect.w,
-            height: viewSize.height * displayRect.h
-        )
+    private func calculateCropRect(in imageRect: CGRect) -> CGRect {
+        // Use displayRect for immediate visual feedback during drag.
+        // Mapping is done in the fitted image rect, not the full container.
+        CropOverlayGeometry.cropRect(for: displayRect, in: imageRect)
     }
     
     private func cornerPosition(_ corner: CornerPosition, in rect: CGRect) -> CGPoint {
@@ -168,16 +213,18 @@ struct CropOverlayView: View {
         }
     }
     
-    private func handleCornerDrag(_ corner: CornerPosition, value: DragGesture.Value, viewSize: CGSize) {
+    private func handleCornerDrag(_ corner: CornerPosition, value: DragGesture.Value, imageRect: CGRect) {
         // Initialize local state on drag start (prevents continuous binding updates)
         if localRect == nil {
             localRect = crop.rect
             initialRect = crop.rect
         }
 
+        let width = max(imageRect.width, 1)
+        let height = max(imageRect.height, 1)
         let delta = CGPoint(
-            x: value.translation.width / viewSize.width,
-            y: value.translation.height / viewSize.height
+            x: value.translation.width / width,
+            y: value.translation.height / height
         )
 
         var newRect = initialRect
@@ -270,7 +317,7 @@ struct CropOverlayView: View {
     
     /// Handle center drag - Lightroom style (drag image under fixed frame)
     /// Dragging right moves the image right, which means cropping more from the left
-    private func handleCenterDrag(value: DragGesture.Value, viewSize: CGSize) {
+    private func handleCenterDrag(value: DragGesture.Value, imageRect: CGRect) {
         // Initialize local state on drag start (prevents continuous binding updates)
         if localRect == nil {
             localRect = crop.rect
@@ -279,11 +326,13 @@ struct CropOverlayView: View {
 
         guard var currentLocalRect = localRect else { return }
 
+        let width = max(imageRect.width, 1)
+        let height = max(imageRect.height, 1)
         // Lightroom style: invert the delta direction
         // Dragging image right = crop rect moves left (relative to image)
         let delta = CGPoint(
-            x: -value.translation.width / viewSize.width,
-            y: -value.translation.height / viewSize.height
+            x: -value.translation.width / width,
+            y: -value.translation.height / height
         )
 
         currentLocalRect.x = max(0, min(1 - currentLocalRect.w, dragStart.x + delta.x))
@@ -313,14 +362,12 @@ struct CropOverlayView: View {
     // MARK: - Background Drag (Draw New Crop Area)
 
     /// Handle background drag - draw a new crop area from scratch
-    private func handleBackgroundDrag(value: DragGesture.Value, viewSize: CGSize) {
+    private func handleBackgroundDrag(value: DragGesture.Value, imageRect: CGRect) {
         if !isDrawingNewRect {
+            guard imageRect.contains(value.startLocation) else { return }
             // Start drawing new crop area
             isDrawingNewRect = true
-            drawStartPoint = CGPoint(
-                x: value.startLocation.x / viewSize.width,
-                y: value.startLocation.y / viewSize.height
-            )
+            drawStartPoint = CropOverlayGeometry.normalizedPoint(value.startLocation, in: imageRect)
             // Initialize local rect
             localRect = CropRect(
                 x: drawStartPoint.x,
@@ -330,11 +377,10 @@ struct CropOverlayView: View {
             )
         }
 
+        guard isDrawingNewRect else { return }
+
         // Calculate new rect from start point to current location
-        let currentPoint = CGPoint(
-            x: value.location.x / viewSize.width,
-            y: value.location.y / viewSize.height
-        )
+        let currentPoint = CropOverlayGeometry.normalizedPoint(value.location, in: imageRect)
 
         var newRect = CropRect(
             x: min(drawStartPoint.x, currentPoint.x),

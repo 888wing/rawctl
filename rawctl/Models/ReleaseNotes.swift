@@ -43,6 +43,86 @@ struct ReleaseSection: Identifiable, Codable, Hashable {
 struct ReleaseHistory {
     static let notes: [ReleaseNote] = [
         ReleaseNote(
+            id: "1.4.0",
+            version: "1.4.0",
+            date: dateFrom("2026-01-21"),
+            title: "Crop System & Performance",
+            highlights: [
+                "Draw new crop areas by dragging on dark region",
+                "Enhanced zoom controls (scroll wheel, pinch, 25%-800%)",
+                "Lightroom-style crop toolbar with grid overlays",
+                "Fixed macOS 15.1 installation issue"
+            ],
+            sections: [
+                ReleaseSection(title: "Crop System", items: [
+                    "Draw new crop area by dragging on dark region outside frame",
+                    "Instant aspect ratio application with smooth animation",
+                    "CropPreviewThumbnail shows crop overlay in Inspector",
+                    "Lightroom-style crop toolbar with aspect ratio picker",
+                    "Grid overlays: Rule of Thirds, Golden Ratio, Diagonals, Golden Spiral"
+                ]),
+                ReleaseSection(title: "Zoom Controls", items: [
+                    "Scroll wheel zoom at cursor position (25%-800%)",
+                    "Pinch gesture zoom on trackpad",
+                    "Fit, 50%, 100%, 200% quick access buttons",
+                    "Live zoom percentage indicator"
+                ]),
+                ReleaseSection(title: "Fixed", items: [
+                    "macOS 15.1 users unable to install (deployment target fixed)",
+                    "Filmstrip bar now visible at bottom of SingleView",
+                    "Performance degradation when loading 800+ images",
+                    "Camera profiles now apply to JPG/PNG images"
+                ])
+            ]
+        ),
+        ReleaseNote(
+            id: "1.2.0",
+            version: "1.2.0",
+            date: dateFrom("2026-01-10"),
+            title: "Color Foundation",
+            highlights: [
+                "4-stage color pipeline for professional color management",
+                "3 built-in camera profiles (Neutral, Vivid, Portrait)",
+                "Project workflow system with multi-directory support",
+                "Lightroom catalog import with metadata"
+            ],
+            sections: [
+                ReleaseSection(title: "Camera Profiles", items: [
+                    "4-stage pipeline: RAW Decode → Camera Profile → User Adjustments → Display Transform",
+                    "rawctl Neutral: Identity matrix with filmic neutral tone curve",
+                    "rawctl Vivid: Enhanced saturation/contrast with vivid tone curve",
+                    "rawctl Portrait: Skin-optimized matrix with soft tone curve",
+                    "ProfilePicker UI in Light panel for quick switching",
+                    "Filmic tone curves with natural highlight roll-off"
+                ]),
+                ReleaseSection(title: "Project Workflow", items: [
+                    "Project-based organization instead of just folders",
+                    "Auto-restore last project on app launch",
+                    "State persistence: filters, sort, view mode, zoom, selection per project",
+                    "Multi-directory support with security-scoped bookmarks",
+                    "Project status tracking: Importing → Culling → Editing → Delivered → Archived"
+                ]),
+                ReleaseSection(title: "Lightroom Import", items: [
+                    "Import Lightroom Catalog (Cmd+Shift+I) from .lrcat files",
+                    "Ratings, flags, and color labels imported from Lightroom",
+                    "SQLite3 integration for direct catalog reading",
+                    "Progress tracking with phase indicators"
+                ]),
+                ReleaseSection(title: "UI Enhancements", items: [
+                    "Multi-select context menu for bulk rating/flag/color actions",
+                    "Enhanced menu bar with View, Photo, and Select menus",
+                    "Responsive layout with 4-tier breakpoint system",
+                    "Auto-show/hide Inspector based on window width"
+                ]),
+                ReleaseSection(title: "Fixed", items: [
+                    "Crop button now correctly shows crop overlay",
+                    "Fixed infinite dropdown animation on GridView section headers",
+                    "AI generation progress no longer stuck at 90%",
+                    "Per-asset debounce fixes racing saves when switching photos"
+                ])
+            ]
+        ),
+        ReleaseNote(
             id: "1.1.0",
             version: "1.1.0",
             date: dateFrom("2026-01-08"),

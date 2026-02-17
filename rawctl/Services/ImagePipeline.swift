@@ -36,9 +36,33 @@ actor ImagePipeline {
     // Memory management
     private let maxMemoryMB: Int = 400  // Max cache memory in MB
     private var lastMemoryCheck: Date = .distantPast
-    
+
     /// Filters to skip in fast mode (expensive operations)
     private let expensiveFilters: Set<String> = ["clarity", "dehaze", "texture", "grain", "noiseReduction", "hsl"]
+
+    /// Concurrent render limiter for grid thumbnails (prevent GPU overload)
+    private let concurrentGridRenderLimit = 4
+    private var activeGridRenders = 0
+    private var pendingGridRenders: [CheckedContinuation<Void, Never>] = []
+
+    /// Acquire a grid render slot
+    private func acquireGridRenderSlot() async {
+        if activeGridRenders >= concurrentGridRenderLimit {
+            await withCheckedContinuation { continuation in
+                pendingGridRenders.append(continuation)
+            }
+        }
+        activeGridRenders += 1
+    }
+
+    /// Release a grid render slot
+    private func releaseGridRenderSlot() {
+        activeGridRenders -= 1
+        if let next = pendingGridRenders.first {
+            pendingGridRenders.removeFirst()
+            next.resume()
+        }
+    }
     
     init() {
         // Use Metal for GPU acceleration with optimized settings
@@ -171,23 +195,24 @@ actor ImagePipeline {
     ) async -> NSImage? {
         let cacheKey = asset.fingerprint
         let ext = asset.url.pathExtension.lowercased()
-        
-        print("[ImagePipeline] renderPreview: \(asset.filename), hasEdits: \(recipe.hasEdits)")
-        if recipe.hasEdits {
-            print("  - Exposure: \(recipe.exposure), Contrast: \(recipe.contrast)")
-            print("  - WB: temp=\(recipe.whiteBalance.temperature)K, tint=\(recipe.whiteBalance.tint)")
-            print("  - Clarity: \(recipe.clarity), Dehaze: \(recipe.dehaze), Texture: \(recipe.texture)")
-            print("  - HSL hasEdits: \(recipe.hsl.hasEdits), RGBCurves hasEdits: \(recipe.rgbCurves.hasEdits)")
-            print("  - ToneCurve points: \(recipe.toneCurve.points.count)")
+        let isRaw = PhotoAsset.rawExtensions.contains(ext)
+
+        let signpostId = PerformanceSignposts.signposter.makeSignpostID()
+        let signpostState = PerformanceSignposts.begin("renderPreview", id: signpostId)
+        defer { PerformanceSignposts.end("renderPreview", signpostState) }
+
+        // For grid thumbnails (fastMode), limit concurrent renders to prevent GPU overload
+        if fastMode {
+            await acquireGridRenderSlot()
         }
-        
-        // RAW files: use CIRAWFilter for true RAW processing
-        if PhotoAsset.rawExtensions.contains(ext) {
+        defer {
             if fastMode {
-                print("[ImagePipeline] Using FAST RAW pipeline for: \(asset.filename)")
-            } else {
-                print("[ImagePipeline] Using RAW pipeline for: \(asset.filename)")
+                releaseGridRenderSlot()
             }
+        }
+
+        // RAW files: use CIRAWFilter for true RAW processing
+        if isRaw {
             return await renderRAWPreview(
                 for: asset,
                 recipe: recipe,
@@ -196,13 +221,8 @@ actor ImagePipeline {
                 fastMode: fastMode
             )
         }
-        
+
         // Non-RAW: use standard pipeline
-        if fastMode {
-            print("[ImagePipeline] Using FAST standard pipeline for: \(asset.filename)")
-        } else {
-            print("[ImagePipeline] Using standard pipeline for: \(asset.filename)")
-        }
         return await renderStandardPreview(
             for: asset,
             recipe: recipe,
@@ -366,26 +386,32 @@ actor ImagePipeline {
             result = filter.outputImage ?? result
         }
         
+        // Rotation (90° + straighten + flips)
+        result = applyRotation(recipe.crop, to: result)
+
+        // Crop
+        result = applyCrop(recipe.crop, to: result)
+
         // Tone Curve (luminance curve)
         if recipe.toneCurve.hasEdits {
             result = applyToneCurve(recipe.toneCurve, to: result)
         }
-        
+
         // RGB Curves (per-channel)
         if recipe.rgbCurves.hasEdits {
             result = applyRGBCurves(recipe.rgbCurves, to: result)
         }
-        
+
         // Vignette - skip in fast mode
         if recipe.vignette.hasEffect && !fastMode {
             result = applyVignette(recipe.vignette, to: result)
         }
-        
+
         // Split Toning
         if recipe.splitToning.hasEffect {
             result = applySplitToning(recipe.splitToning, to: result)
         }
-        
+
         // Sharpness
         if recipe.sharpness > 0 {
             let filter = CIFilter.sharpenLuminance()
@@ -393,7 +419,7 @@ actor ImagePipeline {
             filter.sharpness = Float(recipe.sharpness / 100.0 * 2.0)
             result = filter.outputImage ?? result
         }
-        
+
         // Noise Reduction - skip in fast mode (expensive)
         if recipe.noiseReduction > 0 && !fastMode {
             let filter = CIFilter.noiseReduction()
@@ -402,40 +428,45 @@ actor ImagePipeline {
             filter.sharpness = 0.4
             result = filter.outputImage ?? result
         }
-        
+
         // HSL Adjustment - skip in fast mode (expensive)
         if recipe.hsl.hasEdits && !fastMode {
             result = applyHSL(recipe.hsl, to: result)
         }
-        
+
         // Clarity - skip in fast mode (very expensive)
         if recipe.clarity != 0 && !fastMode {
             result = applyClarity(recipe.clarity, to: result)
         }
-        
+
         // Dehaze - skip in fast mode (very expensive)
         if recipe.dehaze != 0 && !fastMode {
             result = applyDehaze(recipe.dehaze, to: result)
         }
-        
+
         // Texture - skip in fast mode (expensive)
         if recipe.texture != 0 && !fastMode {
             result = applyTexture(recipe.texture, to: result)
         }
-        
-        // Rotation (90° + straighten + flips)
-        result = applyRotation(recipe.crop, to: result)
 
-        // Crop
-        if recipe.crop.isEnabled {
-            let extent = result.extent
-            let cropRect = CGRect(
-                x: extent.origin.x + extent.width * recipe.crop.rect.x,
-                y: extent.origin.y + extent.height * recipe.crop.rect.y,
-                width: extent.width * recipe.crop.rect.w,
-                height: extent.height * recipe.crop.rect.h
-            )
-            result = result.cropped(to: cropRect)
+        // Grain - skip in fast mode
+        if recipe.grain.hasEffect && !fastMode {
+            result = applyGrain(recipe.grain, to: result)
+        }
+
+        // Chromatic Aberration Fix
+        if recipe.chromaticAberration.hasEffect {
+            result = fixChromaticAberration(recipe.chromaticAberration, to: result)
+        }
+
+        // Perspective Correction (Transform)
+        if recipe.perspective.hasEdits {
+            result = applyPerspective(recipe.perspective, to: result)
+        }
+
+        // Camera Calibration
+        if recipe.calibration.hasEdits {
+            result = applyCalibration(recipe.calibration, to: result)
         }
 
         return result
@@ -478,6 +509,26 @@ actor ImagePipeline {
         }
 
         return result
+    }
+
+    /// Apply normalized crop rect (top-left origin) to CIImage (bottom-left origin).
+    private func applyCrop(_ crop: Crop, to image: CIImage) -> CIImage {
+        guard crop.isEnabled else { return image }
+
+        let extent = image.extent
+        let x = max(0, min(0.99, crop.rect.x))
+        let y = max(0, min(0.99, crop.rect.y))
+        let w = max(0.01, min(1 - x, crop.rect.w))
+        let h = max(0.01, min(1 - y, crop.rect.h))
+
+        let cropRect = CGRect(
+            x: extent.origin.x + extent.width * x,
+            y: extent.origin.y + extent.height * (1 - y - h),
+            width: extent.width * w,
+            height: extent.height * h
+        )
+
+        return image.cropped(to: cropRect)
     }
 
     /// Apply resize settings to image (used at export time)
@@ -562,7 +613,12 @@ actor ImagePipeline {
     /// Full recipe for non-RAW images
     private func applyFullRecipe(_ recipe: EditRecipe, to image: CIImage, fastMode: Bool = false) -> CIImage {
         var result = image
-        
+
+        // Apply camera profile (v1.2) - base look BEFORE user adjustments
+        // Pipeline order: Camera Profile → User Adjustments → Display Transform
+        let profile = BuiltInProfile.profile(for: recipe.profileId) ?? BuiltInProfile.neutral.profile
+        result = applyCameraProfile(profile, to: result)
+
         // Exposure
         if recipe.exposure != 0 {
             let filter = CIFilter.exposureAdjust()
@@ -629,16 +685,7 @@ actor ImagePipeline {
         result = applyRotation(recipe.crop, to: result)
 
         // Crop
-        if recipe.crop.isEnabled {
-            let extent = result.extent
-            let cropRect = CGRect(
-                x: extent.origin.x + extent.width * recipe.crop.rect.x,
-                y: extent.origin.y + extent.height * recipe.crop.rect.y,
-                width: extent.width * recipe.crop.rect.w,
-                height: extent.height * recipe.crop.rect.h
-            )
-            result = result.cropped(to: cropRect)
-        }
+        result = applyCrop(recipe.crop, to: result)
 
         // === P0 ADVANCED EFFECTS ===
         
@@ -900,11 +947,9 @@ actor ImagePipeline {
         }
         
         // Convert hue to RGB components
-        let highlightColor = hueToRGB(hue: toning.highlightHue, saturation: toning.highlightSaturation / 100.0)
         let shadowColor = hueToRGB(hue: toning.shadowHue, saturation: toning.shadowSaturation / 100.0)
-        
-        // Balance affects mix of highlight vs shadow
-        let highlightMix = 0.5 + toning.balance / 200.0  // 0-1
+
+        // Balance affects mix of highlight vs shadow. Current implementation applies shadow toning only.
         let shadowMix = 0.5 - toning.balance / 200.0     // 0-1
         
         filter.setValue(image, forKey: kCIInputImageKey)
@@ -1255,47 +1300,51 @@ actor ImagePipeline {
     /// Apply film grain effect
     private func applyGrain(_ grain: Grain, to image: CIImage) -> CIImage {
         guard grain.hasEffect else { return image }
-        
-        // Generate random noise
-        guard let noiseFilter = CIFilter(name: "CIRandomGenerator"),
-              var noise = noiseFilter.outputImage else { return image }
-        
-        // Scale noise based on grain size (smaller size = more detailed grain)
-        let scale = 0.5 + (grain.size / 100.0) * 2.0
-        noise = noise.transformed(by: CGAffineTransform(scaleX: CGFloat(scale), y: CGFloat(scale)))
-        
-        // Crop to image bounds
-        noise = noise.cropped(to: image.extent)
-        
-        // Convert to grayscale for monochromatic grain (roughness affects color variation)
-        if grain.roughness < 50 {
-            let monoFilter = CIFilter.colorMonochrome()
-            monoFilter.inputImage = noise
-            monoFilter.color = CIColor(red: 0.5, green: 0.5, blue: 0.5)
-            monoFilter.intensity = 1.0
-            noise = monoFilter.outputImage ?? noise
-        }
-        
-        // Adjust noise intensity
-        let intensityFilter = CIFilter.colorControls()
-        intensityFilter.inputImage = noise
-        intensityFilter.brightness = -0.5  // Center around gray
-        intensityFilter.contrast = Float(grain.roughness / 100.0 * 2.0)
-        noise = intensityFilter.outputImage ?? noise
-        
-        // Blend noise with original using overlay/soft light
-        let blendFilter = CIFilter.overlayBlendMode()
-        blendFilter.inputImage = noise
-        blendFilter.backgroundImage = image
-        guard let blended = blendFilter.outputImage else { return image }
-        
-        // Control final intensity with dissolve
+
+        let amount = max(0.0, min(1.0, grain.amount / 100.0))
+        let roughness = max(0.0, min(1.0, grain.roughness / 100.0))
+
+        // Generate deterministic-strength noise and always clamp to image extent.
+        guard var noise = CIFilter(name: "CIRandomGenerator")?.outputImage else { return image }
+
+        // Small grain = finer details; large grain = chunkier texture.
+        let sizeScale = 0.35 + (1.0 - grain.size / 100.0) * 1.85
+        noise = noise
+            .transformed(by: CGAffineTransform(scaleX: CGFloat(sizeScale), y: CGFloat(sizeScale)))
+            .cropped(to: image.extent)
+
+        // Keep grain mostly luminance-based to avoid color breakage.
+        let controls = CIFilter.colorControls()
+        controls.inputImage = noise
+        controls.saturation = Float(roughness * 0.45)
+        controls.contrast = Float(1.0 + roughness * 0.8)
+        controls.brightness = -0.5
+        noise = controls.outputImage?.cropped(to: image.extent) ?? noise
+
+        // Compress noise around middle gray and cap strength.
+        let matrix = CIFilter.colorMatrix()
+        matrix.inputImage = noise
+        let channelStrength = Float(0.02 + amount * 0.10)
+        matrix.rVector = CIVector(x: CGFloat(channelStrength), y: 0, z: 0, w: 0)
+        matrix.gVector = CIVector(x: 0, y: CGFloat(channelStrength), z: 0, w: 0)
+        matrix.bVector = CIVector(x: 0, y: 0, z: CGFloat(channelStrength), w: 0)
+        matrix.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+        matrix.biasVector = CIVector(x: 0.5, y: 0.5, z: 0.5, w: 0)
+        noise = matrix.outputImage?.cropped(to: image.extent) ?? noise
+
+        // Soft-light keeps mid-tones stable and avoids hard artifacts.
+        let blend = CIFilter.softLightBlendMode()
+        blend.inputImage = noise
+        blend.backgroundImage = image
+        guard let textured = blend.outputImage?.cropped(to: image.extent) else { return image }
+
+        // Cross-fade by user amount.
         let dissolve = CIFilter.dissolveTransition()
-        dissolve.inputImage = blended
+        dissolve.inputImage = textured
         dissolve.targetImage = image
-        dissolve.time = Float(1.0 - grain.amount / 100.0)
-        
-        return dissolve.outputImage ?? image
+        dissolve.time = Float(1.0 - amount)
+
+        return dissolve.outputImage?.cropped(to: image.extent) ?? image
     }
     
     /// Fix chromatic aberration (purple/green fringing)

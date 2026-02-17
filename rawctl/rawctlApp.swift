@@ -53,35 +53,25 @@ struct rawctlApp: App {
             // File menu
             CommandGroup(replacing: .newItem) {
                 Button("Open Folder…") {
-                    // Will be handled by the view
+                    NotificationCenter.default.post(name: .rawctlOpenFolderCommand, object: nil)
                 }
                 .keyboardShortcut("o", modifiers: .command)
             }
 
-            // View menu
-            CommandMenu("View") {
-                Button("Grid View") {
-                    // Will be handled by AppState
-                }
-                .keyboardShortcut("1", modifiers: .command)
-
-                Button("Single View") {
-                    // Will be handled by AppState
-                }
-                .keyboardShortcut("2", modifiers: .command)
-            }
+            // View menu (Grid / Single) commands use focused AppState.
+            RawctlViewCommands()
 
             // Photo menu
             CommandMenu("Photo") {
                 Button("Export…") {
-                    // Will be handled by export dialog
+                    NotificationCenter.default.post(name: .rawctlExportCommand, object: nil)
                 }
                 .keyboardShortcut("e", modifiers: .command)
 
                 Divider()
 
                 Button("Reset Adjustments") {
-                    // Will be handled by AppState
+                    NotificationCenter.default.post(name: .rawctlResetAdjustmentsCommand, object: nil)
                 }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
             }
@@ -109,6 +99,10 @@ struct rawctlApp: App {
     // MARK: - What's New Check
 
     private func checkForWhatsNew() {
+        if ProcessInfo.processInfo.environment["RAWCTL_DISABLE_WHATS_NEW"] == "1" {
+            return
+        }
+
         // Delay slightly to let the main window appear first
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             if VersionTracker.shouldShowWhatsNew {

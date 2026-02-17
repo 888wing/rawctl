@@ -28,27 +28,34 @@ actor FileSystemService {
     /// Scan a folder for supported image files
     static func scanFolder(_ url: URL) async throws -> [PhotoAsset] {
         let fileManager = FileManager.default
+
+        let signpostId = PerformanceSignposts.signposter.makeSignpostID()
+        let signpostState = PerformanceSignposts.begin("scanFolder", id: signpostId)
+        var scannedCount = 0
+        var assets: [PhotoAsset] = []
+        defer {
+            PerformanceSignposts.end("scanFolder", signpostState)
+        }
         
         print("[FileSystem] Scanning folder: \(url.path)")
         
         guard let enumerator = fileManager.enumerator(
             at: url,
-            includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey],
+            includingPropertiesForKeys: [.isRegularFileKey, .creationDateKey, .contentModificationDateKey, .fileSizeKey],
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
         ) else {
             print("[FileSystem] Cannot enumerate folder")
             throw FileSystemError.cannotEnumerateFolder
         }
         
-        var assets: [PhotoAsset] = []
-        var scannedCount = 0
         var skippedExtensions: Set<String> = []
         
-        for case let fileURL as URL in enumerator {
+        // Avoid `DirectoryEnumerator` Sequence iteration in async context (Swift 6 `noasync`).
+        while let fileURL = enumerator.nextObject() as? URL {
             scannedCount += 1
             
             // Check if it's a regular file
-            guard let resourceValues = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]),
+            guard let resourceValues = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .creationDateKey, .contentModificationDateKey, .fileSizeKey]),
                   resourceValues.isRegularFile == true else {
                 continue
             }
@@ -59,8 +66,20 @@ actor FileSystemService {
                 skippedExtensions.insert(ext)
                 continue
             }
-            
-            assets.append(PhotoAsset(url: fileURL))
+
+            let fileSize = Int64(resourceValues.fileSize ?? 0)
+            let creationDate = resourceValues.creationDate
+            let modificationDate = resourceValues.contentModificationDate
+            let fingerprint = PhotoAsset.createFingerprint(fileSize: fileSize, modificationDate: modificationDate)
+            assets.append(
+                PhotoAsset(
+                    url: fileURL,
+                    fileSize: fileSize,
+                    creationDate: creationDate,
+                    modificationDate: modificationDate,
+                    fingerprint: fingerprint
+                )
+            )
         }
         
         print("[FileSystem] Scanned \(scannedCount) items, found \(assets.count) supported images")
@@ -138,12 +157,18 @@ actor FileSystemService {
         cachedState: FolderState?
     ) async throws -> IncrementalScanResult {
         let fileManager = FileManager.default
+
+        let signpostId = PerformanceSignposts.signposter.makeSignpostID()
+        let signpostState = PerformanceSignposts.begin("incrementalScan", id: signpostId)
+        defer {
+            PerformanceSignposts.end("incrementalScan", signpostState)
+        }
         
         print("[FileSystem] Incremental scan: \(url.path)")
         
         guard let enumerator = fileManager.enumerator(
             at: url,
-            includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey],
+            includingPropertiesForKeys: [.isRegularFileKey, .creationDateKey, .contentModificationDateKey, .fileSizeKey],
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
         ) else {
             throw FileSystemError.cannotEnumerateFolder
@@ -159,9 +184,10 @@ actor FileSystemService {
         var added: [PhotoAsset] = []
         var seenFingerprints: Set<String> = []
         
-        for case let fileURL as URL in enumerator {
+        // Avoid `DirectoryEnumerator` Sequence iteration in async context (Swift 6 `noasync`).
+        while let fileURL = enumerator.nextObject() as? URL {
             // Check if it's a regular file
-            guard let resourceValues = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]),
+            guard let resourceValues = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .creationDateKey, .contentModificationDateKey, .fileSizeKey]),
                   resourceValues.isRegularFile == true else {
                 continue
             }
@@ -172,15 +198,25 @@ actor FileSystemService {
                 continue
             }
             
-            // Create temporary asset to get fingerprint
-            let fingerprint = PhotoAsset.createFingerprint(for: fileURL) ?? UUID().uuidString
+            let fileSize = Int64(resourceValues.fileSize ?? 0)
+            let creationDate = resourceValues.creationDate
+            let modificationDate = resourceValues.contentModificationDate
+            let fingerprint = PhotoAsset.createFingerprint(fileSize: fileSize, modificationDate: modificationDate)
             seenFingerprints.insert(fingerprint)
             
             // Check if asset existed before
             if let existing = previousByFingerprint[fingerprint] {
                 unchanged.append(existing)
             } else {
-                added.append(PhotoAsset(url: fileURL))
+                added.append(
+                    PhotoAsset(
+                        url: fileURL,
+                        fileSize: fileSize,
+                        creationDate: creationDate,
+                        modificationDate: modificationDate,
+                        fingerprint: fingerprint
+                    )
+                )
             }
         }
         

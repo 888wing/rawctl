@@ -110,9 +110,9 @@ struct BatchRatingSheet: View {
                 .overlay(newFlag == .reject ? Color.red.opacity(0.2) : Color.clear)
                 .cornerRadius(6)
 
-                Button("Unflag") { newFlag = .none }
+                Button("Unflag") { newFlag = .some(.none) }
                     .buttonStyle(.bordered)
-                    .overlay(newFlag == .none ? Color.accentColor.opacity(0.2) : Color.clear)
+                    .overlay(newFlag == .some(.none) ? Color.accentColor.opacity(0.2) : Color.clear)
                     .cornerRadius(6)
 
                 Spacer()

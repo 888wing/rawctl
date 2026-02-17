@@ -29,12 +29,11 @@
 		};
 /* End PBXContainerItemProxy section */
 
-/* Begin PBXFileReference section */
-		AB0968B72F19093000E1E264 /* rawctl.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = rawctl.xcodeproj; sourceTree = "<group>"; };
-		AB433D1C2EEF722400534A32 /* rawctl.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = rawctl.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		AB433D2F2EEF722500534A32 /* rawctlTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = rawctlTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		AB433D392EEF722500534A32 /* rawctlUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = rawctlUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-/* End PBXFileReference section */
+	/* Begin PBXFileReference section */
+			AB433D1C2EEF722400534A32 /* rawctl.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = rawctl.app; sourceTree = BUILT_PRODUCTS_DIR; };
+			AB433D2F2EEF722500534A32 /* rawctlTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = rawctlTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+			AB433D392EEF722500534A32 /* rawctlUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = rawctlUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+	/* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		AB433D1E2EEF722400534A32 /* rawctl */ = {
@@ -81,16 +80,11 @@
 		};
 /* End PBXFrameworksBuildPhase section */
 
-/* Begin PBXGroup section */
-		AB0968B92F19093000E1E264 /* Products */ = {
-			isa = PBXGroup;
-			name = Products;
-			sourceTree = "<group>";
-		};
-		AB433D132EEF722400534A32 = {
-			isa = PBXGroup;
-			children = (
-				AB433D1E2EEF722400534A32 /* rawctl */,
+	/* Begin PBXGroup section */
+			AB433D132EEF722400534A32 = {
+				isa = PBXGroup;
+				children = (
+					AB433D1E2EEF722400534A32 /* rawctl */,
 				AB433D322EEF722500534A32 /* rawctlTests */,
 				AB433D3C2EEF722500534A32 /* rawctlUITests */,
 				AB433D1D2EEF722400534A32 /* Products */,
@@ -217,20 +211,14 @@
 				ABAECF862F0DBF4900DDD4E2 /* XCRemoteSwiftPackageReference "Sparkle" */,
 				ABAECF892F0FBD0700DDD4E2 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
 			);
-			preferredProjectObjectVersion = 77;
-			productRefGroup = AB433D1D2EEF722400534A32 /* Products */;
-			projectDirPath = "";
-			projectReferences = (
-				{
-					ProductGroup = AB0968B92F19093000E1E264 /* Products */;
-					ProjectRef = AB0968B72F19093000E1E264 /* rawctl.xcodeproj */;
-				},
-			);
-			projectRoot = "";
-			targets = (
-				AB433D1B2EEF722400534A32 /* rawctl */,
-				AB433D2E2EEF722500534A32 /* rawctlTests */,
-				AB433D382EEF722500534A32 /* rawctlUITests */,
+				preferredProjectObjectVersion = 77;
+				productRefGroup = AB433D1D2EEF722400534A32 /* Products */;
+				projectDirPath = "";
+				projectRoot = "";
+				targets = (
+					AB433D1B2EEF722400534A32 /* rawctl */,
+					AB433D2E2EEF722500534A32 /* rawctlTests */,
+					AB433D382EEF722500534A32 /* rawctlUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -425,12 +413,12 @@
 				CODE_SIGN_ENTITLEMENTS = rawctl/rawctl.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = DTR8DL89SD;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = rawctl/Info.plist;
+					INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = RawCTL;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -438,7 +426,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = 1.4.0;
 				PRODUCT_BUNDLE_IDENTIFIER = Shacoworkshop.rawctl;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -455,12 +443,12 @@
 				CODE_SIGN_ENTITLEMENTS = rawctl/rawctl.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = DTR8DL89SD;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = rawctl/Info.plist;
+					INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = RawCTL;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -468,7 +456,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = 1.4.0;
 				PRODUCT_BUNDLE_IDENTIFIER = Shacoworkshop.rawctl;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -482,11 +470,11 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = DTR8DL89SD;
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = 1.4.0;
 				PRODUCT_BUNDLE_IDENTIFIER = Shacoworkshop.rawctlTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
@@ -500,11 +488,11 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = DTR8DL89SD;
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = 1.4.0;
 				PRODUCT_BUNDLE_IDENTIFIER = Shacoworkshop.rawctlTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
@@ -517,10 +505,10 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = DTR8DL89SD;
 				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = 1.4.0;
 				PRODUCT_BUNDLE_IDENTIFIER = Shacoworkshop.rawctlUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
@@ -533,10 +521,10 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = DTR8DL89SD;
 				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = 1.4.0;
 				PRODUCT_BUNDLE_IDENTIFIER = Shacoworkshop.rawctlUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;

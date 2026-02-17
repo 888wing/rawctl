@@ -1,3 +1,9 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+---
+
 # rawctl Development Guide
 
 ## Project Overview
@@ -55,6 +61,25 @@ rawctl/rawctl/
 ```
 
 ## Development Rules
+
+### CRITICAL: Read Before Modify
+
+**Never modify files you haven't read. Always Read or Grep first.**
+
+Why: Reduces hallucinations; ensures modifications are evidence-based.
+
+```
+❌ Wrong: Edit file based on assumptions
+✅ Right: Read file → Understand context → Edit with evidence
+```
+
+### CRITICAL: Work Completion Protocol
+
+After completing any significant task:
+
+1. **Update CHANGELOG.md** - Add changes under current version section
+2. **Update version copy** - Sync README.md "What's New" and ReleaseNotes.swift if version features changed
+3. **Play completion sound** - Run: `afplay /System/Library/Sounds/Glass.aiff`
 
 ### CRITICAL: CHANGELOG Update Rule
 
@@ -152,11 +177,14 @@ Use the `/rawctl-release` skill for releases:
 ## Testing
 
 ```bash
-# Run tests
-xcodebuild test -scheme rawctl -destination 'platform=macOS'
+# Run unit tests (no UI automation required)
+xcodebuild test -project rawctl.xcodeproj -scheme rawctl -destination 'platform=macOS,arch=arm64'
+
+# Full E2E (includes UI tests; requires UI automation permission on macOS)
+xcodebuild test -project rawctl.xcodeproj -scheme rawctl-e2e -destination 'platform=macOS,arch=arm64'
 
 # Specific test
-xcodebuild test -scheme rawctl -only-testing:rawctlTests/CameraProfileTests
+xcodebuild test -project rawctl.xcodeproj -scheme rawctl -destination 'platform=macOS,arch=arm64' -only-testing:rawctlTests/CameraProfileTests
 ```
 
 ## Quick Commands
