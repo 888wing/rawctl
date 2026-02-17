@@ -103,3 +103,71 @@ final class NodeGraphTests: XCTestCase {
         XCTAssertEqual(loaded.localNodes?.first?.adjustments.exposure, -0.5)
     }
 }
+
+// MARK: - AppState Local Nodes
+
+@MainActor
+final class AppStateLocalNodesTests: XCTestCase {
+
+    private func makeState(withURL url: URL) -> AppState {
+        let state = AppState()
+        // Insert a fake PhotoAsset so selectedAsset returns something with the given URL
+        let asset = PhotoAsset(url: url)
+        state.assets = [asset]
+        state.selectedAssetId = asset.id
+        return state
+    }
+
+    func test_addLocalNode_appendsToCurrentPhoto() {
+        let url = URL(fileURLWithPath: "/tmp/test_add.ARW")
+        let state = makeState(withURL: url)
+
+        let node = ColorNode(name: "Brighten", type: .serial)
+        state.addLocalNode(node)
+
+        XCTAssertEqual(state.currentLocalNodes.count, 1)
+        XCTAssertEqual(state.currentLocalNodes.first?.name, "Brighten")
+    }
+
+    func test_removeLocalNode_removesById() {
+        let url = URL(fileURLWithPath: "/tmp/test_remove.ARW")
+        let state = makeState(withURL: url)
+
+        let node1 = ColorNode(name: "Node A", type: .serial)
+        let node2 = ColorNode(name: "Node B", type: .serial)
+        state.addLocalNode(node1)
+        state.addLocalNode(node2)
+
+        state.removeLocalNode(id: node1.id)
+
+        XCTAssertEqual(state.currentLocalNodes.count, 1)
+        XCTAssertEqual(state.currentLocalNodes.first?.name, "Node B")
+    }
+
+    func test_updateLocalNode_replacesExistingNode() {
+        let url = URL(fileURLWithPath: "/tmp/test_update.ARW")
+        let state = makeState(withURL: url)
+
+        var node = ColorNode(name: "Original", type: .serial)
+        state.addLocalNode(node)
+
+        node.name = "Updated"
+        node.adjustments.exposure = 1.5
+        state.updateLocalNode(node)
+
+        XCTAssertEqual(state.currentLocalNodes.count, 1)
+        XCTAssertEqual(state.currentLocalNodes.first?.name, "Updated")
+        XCTAssertEqual(state.currentLocalNodes.first?.adjustments.exposure, 1.5)
+    }
+
+    func test_currentLocalNodes_returnsEmptyWhenNoPhoto() {
+        let state = AppState()
+        // No selected asset
+        XCTAssertEqual(state.currentLocalNodes.count, 0)
+    }
+
+    func test_showMaskOverlay_defaultsFalse() {
+        let state = AppState()
+        XCTAssertFalse(state.showMaskOverlay)
+    }
+}

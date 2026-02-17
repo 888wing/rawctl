@@ -426,7 +426,45 @@ final class AppState: ObservableObject {
         }
     }
     
-    // MARK: - Memory Card & Auto Export
+    // MARK: - Local Adjustments
+
+    /// Local adjustment nodes keyed by photo asset URL
+    @Published var localNodes: [URL: [ColorNode]] = [:]
+
+    /// Which node's mask is being edited (nil = none)
+    @Published var editingMaskId: UUID? = nil
+
+    /// Whether to show mask overlay in SingleView
+    @Published var showMaskOverlay: Bool = false
+
+    /// Local nodes for the currently selected photo
+    var currentLocalNodes: [ColorNode] {
+        guard let url = selectedAsset?.url else { return [] }
+        return localNodes[url] ?? []
+    }
+
+    /// Add a new local adjustment node for the current photo
+    func addLocalNode(_ node: ColorNode) {
+        guard let url = selectedAsset?.url else { return }
+        var nodes = localNodes[url] ?? []
+        nodes.append(node)
+        localNodes[url] = nodes
+    }
+
+    /// Remove a local node by id for the current photo
+    func removeLocalNode(id: UUID) {
+        guard let url = selectedAsset?.url else { return }
+        localNodes[url]?.removeAll { $0.id == id }
+    }
+
+    /// Update a local node's adjustments or mask
+    func updateLocalNode(_ node: ColorNode) {
+        guard let url = selectedAsset?.url else { return }
+        guard let index = localNodes[url]?.firstIndex(where: { $0.id == node.id }) else { return }
+        localNodes[url]?[index] = node
+    }
+
+        // MARK: - Memory Card & Auto Export
     
     @Published var autoExportEnabled: Bool = false
     @Published var autoExportDestination: URL?
