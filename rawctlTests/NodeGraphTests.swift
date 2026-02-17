@@ -593,3 +593,55 @@ final class LinearMaskEditorTests: XCTestCase {
         }
     }
 }
+
+// MARK: - MaskEditingToolbar Tests (Task 13)
+
+@MainActor
+final class MaskEditingToolbarTests: XCTestCase {
+
+    private func makeStateWithNode() -> (AppState, ColorNode) {
+        let url = URL(fileURLWithPath: "/tmp/toolbar_test.ARW")
+        let state = AppState()
+        let asset = PhotoAsset(url: url)
+        state.assets = [asset]
+        state.selectedAssetId = asset.id
+
+        var node = ColorNode(name: "Sky", type: .serial)
+        node.mask = NodeMask(type: .radial(centerX: 0.5, centerY: 0.5, radius: 0.3))
+        state.addLocalNode(node)
+        state.editingMaskId = state.currentLocalNodes.first!.id
+        state.showMaskOverlay = true
+        return (state, state.currentLocalNodes.first!)
+    }
+
+    func test_toolbar_compiles() {
+        let state = AppState()
+        let _ = MaskEditingToolbar(appState: state)
+        // Verifies the view compiles and constructs without crash
+    }
+
+    func test_doneEditing_clearsEditingMaskId() {
+        let (state, _) = makeStateWithNode()
+        XCTAssertNotNil(state.editingMaskId, "Precondition: editingMaskId should be set")
+
+        let toolbar = MaskEditingToolbar(appState: state)
+        toolbar.doneEditing()
+
+        XCTAssertNil(state.editingMaskId, "doneEditing() should clear editingMaskId")
+        XCTAssertFalse(state.showMaskOverlay, "doneEditing() should hide mask overlay")
+    }
+
+    func test_toggleOverlay_flipsShowMaskOverlay() {
+        let (state, _) = makeStateWithNode()
+        XCTAssertTrue(state.showMaskOverlay, "Precondition: showMaskOverlay should be true")
+
+        let toolbar = MaskEditingToolbar(appState: state)
+        toolbar.toggleOverlay()
+
+        XCTAssertFalse(state.showMaskOverlay, "toggleOverlay() should flip showMaskOverlay to false")
+
+        toolbar.toggleOverlay()
+
+        XCTAssertTrue(state.showMaskOverlay, "toggleOverlay() should flip showMaskOverlay back to true")
+    }
+}

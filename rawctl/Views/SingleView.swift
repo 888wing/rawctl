@@ -54,7 +54,25 @@ struct SingleView: View {
     private var zoomPercentage: Int {
         Int(zoomScale * 100)
     }
-    
+
+    /// Returns the appropriate mask editor view for the currently-edited node.
+    /// - Parameter imageSize: The size of the displayed image (for coordinate mapping).
+    @ViewBuilder
+    private func maskEditorOverlay(imageSize: CGSize) -> some View {
+        if let nodeId = appState.editingMaskId,
+           let nodeIndex = appState.currentLocalNodes.firstIndex(where: { $0.id == nodeId }) {
+            let nodeBinding = Binding<ColorNode>(
+                get: { appState.currentLocalNodes[nodeIndex] },
+                set: { appState.updateLocalNode($0) }
+            )
+            if case .radial = appState.currentLocalNodes[nodeIndex].mask?.type {
+                RadialMaskEditor(node: nodeBinding, imageSize: imageSize)
+            } else if case .linear = appState.currentLocalNodes[nodeIndex].mask?.type {
+                LinearMaskEditor(node: nodeBinding, imageSize: imageSize)
+            }
+        }
+    }
+
     var body: some View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
@@ -133,6 +151,11 @@ struct SingleView: View {
                     if generationService.state.isActive {
                         AIGenerationProgressOverlay(state: generationService.state)
                     }
+
+                    // Mask editor overlay — shown when editing a local adjustment mask
+                    if appState.editingMaskId != nil, appState.showMaskOverlay {
+                        maskEditorOverlay(imageSize: previewImage?.size ?? CGSize(width: 1000, height: 1000))
+                    }
                 }
                 .overlay(alignment: .bottomLeading) {
                     // Transform and AI Edit buttons
@@ -180,6 +203,13 @@ struct SingleView: View {
                             }
                         )
                         .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                }
+                .overlay(alignment: .bottom) {
+                    // Mask editing toolbar — shown when editing a local adjustment mask
+                    if appState.editingMaskId != nil {
+                        MaskEditingToolbar(appState: appState)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                 }
                 
