@@ -350,7 +350,12 @@ final class SidecarIntegrationTests: XCTestCase {
         state.saveCurrentRecipe()
 
         // Allow the async save task to complete
-        try await Task.sleep(nanoseconds: 600_000_000) // 600ms > 300ms debounce
+        // Poll for sidecar to appear (up to 3s)
+        let sidecarURL = FileSystemService.sidecarURL(for: photoURL)
+        let deadline = Date().addingTimeInterval(3.0)
+        while !FileManager.default.fileExists(atPath: sidecarURL.path), Date() < deadline {
+            try await Task.sleep(nanoseconds: 50_000_000) // 50ms polling
+        }
 
         // Re-select (triggers the load path)
         state.selectedAssetId = nil

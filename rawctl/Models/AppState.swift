@@ -869,7 +869,7 @@ final class AppState: ObservableObject {
             do {
                 try await SidecarService.shared.save(recipe: recipe, localNodes: nodes, for: asset.url)
             } catch {
-                // Fall back to debounced save (no localNodes) if the atomic write fails
+                print("[AppState] save(recipe:localNodes:) failed: \(error) — localNodes will NOT be persisted in fallback path.")
                 await SidecarService.shared.saveRecipe(recipe, snapshots: snapshots, for: asset.url)
             }
         }
