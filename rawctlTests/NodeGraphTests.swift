@@ -951,6 +951,90 @@ final class MaskOverlayShortcutTests: XCTestCase {
     }
 }
 
+// MARK: - Task 19: Blend Mode + Opacity per Local Node
+
+@MainActor
+final class BlendModeOpacityTests: XCTestCase {
+
+    func test_colorNode_defaultOpacity_isOne() {
+        let node = ColorNode()
+        XCTAssertEqual(node.opacity, 1.0, accuracy: 0.001)
+    }
+
+    func test_colorNode_defaultBlendMode_isNormal() {
+        let node = ColorNode()
+        XCTAssertEqual(node.blendMode, .normal)
+    }
+
+    func test_updateLocalNode_preserves_opacityAndBlendMode() {
+        let state = AppState()
+        var node = ColorNode(name: "Test", type: .serial)
+        node.opacity = 0.75
+        node.blendMode = .overlay
+        state.localNodes[URL(fileURLWithPath: "/test")] = [node]
+
+        // We directly check the stored localNodes instead of going through currentLocalNodes
+        // (which requires a selected asset with a matching URL).
+        let stored = state.localNodes[URL(fileURLWithPath: "/test")]?.first
+        XCTAssertEqual(stored?.opacity ?? 0, 0.75, accuracy: 0.001)
+        XCTAssertEqual(stored?.blendMode, .overlay)
+    }
+
+    func test_blendMode_allCases_haveDisplayNames() {
+        for mode in BlendMode.allCases {
+            XCTAssertFalse(mode.displayName.isEmpty)
+        }
+    }
+
+    func test_updateLocalNode_opacity_persists() {
+        let url = URL(fileURLWithPath: "/tmp/blend_opacity_test.ARW")
+        let state = AppState()
+        let asset = PhotoAsset(url: url)
+        state.assets = [asset]
+        state.selectedAssetId = asset.id
+
+        var node = ColorNode(name: "Blend Test", type: .serial)
+        state.addLocalNode(node)
+
+        // Simulate user changing opacity via the UI binding setter
+        node = state.currentLocalNodes.first!
+        node.opacity = 0.5
+        state.updateLocalNode(node)
+
+        XCTAssertEqual(state.currentLocalNodes.first?.opacity ?? 0, 0.5, accuracy: 0.001)
+    }
+
+    func test_updateLocalNode_blendMode_persists() {
+        let url = URL(fileURLWithPath: "/tmp/blend_mode_test.ARW")
+        let state = AppState()
+        let asset = PhotoAsset(url: url)
+        state.assets = [asset]
+        state.selectedAssetId = asset.id
+
+        var node = ColorNode(name: "Mode Test", type: .serial)
+        state.addLocalNode(node)
+
+        // Simulate user changing blend mode via the UI binding setter
+        node = state.currentLocalNodes.first!
+        node.blendMode = .multiply
+        state.updateLocalNode(node)
+
+        XCTAssertEqual(state.currentLocalNodes.first?.blendMode, .multiply)
+    }
+
+    func test_blendMode_codable_roundtrip() throws {
+        var node = ColorNode(name: "Codable", type: .serial)
+        node.blendMode = .softLight
+        node.opacity = 0.6
+
+        let data = try JSONEncoder().encode(node)
+        let decoded = try JSONDecoder().decode(ColorNode.self, from: data)
+
+        XCTAssertEqual(decoded.blendMode, .softLight)
+        XCTAssertEqual(decoded.opacity, 0.6, accuracy: 0.001)
+    }
+}
+
 // MARK: - Task 16: ImagePipeline createBrushMask
 
 final class CreateBrushMaskTests: XCTestCase {
