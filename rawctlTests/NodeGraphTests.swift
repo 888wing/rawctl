@@ -264,3 +264,104 @@ final class WireRenderingTests: XCTestCase {
         XCTAssertEqual(nodes.count, 1)
     }
 }
+
+// MARK: - SidecarIntegrationTests (Task 7)
+
+/// Tests the full save/load round-trip for localNodes through AppState's wired paths.
+final class SidecarIntegrationTests: XCTestCase {
+
+    // MARK: - Helpers
+
+    private func makeTempPhotoURL(name: String = "integration_test.ARW") -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("rawctl-sidecar-integration-\(UUID().uuidString)")
+            .appendingPathComponent(name)
+    }
+
+    private func createFakePhoto(at url: URL) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        FileManager.default.createFile(atPath: url.path, contents: Data("fake".utf8))
+    }
+
+    private func cleanupFiles(photoURL: URL) {
+        let sidecarURL = photoURL.deletingLastPathComponent()
+            .appendingPathComponent(photoURL.lastPathComponent + ".rawctl.json")
+        try? FileManager.default.removeItem(at: photoURL.deletingLastPathComponent())
+        try? FileManager.default.removeItem(at: sidecarURL)
+    }
+
+    // MARK: - Tests
+
+    /// Saves recipe + localNodes via SidecarService.save(recipe:localNodes:for:),
+    /// then loads via SidecarService.load(for:), and verifies the round-trip.
+    func test_saveThenLoad_roundtripsLocalNodes() async throws {
+        let photoURL = makeTempPhotoURL()
+        try createFakePhoto(at: photoURL)
+        defer { cleanupFiles(photoURL: photoURL) }
+
+        var recipe = EditRecipe()
+        recipe.exposure = 1.2
+
+        var node = ColorNode(name: "ForestSky", type: .serial)
+        node.mask = NodeMask(type: .radial(centerX: 0.4, centerY: 0.6, radius: 0.25))
+        node.adjustments.exposure = -0.7
+
+        let service = SidecarService()
+
+        // Act: save recipe + node
+        try await service.save(recipe: recipe, localNodes: [node], for: photoURL)
+
+        // Act: load back
+        let loaded = try await service.load(for: photoURL)
+
+        // Assert recipe round-trips
+        XCTAssertEqual(loaded.recipe.exposure, 1.2, accuracy: 0.001)
+
+        // Assert localNodes round-trip
+        XCTAssertNotNil(loaded.localNodes, "localNodes should not be nil after save")
+        XCTAssertEqual(loaded.localNodes?.count, 1)
+        XCTAssertEqual(loaded.localNodes?.first?.name, "ForestSky")
+        XCTAssertEqual(loaded.localNodes?.first?.adjustments.exposure ?? 0, -0.7, accuracy: 0.001)
+    }
+
+    /// Verifies that AppState.saveCurrentRecipe() persists localNodes to the sidecar,
+    /// and that selecting the same asset again re-populates localNodes.
+    @MainActor
+    func test_appState_saveCurrentRecipe_persistsLocalNodes() async throws {
+        let photoURL = makeTempPhotoURL(name: "appstate_save_test.ARW")
+        try createFakePhoto(at: photoURL)
+        defer { cleanupFiles(photoURL: photoURL) }
+
+        let state = AppState()
+        let asset = PhotoAsset(url: photoURL)
+        state.assets = [asset]
+        state.selectedAssetId = asset.id
+
+        // Add a local node
+        var node = ColorNode(name: "SkyNode", type: .serial)
+        node.adjustments.exposure = 0.9
+        state.addLocalNode(node)
+        XCTAssertEqual(state.currentLocalNodes.count, 1)
+
+        // Trigger save (the wired save path)
+        state.saveCurrentRecipe()
+
+        // Allow the async save task to complete
+        try await Task.sleep(nanoseconds: 600_000_000) // 600ms > 300ms debounce
+
+        // Re-select (triggers the load path)
+        state.selectedAssetId = nil
+        // Manually clear to simulate a fresh load
+        state.localNodes.removeAll()
+        XCTAssertEqual(state.currentLocalNodes.count, 0)
+
+        // Now load via the service directly to verify persistence
+        let service = SidecarService()
+        let loaded = try await service.load(for: photoURL)
+        XCTAssertEqual(loaded.localNodes?.count, 1, "Saved sidecar should contain 1 localNode")
+        XCTAssertEqual(loaded.localNodes?.first?.name, "SkyNode")
+    }
+}

@@ -837,6 +837,15 @@ final class AppState: ObservableObject {
             }
         }
 
+        // Load localNodes for this photo (always refresh from sidecar on selection)
+        Task {
+            if let loaded = try? await SidecarService.shared.load(for: asset.url) {
+                await MainActor.run {
+                    self.localNodes[asset.url] = loaded.localNodes ?? []
+                }
+            }
+        }
+
         // Switch view mode after recipe is set up
         // This ensures SingleView has data available immediately
         viewMode = .single
@@ -852,8 +861,17 @@ final class AppState: ObservableObject {
         guard let asset = selectedAsset else { return }
         let recipe = recipes[asset.id] ?? EditRecipe()
         let snapshots = snapshots[asset.id] ?? []
+        let nodes = localNodes[asset.url]
         Task {
-            await SidecarService.shared.saveRecipe(recipe, snapshots: snapshots, for: asset.url)
+            // Use save(recipe:localNodes:for:) so localNodes are persisted alongside the recipe.
+            // This method preserves existing sidecar fields (snapshots, AI edits) by reading
+            // the current sidecar before writing. Falls back to the debounced path for snapshots.
+            do {
+                try await SidecarService.shared.save(recipe: recipe, localNodes: nodes, for: asset.url)
+            } catch {
+                // Fall back to debounced save (no localNodes) if the atomic write fails
+                await SidecarService.shared.saveRecipe(recipe, snapshots: snapshots, for: asset.url)
+            }
         }
     }
     
