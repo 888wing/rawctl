@@ -77,7 +77,12 @@ final class NodeGraphTests: XCTestCase {
         let tmpDir = FileManager.default.temporaryDirectory
         let fakePhotoURL = tmpDir.appendingPathComponent("svc_roundtrip_test.ARW")
         FileManager.default.createFile(atPath: fakePhotoURL.path, contents: Data("fake".utf8))
-        defer { try? FileManager.default.removeItem(at: fakePhotoURL) }
+        let sidecarURL = fakePhotoURL.deletingLastPathComponent()
+            .appendingPathComponent(fakePhotoURL.lastPathComponent + ".rawctl.json")
+        defer {
+            try? FileManager.default.removeItem(at: fakePhotoURL)
+            try? FileManager.default.removeItem(at: sidecarURL)
+        }
 
         var recipe = EditRecipe()
         recipe.exposure = 0.5

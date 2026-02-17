@@ -156,15 +156,20 @@ actor SidecarService {
 
     /// Save recipe and optional local adjustment nodes to sidecar file (immediate, throwing).
     /// Uses a default of nil for localNodes so all existing callers compile unchanged.
-    func save(recipe: EditRecipe, localNodes: [ColorNode]? = nil, for assetURL: URL) throws {
+    func save(recipe: EditRecipe, localNodes: [ColorNode]? = nil, for assetURL: URL) async throws {
         let sidecarURL = FileSystemService.sidecarURL(for: assetURL)
 
         var sidecar: SidecarFile
-        if FileManager.default.fileExists(atPath: sidecarURL.path),
-           let data = try? Data(contentsOf: sidecarURL),
-           let existing = try? JSONDecoder().decode(SidecarFile.self, from: data) {
-            sidecar = existing
-            sidecar.edit = recipe
+        if FileManager.default.fileExists(atPath: sidecarURL.path) {
+            do {
+                let data = try Data(contentsOf: sidecarURL)
+                var existing = try JSONDecoder().decode(SidecarFile.self, from: data)
+                existing.edit = recipe
+                sidecar = existing
+            } catch {
+                print("[SidecarService] Failed to read existing sidecar, creating fresh: \(error)")
+                sidecar = SidecarFile(for: assetURL, recipe: recipe)
+            }
         } else {
             sidecar = SidecarFile(for: assetURL, recipe: recipe)
         }
@@ -179,7 +184,7 @@ actor SidecarService {
     }
 
     /// Load recipe and local adjustment nodes from sidecar file (throwing).
-    func load(for assetURL: URL) throws -> (recipe: EditRecipe, localNodes: [ColorNode]?) {
+    func load(for assetURL: URL) async throws -> (recipe: EditRecipe, localNodes: [ColorNode]?) {
         let sidecarURL = FileSystemService.sidecarURL(for: assetURL)
         let data = try Data(contentsOf: sidecarURL)
         let sidecar = try JSONDecoder().decode(SidecarFile.self, from: data)
