@@ -12,6 +12,10 @@ import CoreImage
 /// Lightweight value-type representation of a brush mask for use in ColorNode.
 /// Stores the rendered mask as PNG data so it can be serialised alongside the
 /// node graph without embedding a full BrushMask (class with UI state).
+///
+/// Usage: `BrushMaskEditor` (Task 17) calls `BrushMaskBitmap.from(image:)` to
+/// encode a rendered `BrushMask` canvas into the `.brush(data:)` MaskType enum
+/// case; `ImagePipeline.createBrushMask(from:targetExtent:)` decodes it back.
 struct BrushMaskBitmap: Codable, Equatable {
     var pngData: Data
     var width: Int
@@ -35,8 +39,8 @@ struct BrushMaskBitmap: Codable, Equatable {
         }
         return BrushMaskBitmap(
             pngData: png,
-            width: Int(image.size.width),
-            height: Int(image.size.height)
+            width: bitmap.pixelsWide,
+            height: bitmap.pixelsHigh
         )
     }
 
