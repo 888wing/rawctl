@@ -38,8 +38,11 @@ struct InspectorView: View {
     private var controlSpacing: CGFloat { isCompact ? 6 : 8 }
     
     var body: some View {
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: sectionSpacing) {
+                // Invisible anchor so we can scroll back to global controls after exiting mask mode
+                Color.clear.frame(height: 0).id("inspectorTop")
                 // Customize panels header
                 HStack {
                     Spacer()
@@ -877,6 +880,16 @@ struct InspectorView: View {
                 )
             }
         }
+        // When the user exits mask editing mode, scroll back to the global
+        // color grading controls (Light, Color, etc.) at the top of the inspector.
+        .onChange(of: appState.editingMaskId) { _, newValue in
+            if newValue == nil {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    proxy.scrollTo("inspectorTop", anchor: .top)
+                }
+            }
+        }
+    } // end ScrollViewReader
     }
     
     @State private var saveTask: Task<Void, Never>?

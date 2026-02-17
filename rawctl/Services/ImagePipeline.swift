@@ -1869,9 +1869,11 @@ actor ImagePipeline {
     
     /// Create radial gradient mask
     private func createRadialMask(extent: CGRect, centerX: Double, centerY: Double, radius: Double, feather: Double) -> CIImage {
+        // centerX/centerY are stored in SwiftUI convention (origin top-left, Y increases downward).
+        // Core Image uses bottom-left origin (Y increases upward), so Y must be flipped.
         let center = CGPoint(
             x: extent.origin.x + extent.width * CGFloat(centerX),
-            y: extent.origin.y + extent.height * CGFloat(centerY)
+            y: extent.origin.y + extent.height * CGFloat(1.0 - centerY)
         )
         
         let radiusPixels = min(extent.width, extent.height) * CGFloat(radius)
@@ -1902,9 +1904,12 @@ actor ImagePipeline {
         let radians = angle * .pi / 180.0
         let centerX = extent.midX
         let centerY = extent.midY
-        
+
+        // `position` is stored in SwiftUI convention (0 = top, 1 = bottom).
+        // Core Image Y increases upward, so flip: (1 - position) gives distance from bottom.
+        // The offset shifts the centre line away from the image midpoint.
         let length = max(extent.width, extent.height)
-        let offset = (position - 0.5) * Double(length)
+        let offset = ((1.0 - position) - 0.5) * Double(length)
 
         // falloff (0–100) controls the perpendicular distance between point0 and point1.
         // At 100 the transition spans the full image; at 0 it collapses to a hard edge (1 px).
@@ -1950,13 +1955,21 @@ actor ImagePipeline {
             return CIImage(color: CIColor.white).cropped(to: targetExtent)
         }
 
+        // CIImage(data:) loads PNG data with row 0 mapped to the lowest Y in Core Image,
+        // but the brush was painted in SwiftUI (row 0 = top). Flip vertically to match.
+        // The flip transform: (x, y) → (x, h - y), implemented as scale(1,-1) + translate(0, h).
+        let h = sourceExtent.height
+        let flipTransform = CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: h)
+        let flipped = sourceImage.transformed(by: flipTransform)
+
         // Scale to match target extent using an affine transform
-        let scaleX = targetExtent.width / sourceExtent.width
-        let scaleY = targetExtent.height / sourceExtent.height
+        let flippedExtent = flipped.extent
+        let scaleX = targetExtent.width / flippedExtent.width
+        let scaleY = targetExtent.height / flippedExtent.height
         let transform = CGAffineTransform(scaleX: scaleX, y: scaleY)
             .translatedBy(x: targetExtent.origin.x / scaleX, y: targetExtent.origin.y / scaleY)
 
-        return sourceImage
+        return flipped
             .transformed(by: transform)
             .cropped(to: targetExtent)
     }

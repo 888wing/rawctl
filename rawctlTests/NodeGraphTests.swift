@@ -576,13 +576,15 @@ final class LinearMaskEditorTests: XCTestCase {
     }
 
     func test_positionDrag_updatesMaskPosition() {
+        // angle=0 (horizontal gradient): perpendicular is vertical, so dragging Y changes position.
         var node = ColorNode(name: "Test", type: .serial)
-        node.mask = NodeMask(type: .linear(angle: 0, position: 0.5, falloff: 0.3))
+        node.mask = NodeMask(type: .linear(angle: 0, position: 0.5, falloff: 30))
         let binding = Binding<ColorNode>(get: { node }, set: { node = $0 })
         let imageSize = CGSize(width: 800, height: 600)
         var editor = LinearMaskEditor(node: binding, imageSize: imageSize)
 
-        // Drag to y=120, which is 120/600 = 0.2 in normalized coords
+        // Drag to y=120 → perpComponent = dy*cos(0) = (120-300) = -180
+        // newPosY = 300 + (-180) = 120 → newPosition = 120/600 = 0.2
         let newLocation = CGPoint(x: 400, y: 120)
         editor.movePositionTo(newLocation, in: imageSize)
 
@@ -591,6 +593,56 @@ final class LinearMaskEditorTests: XCTestCase {
         } else {
             XCTFail("Expected linear mask type")
         }
+    }
+
+    func test_rotateAngleTo_updatesAngle() {
+        var node = ColorNode(name: "Test", type: .serial)
+        node.mask = NodeMask(type: .linear(angle: 0, position: 0.5, falloff: 30))
+        let binding = Binding<ColorNode>(get: { node }, set: { node = $0 })
+        let size = CGSize(width: 800, height: 600)
+        var editor = LinearMaskEditor(node: binding, imageSize: size)
+
+        // Center handle is at (400, 300). Dragging directly right → angle ≈ 0°
+        editor.rotateAngleTo(CGPoint(x: 600, y: 300), in: size)
+        if case .linear(let angle, _, _) = node.mask?.type {
+            XCTAssertEqual(angle, 0.0, accuracy: 1.0)
+        } else { XCTFail() }
+
+        // Dragging directly down → angle ≈ 90°
+        editor.rotateAngleTo(CGPoint(x: 400, y: 500), in: size)
+        if case .linear(let angle, _, _) = node.mask?.type {
+            XCTAssertEqual(angle, 90.0, accuracy: 1.0)
+        } else { XCTFail() }
+    }
+
+    func test_changeFalloffTo_updatesFalloff() {
+        var node = ColorNode(name: "Test", type: .serial)
+        node.mask = NodeMask(type: .linear(angle: 0, position: 0.5, falloff: 10))
+        let binding = Binding<ColorNode>(get: { node }, set: { node = $0 })
+        let size = CGSize(width: 800, height: 600)
+        var editor = LinearMaskEditor(node: binding, imageSize: size)
+
+        // angle=0, posY=300. Drag to y=150: perp dist = |dy*cos(0)| = |150-300|=150px
+        // minDim = min(800,600)=600, halfMinDim=300, newFalloff = (150/300)*100 = 50%
+        editor.changeFalloffTo(CGPoint(x: 400, y: 150), in: size)
+        if case .linear(_, _, let falloff) = node.mask?.type {
+            XCTAssertEqual(falloff, 50.0, accuracy: 1.0)
+        } else { XCTFail() }
+    }
+
+    func test_changeFalloffTo_clampedAtMax() {
+        var node = ColorNode(name: "Test", type: .serial)
+        node.mask = NodeMask(type: .linear(angle: 0, position: 0.5, falloff: 10))
+        let binding = Binding<ColorNode>(get: { node }, set: { node = $0 })
+        let size = CGSize(width: 800, height: 600)
+        var editor = LinearMaskEditor(node: binding, imageSize: size)
+
+        // Drag far beyond bounds → should clamp at 100%
+        editor.changeFalloffTo(CGPoint(x: 400, y: -500), in: size)
+        if case .linear(_, _, let falloff) = node.mask?.type {
+            XCTAssertLessThanOrEqual(falloff, 100.0)
+            XCTAssertGreaterThanOrEqual(falloff, 0.0)
+        } else { XCTFail() }
     }
 }
 

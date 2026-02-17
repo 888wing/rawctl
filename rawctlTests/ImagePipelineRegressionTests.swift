@@ -445,4 +445,44 @@ extension ImagePipelineRegressionTests {
         #expect(result.extent.width > 0)
         #expect(result.extent.height > 0)
     }
+
+    /// Regression: createBrushMask must not crash with empty data and must return correct extent.
+    @Test func test_createBrushMask_emptyData_returnsWhiteFallback() async {
+        let extent = CGRect(x: 0, y: 0, width: 400, height: 300)
+        let result = await ImagePipeline.shared.createBrushMask(from: Data(), targetExtent: extent)
+        #expect(result.extent == extent)
+    }
+
+    /// Regression: createBrushMask with valid PNG data must return image at target extent.
+    @Test func test_createBrushMask_validPNG_returnsTargetExtent() async {
+        // Create a minimal 2x2 PNG programmatically
+        let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue)
+        guard let ctx = CGContext(data: nil, width: 2, height: 2, bitsPerComponent: 8,
+                                  bytesPerRow: 8, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: bitmapInfo.rawValue),
+              let cgImg = ctx.makeImage(),
+              let png = NSBitmapImageRep(cgImage: cgImg).representation(using: .png, properties: [:])
+        else { return }
+
+        let target = CGRect(x: 0, y: 0, width: 400, height: 300)
+        let result = await ImagePipeline.shared.createBrushMask(from: png, targetExtent: target)
+        #expect(abs(result.extent.width - target.width) < 1)
+        #expect(abs(result.extent.height - target.height) < 1)
+    }
+
+    /// Regression: radial mask Y-flip — a mask with centerY=0 (SwiftUI top) must not crash
+    /// and must produce a valid result extent.
+    @Test func test_radialMask_yFlip_doesNotCrash() async {
+        let base = solidCIImage(red: 0.2, green: 0.2, blue: 0.2)
+        let original = solidCIImage(red: 0.2, green: 0.2, blue: 0.2)
+        var recipe = EditRecipe()
+        recipe.exposure = 2.0
+        var node = ColorNode(id: UUID(), name: "TopMask", type: .serial, adjustments: recipe)
+        node.mask = NodeMask(type: .radial(centerX: 0.5, centerY: 0.0, radius: 0.5),
+                             feather: 0, density: 100, invert: false)
+        let result = await ImagePipeline.shared.renderLocalNodes(
+            [node], baseImage: base, originalImage: original)
+        #expect(result.extent.width > 0)
+        #expect(result.extent.height > 0)
+    }
 }
