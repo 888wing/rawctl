@@ -555,8 +555,8 @@ final class RadialMaskEditorTests: XCTestCase {
         editor.resizeRadiusTo(radiusHandleLocation, in: imageSize)
 
         if case .radial(_, _, let r) = node.mask?.type {
-            XCTAssertGreaterThan(r, 0.1)
-            XCTAssertLessThanOrEqual(r, 1.0)
+            // Expected: distance=240, min(800,600)=600, so 240/600 = 0.4
+            XCTAssertEqual(r, 0.4, accuracy: 0.02, "radius should be ~0.4 (240/600)")
         } else {
             XCTFail("Expected radial mask type")
         }

@@ -57,6 +57,7 @@ struct RadialMaskEditor: View {
                                 moveCenterTo(value.location, in: size)
                             }
                     )
+                    .contentShape(Circle().stroke(lineWidth: 20))
 
                 // Dashed outline for visibility on bright backgrounds
                 Circle()
