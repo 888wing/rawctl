@@ -351,24 +351,37 @@ extension ImagePipelineRegressionTests {
         let base = solidCIImage(red: 0.5, green: 0.5, blue: 0.5)
         let result = await ImagePipeline.shared.renderLocalNodes([], baseImage: base, originalImage: base)
         #expect(result.extent == base.extent)
+
+        // Pixel-level check: empty node list must leave pixel values untouched.
+        let ciContext = CIContext()
+        var basePixel = [UInt8](repeating: 0, count: 4)
+        var resultPixel = [UInt8](repeating: 0, count: 4)
+
+        ciContext.render(base,
+                         toBitmap: &basePixel,
+                         rowBytes: 4,
+                         bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+                         format: .RGBA8,
+                         colorSpace: CGColorSpaceCreateDeviceRGB())
+
+        ciContext.render(result,
+                         toBitmap: &resultPixel,
+                         rowBytes: 4,
+                         bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+                         format: .RGBA8,
+                         colorSpace: CGColorSpaceCreateDeviceRGB())
+
+        #expect(basePixel[0] == resultPixel[0])
+        #expect(basePixel[1] == resultPixel[1])
+        #expect(basePixel[2] == resultPixel[2])
     }
 
     @Test func test_renderLocalNodes_disabledNode_isSkipped() async {
         let base = solidCIImage(red: 0.2, green: 0.2, blue: 0.2)
 
-        // Build a node that would dramatically brighten the image, but is disabled
+        // Build a node that would dramatically brighten the image, but mark it disabled.
         var recipe = EditRecipe()
         recipe.exposure = 10.0
-        let node = ColorNode(
-            id: UUID(),
-            name: "Disabled Bright",
-            type: .serial,
-            adjustments: recipe
-        )
-        // Default isEnabled is true — disable it
-        var disabledNode = node
-        disabledNode = ColorNode(id: node.id, name: node.name, type: node.type, adjustments: node.adjustments)
-        // We need to set isEnabled to false; ColorNode has a var so we can do:
         var mutableNode = ColorNode(id: UUID(), name: "Disabled", type: .serial, adjustments: recipe)
         mutableNode.isEnabled = false
 

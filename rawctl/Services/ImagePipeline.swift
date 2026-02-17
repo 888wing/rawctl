@@ -1643,8 +1643,14 @@ actor ImagePipeline {
             // Only process enabled serial nodes
             guard node.isEnabled && node.type == .serial else { continue }
 
-            // 1. Apply node adjustments to the original (pre-composite) image
-            let adjusted = applyFullRecipe(node.adjustments, to: originalImage, fastMode: fastMode)
+            // 1. Apply node adjustments to the original (pre-composite) image.
+            // originalImage already has the camera profile applied (it is the post-profile
+            // base image), so we must NOT apply the camera profile again here.
+            // Force neutral profile to make the camera profile step a no-op while
+            // still applying all slider adjustments (exposure, contrast, etc.).
+            var localRecipe = node.adjustments
+            localRecipe.profileId = BuiltInProfile.neutral.rawValue
+            let adjusted = applyFullRecipe(localRecipe, to: originalImage, fastMode: fastMode)
 
             // 2. Build mask image
             var maskImage: CIImage
@@ -1670,12 +1676,17 @@ actor ImagePipeline {
                     maskImage = CIImage(color: CIColor.white).cropped(to: result.extent)
                 }
 
-                // 3. Apply density (0–100) via alpha channel scaling
+                // 3. Apply density (0–100) by scaling RGB channels.
+                // CIBlendWithMask reads mask luminance (RGB), not alpha,
+                // so we must scale the RGB vectors — not inputAVector.
                 let densityFactor = CGFloat(mask.density) / 100.0
-                let densityFilter = CIFilter(name: "CIColorMatrix")!
-                densityFilter.setValue(maskImage, forKey: kCIInputImageKey)
-                densityFilter.setValue(CIVector(x: 0, y: 0, z: 0, w: densityFactor), forKey: "inputAVector")
-                maskImage = densityFilter.outputImage ?? maskImage
+                if let densityFilter = CIFilter(name: "CIColorMatrix") {
+                    densityFilter.setValue(maskImage, forKey: kCIInputImageKey)
+                    densityFilter.setValue(CIVector(x: densityFactor, y: 0, z: 0, w: 0), forKey: "inputRVector")
+                    densityFilter.setValue(CIVector(x: 0, y: densityFactor, z: 0, w: 0), forKey: "inputGVector")
+                    densityFilter.setValue(CIVector(x: 0, y: 0, z: densityFactor, w: 0), forKey: "inputBVector")
+                    maskImage = densityFilter.outputImage ?? maskImage
+                }
 
                 // 4. Invert mask if requested
                 if mask.invert {
@@ -1864,7 +1875,7 @@ actor ImagePipeline {
         
         let gradient = CIFilter.radialGradient()
         gradient.center = center
-        gradient.radius0 = Float(radiusPixels - featherPixels)
+        gradient.radius0 = Float(max(0, radiusPixels - featherPixels))
         gradient.radius1 = Float(radiusPixels)
         gradient.color0 = CIColor.white
         gradient.color1 = CIColor.black
@@ -1877,6 +1888,12 @@ actor ImagePipeline {
     }
     
     /// Create linear gradient mask
+    ///
+    /// - Parameters:
+    ///   - angle: Gradient direction in degrees (0 = horizontal, 90 = vertical).
+    ///   - position: Normalized centre position of the transition (0–1, default 0.5).
+    ///   - falloff: Width of the gradient transition zone as a percentage of the
+    ///     shorter image dimension (0 = hard edge, 100 = full-image soft blend).
     private func createLinearMask(extent: CGRect, angle: Double, position: Double, falloff: Double) -> CIImage {
         let radians = angle * .pi / 180.0
         let centerX = extent.midX
@@ -1884,11 +1901,19 @@ actor ImagePipeline {
         
         let length = max(extent.width, extent.height)
         let offset = (position - 0.5) * Double(length)
-        
-        let startX = centerX + CGFloat(offset * cos(radians) - length/2 * sin(radians))
-        let startY = centerY + CGFloat(offset * sin(radians) + length/2 * cos(radians))
-        let endX = centerX + CGFloat(offset * cos(radians) + length/2 * sin(radians))
-        let endY = centerY + CGFloat(offset * sin(radians) - length/2 * cos(radians))
+
+        // falloff (0–100) controls the perpendicular distance between point0 and point1.
+        // At 100 the transition spans the full image; at 0 it collapses to a hard edge (1 px).
+        let falloffPixels = max(1.0, Double(extent.width) * (falloff / 100.0))
+        let halfFalloff = falloffPixels / 2.0
+
+        // point0 = white end of gradient, point1 = black end.
+        // They are placed halfFalloff pixels on either side of the centre line,
+        // measured along the gradient direction (perpendicular to the angle).
+        let startX = centerX + CGFloat(offset * cos(radians) - halfFalloff * sin(radians))
+        let startY = centerY + CGFloat(offset * sin(radians) + halfFalloff * cos(radians))
+        let endX   = centerX + CGFloat(offset * cos(radians) + halfFalloff * sin(radians))
+        let endY   = centerY + CGFloat(offset * sin(radians) - halfFalloff * cos(radians))
         
         let gradient = CIFilter.linearGradient()
         gradient.point0 = CGPoint(x: startX, y: startY)
