@@ -55,7 +55,7 @@ struct MaskingPanel: View {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         ForEach(appState.currentLocalNodes) { node in
-                            LocalAdjustmentRowPlaceholder(node: node, appState: appState)
+                            LocalAdjustmentRow(node: node, appState: appState)
                             Divider()
                         }
                     }
@@ -88,64 +88,6 @@ struct MaskingPanel: View {
         )
         node.mask = mask
         appState.addLocalNode(node)
-    }
-}
-
-// MARK: - Placeholder Row (Task 9 will replace this)
-
-/// Temporary placeholder for LocalAdjustmentRow (implemented in Task 9).
-private struct LocalAdjustmentRowPlaceholder: View {
-    let node: ColorNode
-    @ObservedObject var appState: AppState
-
-    var body: some View {
-        HStack(spacing: 8) {
-            // Enabled toggle
-            Button {
-                var updated = node
-                updated.isEnabled.toggle()
-                appState.updateLocalNode(updated)
-            } label: {
-                Image(systemName: node.isEnabled ? "eye" : "eye.slash")
-                    .font(.caption)
-                    .foregroundColor(node.isEnabled ? Color.primary : Color.secondary.opacity(0.4))
-            }
-            .buttonStyle(.plain)
-            .frame(width: 20)
-
-            // Node name
-            Text(node.name)
-                .font(.caption)
-                .foregroundColor(.primary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-
-            Spacer()
-
-            // Mask type indicator
-            if let mask = node.mask {
-                Text(mask.type.displayName)
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            }
-
-            // Delete button
-            Button {
-                appState.removeLocalNode(id: node.id)
-            } label: {
-                Image(systemName: "trash")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help("Remove adjustment")
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            appState.editingMaskId = node.id
-        }
     }
 }
 

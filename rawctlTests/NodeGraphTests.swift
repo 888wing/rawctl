@@ -437,3 +437,61 @@ final class MaskingPanelTests: XCTestCase {
         XCTAssertEqual(state.currentLocalNodes[1].name, "Local 2")
     }
 }
+
+// MARK: - LocalAdjustmentRow Tests (Task 9)
+
+@MainActor
+final class LocalAdjustmentRowTests: XCTestCase {
+
+    private func makeStateWithNode() -> (AppState, ColorNode) {
+        let url = URL(fileURLWithPath: "/tmp/row_test.ARW")
+        let state = AppState()
+        let asset = PhotoAsset(url: url)
+        state.assets = [asset]
+        state.selectedAssetId = asset.id
+
+        var node = ColorNode(name: "Sky", type: .serial)
+        node.mask = NodeMask(type: .radial(centerX: 0.5, centerY: 0.5, radius: 0.3))
+        state.addLocalNode(node)
+        // Return the node as stored (same id)
+        return (state, state.currentLocalNodes.first!)
+    }
+
+    func test_row_compiles() {
+        let (state, node) = makeStateWithNode()
+        let _ = LocalAdjustmentRow(node: node, appState: state)
+        // Verifies struct compiles and initialises without crash
+    }
+
+    func test_deleteButton_removesNode() {
+        let (state, node) = makeStateWithNode()
+        XCTAssertEqual(state.currentLocalNodes.count, 1)
+
+        let row = LocalAdjustmentRow(node: node, appState: state)
+        row.deleteNode()
+
+        XCTAssertEqual(state.currentLocalNodes.count, 0)
+    }
+
+    func test_editMaskButton_setsEditingMaskId() {
+        let (state, node) = makeStateWithNode()
+        XCTAssertNil(state.editingMaskId)
+        XCTAssertFalse(state.showMaskOverlay)
+
+        let row = LocalAdjustmentRow(node: node, appState: state)
+        row.startEditingMask()
+
+        XCTAssertEqual(state.editingMaskId, node.id)
+        XCTAssertTrue(state.showMaskOverlay)
+    }
+
+    func test_toggleEnabled_updatesNode() {
+        let (state, node) = makeStateWithNode()
+        XCTAssertTrue(node.isEnabled)
+
+        let row = LocalAdjustmentRow(node: node, appState: state)
+        row.toggleEnabled()
+
+        XCTAssertEqual(state.currentLocalNodes.first?.isEnabled, false)
+    }
+}
