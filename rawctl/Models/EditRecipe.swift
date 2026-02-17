@@ -679,14 +679,15 @@ struct SidecarFile: Codable {
     var edit: EditRecipe
     var snapshots: [RecipeSnapshot] = []
     var aiEdits: [AIEdit] = []  // AI editing history (v3)
+    var localNodes: [ColorNode]?  // v6: local adjustment nodes
     var updatedAt: TimeInterval
-    
+
     struct AssetInfo: Codable {
         var originalFilename: String
         var fileSize: Int64
         var modifiedTime: TimeInterval
     }
-    
+
     init(for url: URL, recipe: EditRecipe) {
         let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
         self.asset = AssetInfo(
@@ -697,24 +698,38 @@ struct SidecarFile: Codable {
         self.edit = recipe
         self.snapshots = []
         self.aiEdits = []
+        self.localNodes = nil
         self.updatedAt = Date().timeIntervalSince1970
     }
-    
+
     // MARK: - Backward Compatible Decoder
-    
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        
+
         schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
         asset = try container.decode(AssetInfo.self, forKey: .asset)
         edit = try container.decode(EditRecipe.self, forKey: .edit)
         snapshots = try container.decodeIfPresent([RecipeSnapshot].self, forKey: .snapshots) ?? []
         aiEdits = try container.decodeIfPresent([AIEdit].self, forKey: .aiEdits) ?? []  // v3
+        localNodes = try container.decodeIfPresent([ColorNode].self, forKey: .localNodes)  // v6
         updatedAt = try container.decode(TimeInterval.self, forKey: .updatedAt)
     }
-    
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        let version = localNodes != nil ? 6 : schemaVersion
+        try container.encode(version, forKey: .schemaVersion)
+        try container.encode(asset, forKey: .asset)
+        try container.encode(edit, forKey: .edit)
+        try container.encode(snapshots, forKey: .snapshots)
+        try container.encode(aiEdits, forKey: .aiEdits)
+        try container.encodeIfPresent(localNodes, forKey: .localNodes)
+        try container.encode(updatedAt, forKey: .updatedAt)
+    }
+
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, asset, edit, snapshots, aiEdits, updatedAt
+        case schemaVersion, asset, edit, snapshots, aiEdits, localNodes, updatedAt
     }
 }
 
