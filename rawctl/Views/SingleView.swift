@@ -55,6 +55,20 @@ struct SingleView: View {
         Int(zoomScale * 100)
     }
 
+    /// The fitted display size of the photo inside the view, accounting for letterboxing.
+    /// Uses the same .fit aspect-ratio logic as MainImageView so mask handles align with the photo.
+    private func fittedPhotoSize(imagePixelSize: CGSize, in viewSize: CGSize) -> CGSize {
+        guard imagePixelSize.width > 0, imagePixelSize.height > 0,
+              viewSize.width > 0, viewSize.height > 0 else { return viewSize }
+        let imageAspect = imagePixelSize.width / imagePixelSize.height
+        let viewAspect  = viewSize.width / viewSize.height
+        if imageAspect > viewAspect {
+            return CGSize(width: viewSize.width, height: viewSize.width / imageAspect)
+        } else {
+            return CGSize(width: viewSize.height * imageAspect, height: viewSize.height)
+        }
+    }
+
     /// Returns the appropriate mask editor view for the currently-edited node.
     /// - Parameter imageSize: The size of the displayed image (for coordinate mapping).
     @ViewBuilder
@@ -155,9 +169,13 @@ struct SingleView: View {
                         AIGenerationProgressOverlay(state: generationService.state)
                     }
 
-                    // Mask editor overlay — shown when editing a local adjustment mask
+                    // Mask editor overlay — constrained to the actual photo display area
+                    // so normalized mask coordinates align with what the pipeline renders.
                     if appState.editingMaskId != nil, appState.showMaskOverlay {
-                        maskEditorOverlay(imageSize: previewImage?.size ?? CGSize(width: 1000, height: 1000))
+                        let pixelSize = previewImage?.size ?? CGSize(width: 1000, height: 1000)
+                        let fitted = fittedPhotoSize(imagePixelSize: pixelSize, in: geometry.size)
+                        maskEditorOverlay(imageSize: pixelSize)
+                            .frame(width: fitted.width, height: fitted.height)
                     }
                 }
                 .overlay(alignment: .bottomLeading) {

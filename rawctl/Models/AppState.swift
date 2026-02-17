@@ -455,6 +455,7 @@ final class AppState: ObservableObject {
     func removeLocalNode(id: UUID) {
         guard let url = selectedAsset?.url else { return }
         localNodes[url]?.removeAll { $0.id == id }
+        saveCurrentRecipe()
     }
 
     /// Update a local node's adjustments or mask
@@ -462,6 +463,7 @@ final class AppState: ObservableObject {
         guard let url = selectedAsset?.url else { return }
         guard let index = localNodes[url]?.firstIndex(where: { $0.id == node.id }) else { return }
         localNodes[url]?[index] = node
+        saveCurrentRecipe()
     }
 
     // MARK: - Memory Card & Auto Export

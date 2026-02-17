@@ -149,6 +149,40 @@ struct LocalAdjustmentRow: View {
                         .font(.caption2)
                         .labelsHidden()
                     }
+
+                    // Mask type row
+                    HStack(spacing: 6) {
+                        Text("Mask")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .frame(width: 44, alignment: .trailing)
+
+                        Menu {
+                            Button {
+                                changeMaskType(to: .radial(centerX: 0.5, centerY: 0.5, radius: 0.3))
+                            } label: { Label("Radial", systemImage: "circle") }
+                            Button {
+                                changeMaskType(to: .linear(angle: 90, position: 0.5, falloff: 20))
+                            } label: { Label("Linear", systemImage: "line.diagonal") }
+                            Button {
+                                changeMaskType(to: .brush(data: Data()))
+                            } label: { Label("Brush", systemImage: "paintbrush") }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: node.mask.map { maskIcon(for: $0.type) } ?? "circle.dashed")
+                                    .font(.caption2)
+                                Text(node.mask.map { maskLabel(for: $0.type) } ?? "None")
+                                    .font(.caption2)
+                                Image(systemName: "chevron.up.chevron.down")
+                                    .font(.system(size: 8))
+                            }
+                            .foregroundColor(.primary)
+                        }
+                        .menuStyle(.borderlessButton)
+                        .menuIndicator(.hidden)
+
+                        Spacer()
+                    }
                 }
                 .padding(.horizontal, 12)
                 .padding(.bottom, 8)
@@ -162,6 +196,18 @@ struct LocalAdjustmentRow: View {
     /// Removes this node from AppState.
     func deleteNode() {
         appState.removeLocalNode(id: node.id)
+    }
+
+    /// Change the mask type, resetting mask data but preserving node adjustments.
+    func changeMaskType(to maskType: NodeMask.MaskType) {
+        var updated = node
+        updated.mask = NodeMask(type: maskType)
+        appState.updateLocalNode(updated)
+        // If the user was editing this node's mask, exit mask mode since the editor changes.
+        if appState.editingMaskId == node.id {
+            appState.editingMaskId = nil
+            appState.showMaskOverlay = false
+        }
     }
 
     /// Sets the active editing mask and shows the mask overlay.

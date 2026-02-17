@@ -71,8 +71,10 @@ struct MaskEditingToolbar: View {
             }
             .buttonStyle(.plain)
             .foregroundColor(.green)
-            .help("Finish editing mask (Done)")
+            .help("Finish editing mask (Return or Esc)")
             .keyboardShortcut(.return, modifiers: [])
+            // Esc also exits mask mode so users can return to global adjustments
+            .keyboardShortcut(.escape, modifiers: [])
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
