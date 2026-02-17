@@ -69,6 +69,9 @@ struct SingleView: View {
                 RadialMaskEditor(node: nodeBinding, imageSize: imageSize)
             } else if case .linear = appState.currentLocalNodes[nodeIndex].mask?.type {
                 LinearMaskEditor(node: nodeBinding, imageSize: imageSize)
+            } else if case .brush = appState.currentLocalNodes[nodeIndex].mask?.type {
+                BrushMaskEditor(node: nodeBinding, appState: appState, imageSize: imageSize)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
     }

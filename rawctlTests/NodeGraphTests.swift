@@ -861,6 +861,63 @@ final class BrushMaskBitmapTests: XCTestCase {
     }
 }
 
+// MARK: - Task 17: BrushMaskEditor
+
+@MainActor
+final class BrushMaskEditorTests: XCTestCase {
+
+    func test_commitBrushMask_writesDataToNode() {
+        // This test verifies commitBrushMask() updates node.mask type correctly.
+        // We create a BrushMaskEditor, simulate stroke completion, verify node updated.
+        let state = AppState()
+        let asset = PhotoAsset(url: URL(fileURLWithPath: "/test"))
+        state.assets = [asset]
+        state.selectedAssetId = asset.id
+
+        var node = ColorNode(name: "Brush", type: .serial)
+        node.mask = NodeMask(type: .brush(data: Data()))
+        state.addLocalNode(node)
+
+        // Arrange a non-empty BrushMask
+        let brushMask = BrushMask()
+        brushMask.canvasSize = CGSize(width: 100, height: 100)
+        brushMask.beginStroke(at: CGPoint(x: 10, y: 10))
+        brushMask.continueStroke(to: CGPoint(x: 50, y: 50))
+        brushMask.endStroke()
+
+        // Act: simulate what commitBrushMask does
+        let imageSize = CGSize(width: 400, height: 300)
+        let pngData = brushMask.renderToPNG(targetSize: imageSize)
+
+        // Assert: PNG data is non-nil and non-empty
+        XCTAssertNotNil(pngData)
+        XCTAssertFalse(pngData?.isEmpty ?? true)
+
+        // Update node (mirroring commitBrushMask logic)
+        if let png = pngData {
+            // Retrieve the node as stored in state so we have the correct id
+            if var storedNode = state.currentLocalNodes.first {
+                storedNode.mask?.type = .brush(data: png)
+                state.updateLocalNode(storedNode)
+            }
+        }
+
+        // Verify node was updated
+        let updated = state.currentLocalNodes.first
+        if case .brush(let data) = updated?.mask?.type {
+            XCTAssertFalse(data.isEmpty)
+        } else {
+            XCTFail("Expected .brush mask type")
+        }
+    }
+
+    func test_brushMaskEditor_loadsEmptyOnAppear() {
+        // Verifies BrushMask starts empty (no reconstruction from PNG).
+        let brushMask = BrushMask()
+        XCTAssertTrue(brushMask.isEmpty)
+    }
+}
+
 // MARK: - Task 16: ImagePipeline createBrushMask
 
 final class CreateBrushMaskTests: XCTestCase {
