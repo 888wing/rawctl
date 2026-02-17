@@ -370,3 +370,70 @@ final class SidecarIntegrationTests: XCTestCase {
         XCTAssertEqual(loaded.localNodes?.first?.name, "SkyNode")
     }
 }
+
+// MARK: - MaskingPanel Tests (Task 8)
+
+@MainActor
+final class MaskingPanelTests: XCTestCase {
+
+    func test_maskingPanel_compiles() {
+        let state = AppState()
+        let _ = MaskingPanel(appState: state)
+        // Just verifying it compiles and constructs without crash
+    }
+
+    func test_addNewNode_addsNodeToState() {
+        // Arrange: Create AppState with a selected asset
+        let url = URL(fileURLWithPath: "/tmp/masking_panel_test.ARW")
+        let state = AppState()
+        let asset = PhotoAsset(url: url)
+        state.assets = [asset]
+        state.selectedAssetId = asset.id
+
+        let panel = MaskingPanel(appState: state)
+        XCTAssertEqual(state.currentLocalNodes.count, 0)
+
+        // Act: call addNewNode (internal method)
+        panel.addNewNode()
+
+        // Assert: one node added
+        XCTAssertEqual(state.currentLocalNodes.count, 1)
+    }
+
+    func test_addNewNode_nodeHasRadialMask() {
+        let url = URL(fileURLWithPath: "/tmp/masking_panel_mask_test.ARW")
+        let state = AppState()
+        let asset = PhotoAsset(url: url)
+        state.assets = [asset]
+        state.selectedAssetId = asset.id
+
+        let panel = MaskingPanel(appState: state)
+        panel.addNewNode()
+
+        let node = state.currentLocalNodes.first
+        XCTAssertNotNil(node?.mask, "New node should have a mask")
+        if case .radial(let cx, let cy, let r) = node?.mask?.type {
+            XCTAssertEqual(cx, 0.5, accuracy: 0.001)
+            XCTAssertEqual(cy, 0.5, accuracy: 0.001)
+            XCTAssertEqual(r, 0.3, accuracy: 0.001)
+        } else {
+            XCTFail("Expected radial mask type, got \(String(describing: node?.mask?.type))")
+        }
+    }
+
+    func test_addNewNode_incrementsNameWithCount() {
+        let url = URL(fileURLWithPath: "/tmp/masking_panel_name_test.ARW")
+        let state = AppState()
+        let asset = PhotoAsset(url: url)
+        state.assets = [asset]
+        state.selectedAssetId = asset.id
+
+        let panel = MaskingPanel(appState: state)
+        panel.addNewNode()
+        panel.addNewNode()
+
+        XCTAssertEqual(state.currentLocalNodes.count, 2)
+        XCTAssertEqual(state.currentLocalNodes[0].name, "Local 1")
+        XCTAssertEqual(state.currentLocalNodes[1].name, "Local 2")
+    }
+}
