@@ -464,7 +464,7 @@ final class AppState: ObservableObject {
         localNodes[url]?[index] = node
     }
 
-        // MARK: - Memory Card & Auto Export
+    // MARK: - Memory Card & Auto Export
     
     @Published var autoExportEnabled: Bool = false
     @Published var autoExportDestination: URL?
