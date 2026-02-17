@@ -6,6 +6,7 @@
 //
 
 import XCTest
+import SwiftUI
 @testable import rawctl
 
 final class NodeGraphTests: XCTestCase {
@@ -504,5 +505,91 @@ final class InspectorIntegrationTests: XCTestCase {
         let state = AppState()
         let _ = InspectorView(appState: state)
         // Smoke test: just verify it compiles and constructs
+    }
+}
+
+// MARK: - RadialMaskEditor Tests (Task 11)
+
+final class RadialMaskEditorTests: XCTestCase {
+
+    func test_radialMaskEditor_compiles() {
+        var node = ColorNode(name: "Test", type: .serial)
+        node.mask = NodeMask(type: .radial(centerX: 0.5, centerY: 0.5, radius: 0.3))
+        let binding = Binding<ColorNode>(get: { node }, set: { node = $0 })
+        let _ = RadialMaskEditor(node: binding, imageSize: CGSize(width: 800, height: 600))
+        // Verifies the view compiles and constructs without crash
+    }
+
+    func test_centerDrag_updatesMaskCenter() {
+        var node = ColorNode(name: "Test", type: .serial)
+        node.mask = NodeMask(type: .radial(centerX: 0.5, centerY: 0.5, radius: 0.3))
+        let binding = Binding<ColorNode>(get: { node }, set: { node = $0 })
+        let imageSize = CGSize(width: 800, height: 600)
+        var editor = RadialMaskEditor(node: binding, imageSize: imageSize)
+
+        // Simulate dragging center to (400, 300) in view coords => (0.5, 0.5) normalized
+        // Then drag to (480, 360) => (0.6, 0.6) normalized
+        let newLocation = CGPoint(x: 480, y: 360)
+        editor.moveCenterTo(newLocation, in: imageSize)
+
+        // After the move, node.mask centerX should be ~0.6, centerY ~0.6
+        if case .radial(let cx, let cy, _) = node.mask?.type {
+            XCTAssertEqual(cx, 0.6, accuracy: 0.01)
+            XCTAssertEqual(cy, 0.6, accuracy: 0.01)
+        } else {
+            XCTFail("Expected radial mask type")
+        }
+    }
+
+    func test_radiusDrag_updatesMaskRadius() {
+        var node = ColorNode(name: "Test", type: .serial)
+        node.mask = NodeMask(type: .radial(centerX: 0.5, centerY: 0.5, radius: 0.3))
+        let binding = Binding<ColorNode>(get: { node }, set: { node = $0 })
+        let imageSize = CGSize(width: 800, height: 600)
+        var editor = RadialMaskEditor(node: binding, imageSize: imageSize)
+
+        // Center is at (400, 300). Drag radius handle to (640, 300).
+        // Distance from center = 240px, normalized by width = 0.3 → but stored as fraction of min dimension
+        // imageSize.width = 800, so 240/800 = 0.3
+        let radiusHandleLocation = CGPoint(x: 640, y: 300)
+        editor.resizeRadiusTo(radiusHandleLocation, in: imageSize)
+
+        if case .radial(_, _, let r) = node.mask?.type {
+            XCTAssertGreaterThan(r, 0.1)
+            XCTAssertLessThanOrEqual(r, 1.0)
+        } else {
+            XCTFail("Expected radial mask type")
+        }
+    }
+}
+
+// MARK: - LinearMaskEditor Tests (Task 12)
+
+final class LinearMaskEditorTests: XCTestCase {
+
+    func test_linearMaskEditor_compiles() {
+        var node = ColorNode(name: "Test", type: .serial)
+        node.mask = NodeMask(type: .linear(angle: 0, position: 0.5, falloff: 0.3))
+        let binding = Binding<ColorNode>(get: { node }, set: { node = $0 })
+        let _ = LinearMaskEditor(node: binding, imageSize: CGSize(width: 800, height: 600))
+        // Verifies the view compiles and constructs without crash
+    }
+
+    func test_positionDrag_updatesMaskPosition() {
+        var node = ColorNode(name: "Test", type: .serial)
+        node.mask = NodeMask(type: .linear(angle: 0, position: 0.5, falloff: 0.3))
+        let binding = Binding<ColorNode>(get: { node }, set: { node = $0 })
+        let imageSize = CGSize(width: 800, height: 600)
+        var editor = LinearMaskEditor(node: binding, imageSize: imageSize)
+
+        // Drag to y=120, which is 120/600 = 0.2 in normalized coords
+        let newLocation = CGPoint(x: 400, y: 120)
+        editor.movePositionTo(newLocation, in: imageSize)
+
+        if case .linear(_, let pos, _) = node.mask?.type {
+            XCTAssertEqual(pos, 0.2, accuracy: 0.01)
+        } else {
+            XCTFail("Expected linear mask type")
+        }
     }
 }
