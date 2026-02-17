@@ -768,3 +768,149 @@ final class LocalAdjustmentIntegrationTests: XCTestCase {
         XCTAssertNotNil(result, "renderPreview with loaded localNodes should return a non-nil NSImage")
     }
 }
+
+// MARK: - Task 15: BrushMaskBitmap & .brush MaskType
+
+final class BrushMaskBitmapTests: XCTestCase {
+
+    // MARK: - displayName
+
+    func test_brushMaskType_displayName_isBrushMask() {
+        // Arrange: create a minimal PNG data blob (1×1 white pixel)
+        let pngData = makeSolidPNG(width: 1, height: 1)
+        let maskType = NodeMask.MaskType.brush(data: pngData)
+
+        // Act
+        let name = maskType.displayName
+
+        // Assert
+        XCTAssertEqual(name, "Brush Mask")
+    }
+
+    // MARK: - BrushMaskBitmap
+
+    func test_brushMaskBitmap_fromImage_producesNonNilData() {
+        // Arrange
+        let image = makeSolidNSImage(width: 4, height: 4, color: .white)
+
+        // Act
+        let bitmap = BrushMaskBitmap.from(image: image)
+
+        // Assert
+        XCTAssertNotNil(bitmap)
+        XCTAssertFalse(bitmap?.pngData.isEmpty ?? true)
+        XCTAssertEqual(bitmap?.width, 4)
+        XCTAssertEqual(bitmap?.height, 4)
+    }
+
+    func test_brushMaskBitmap_toCIImage_returnsImage() {
+        // Arrange
+        let image = makeSolidNSImage(width: 8, height: 8, color: .gray)
+        guard let bitmap = BrushMaskBitmap.from(image: image) else {
+            XCTFail("BrushMaskBitmap.from(image:) returned nil")
+            return
+        }
+
+        // Act
+        let ciImage = bitmap.toCIImage()
+
+        // Assert
+        XCTAssertNotNil(ciImage)
+    }
+
+    func test_brushMaskType_codable_roundtrip() throws {
+        // Arrange
+        let pngData = makeSolidPNG(width: 2, height: 2)
+        let original = NodeMask(type: .brush(data: pngData))
+
+        // Act
+        let encoded = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(NodeMask.self, from: encoded)
+
+        // Assert
+        guard case .brush(let decodedData) = decoded.type else {
+            XCTFail("Decoded mask type should be .brush, got: \(decoded.type)")
+            return
+        }
+        XCTAssertEqual(decodedData, pngData)
+    }
+
+    // MARK: - Helpers
+
+    /// Create a minimal 1-channel solid NSImage.
+    private func makeSolidNSImage(width: Int, height: Int, color: NSColor) -> NSImage {
+        let size = NSSize(width: CGFloat(width), height: CGFloat(height))
+        let image = NSImage(size: size)
+        image.lockFocus()
+        color.setFill()
+        NSRect(origin: .zero, size: size).fill()
+        image.unlockFocus()
+        return image
+    }
+
+    /// Encode a solid NSImage to PNG data (for MaskType.brush).
+    private func makeSolidPNG(width: Int, height: Int) -> Data {
+        let image = makeSolidNSImage(width: width, height: height, color: .white)
+        guard let tiff = image.tiffRepresentation,
+              let bmp = NSBitmapImageRep(data: tiff),
+              let png = bmp.representation(using: .png, properties: [:]) else {
+            return Data()
+        }
+        return png
+    }
+}
+
+// MARK: - Task 16: ImagePipeline createBrushMask
+
+final class CreateBrushMaskTests: XCTestCase {
+
+    func test_createBrushMask_returnsNonNilImage() async {
+        // Arrange: create a small solid PNG to use as mask data
+        let pngData = makeSolidPNG(width: 16, height: 16)
+
+        // Act
+        let result = await ImagePipeline.shared.createBrushMask(
+            from: pngData,
+            targetExtent: CGRect(x: 0, y: 0, width: 64, height: 64)
+        )
+
+        // Assert
+        XCTAssertNotNil(result, "createBrushMask should return a non-nil CIImage")
+    }
+
+    func test_renderLocalNodes_brushMask_doesNotCrash() async throws {
+        // Arrange: build a minimal 16×16 base image
+        let baseImage = CIImage(color: CIColor(red: 0.5, green: 0.5, blue: 0.5))
+            .cropped(to: CGRect(x: 0, y: 0, width: 16, height: 16))
+
+        let pngData = makeSolidPNG(width: 16, height: 16)
+        var node = ColorNode(name: "Brush Node", type: .serial)
+        node.mask = NodeMask(type: .brush(data: pngData))
+        node.adjustments.exposure = 0.5
+
+        // Act & Assert: must not crash
+        let result = await ImagePipeline.shared.renderLocalNodes(
+            [node],
+            baseImage: baseImage,
+            originalImage: baseImage
+        )
+        XCTAssertNotNil(result)
+    }
+
+    // MARK: - Helpers
+
+    private func makeSolidPNG(width: Int, height: Int) -> Data {
+        let size = NSSize(width: CGFloat(width), height: CGFloat(height))
+        let image = NSImage(size: size)
+        image.lockFocus()
+        NSColor.white.setFill()
+        NSRect(origin: .zero, size: size).fill()
+        image.unlockFocus()
+        guard let tiff = image.tiffRepresentation,
+              let bmp = NSBitmapImageRep(data: tiff),
+              let png = bmp.representation(using: .png, properties: [:]) else {
+            return Data()
+        }
+        return png
+    }
+}

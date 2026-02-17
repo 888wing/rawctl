@@ -104,6 +104,7 @@ struct LocalAdjustmentRow: View {
         case .linear:      return "line.diagonal"
         case .luminosity:  return "sun.max"
         case .color:       return "paintpalette"
+        case .brush:       return "paintbrush"
         }
     }
 
@@ -113,6 +114,7 @@ struct LocalAdjustmentRow: View {
         case .linear:      return "Linear"
         case .luminosity:  return "Lumi"
         case .color:       return "Color"
+        case .brush:       return "Brush"
         }
     }
 }

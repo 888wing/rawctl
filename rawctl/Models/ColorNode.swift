@@ -133,6 +133,7 @@ struct NodeMask: Codable, Equatable {
         case color(hue: Double, hueRange: Double, satMin: Double)  // Select by color
         case radial(centerX: Double, centerY: Double, radius: Double)  // Circular gradient
         case linear(angle: Double, position: Double, falloff: Double)  // Linear gradient
+        case brush(data: Data)                                              // PNG bitmap data of brush strokes
         
         var displayName: String {
             switch self {
@@ -140,6 +141,7 @@ struct NodeMask: Codable, Equatable {
             case .color: return "Color Mask"
             case .radial: return "Radial Mask"
             case .linear: return "Linear Mask"
+            case .brush: return "Brush Mask"
             }
         }
     }

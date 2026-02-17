@@ -1674,6 +1674,8 @@ actor ImagePipeline {
                 case .luminosity, .color:
                     // Phase 2: return full-white mask for now
                     maskImage = CIImage(color: CIColor.white).cropped(to: result.extent)
+                case .brush(let data):
+                    maskImage = createBrushMask(from: data, targetExtent: result.extent)
                 }
 
                 // 3. Apply density (0–100) by scaling RGB channels.
@@ -1819,6 +1821,8 @@ actor ImagePipeline {
             maskImage = createRadialMask(extent: background.extent, centerX: centerX, centerY: centerY, radius: radius, feather: mask.feather)
         case .linear(let angle, let position, let falloff):
             maskImage = createLinearMask(extent: background.extent, angle: angle, position: position, falloff: falloff)
+        case .brush(let data):
+            maskImage = createBrushMask(from: data, targetExtent: background.extent)
         }
         
         // Invert if needed
@@ -1926,6 +1930,35 @@ actor ImagePipeline {
         }
         
         return gradientImage.cropped(to: extent)
+    }
+
+    /// Create a brush mask CIImage from PNG data, scaled to the target extent.
+    ///
+    /// - Parameters:
+    ///   - data: PNG image data of the brush mask (white = affected area, black = protected).
+    ///   - targetExtent: The output extent the mask should be scaled to match.
+    /// - Returns: A CIImage representing the mask at the target extent,
+    ///            or a solid-white fallback if the data cannot be decoded.
+    func createBrushMask(from data: Data, targetExtent: CGRect) -> CIImage {
+        guard let sourceImage = CIImage(data: data) else {
+            // Fallback: if PNG data is invalid, use a full white mask (apply everywhere)
+            return CIImage(color: CIColor.white).cropped(to: targetExtent)
+        }
+
+        let sourceExtent = sourceImage.extent
+        guard sourceExtent.width > 0, sourceExtent.height > 0 else {
+            return CIImage(color: CIColor.white).cropped(to: targetExtent)
+        }
+
+        // Scale to match target extent using an affine transform
+        let scaleX = targetExtent.width / sourceExtent.width
+        let scaleY = targetExtent.height / sourceExtent.height
+        let transform = CGAffineTransform(scaleX: scaleX, y: scaleY)
+            .translatedBy(x: targetExtent.origin.x / scaleX, y: targetExtent.origin.y / scaleY)
+
+        return sourceImage
+            .transformed(by: transform)
+            .cropped(to: targetExtent)
     }
 
     // MARK: - Camera Profile Application (v1.2)

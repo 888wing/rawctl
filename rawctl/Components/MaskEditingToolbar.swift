@@ -104,6 +104,7 @@ struct MaskEditingToolbar: View {
         case .linear:  return "line.diagonal"
         case .luminosity: return "sun.max"
         case .color:   return "paintpalette"
+        case .brush:   return "paintbrush"
         }
     }
 }
