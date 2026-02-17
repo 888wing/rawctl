@@ -124,6 +124,7 @@ enum BlendMode: String, Codable, CaseIterable {
 struct NodeMask: Codable, Equatable {
     var type: MaskType
     var feather: Double = 20.0    // Edge feather amount (0-100)
+    var density: Double = 100.0   // Overall mask strength (0-100)
     var invert: Bool = false
     
     /// Mask type determines how pixels are selected
