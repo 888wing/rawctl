@@ -46,6 +46,7 @@ final class NodeGraphTests: XCTestCase {
         let sidecar = try JSONDecoder().decode(SidecarFile.self, from: json)
         XCTAssertNil(sidecar.localNodes)
         XCTAssertEqual(sidecar.edit.exposure, 0.5)
+        XCTAssertEqual(sidecar.schemaVersion, 5)
     }
 
     func test_sidecarFile_encodesAndDecodesLocalNodes() throws {
@@ -57,8 +58,13 @@ final class NodeGraphTests: XCTestCase {
         var sidecar = SidecarFile(for: url, recipe: EditRecipe())
         sidecar.localNodes = [node]
 
-        let data = try JSONEncoder().encode(sidecar)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .prettyPrinted
+        let data = try encoder.encode(sidecar)
+        let jsonString = String(data: data, encoding: .utf8)!
+        XCTAssertTrue(jsonString.contains("\"schemaVersion\" : 6"), "Expected schemaVersion 6 in JSON, got: \(jsonString)")
         let decoded = try JSONDecoder().decode(SidecarFile.self, from: data)
+        XCTAssertEqual(decoded.schemaVersion, 6)
         XCTAssertNotNil(decoded.localNodes)
         XCTAssertEqual(decoded.localNodes?.count, 1)
         XCTAssertEqual(decoded.localNodes?.first?.name, "Brighten Face")
