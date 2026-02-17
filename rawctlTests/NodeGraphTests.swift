@@ -171,3 +171,96 @@ final class AppStateLocalNodesTests: XCTestCase {
         XCTAssertFalse(state.showMaskOverlay)
     }
 }
+
+// MARK: - Wire Rendering Tests (Task 6)
+
+/// Smoke tests verifying that renderPreview accepts localNodes and runs without crashing.
+/// These tests confirm that the wiring from AppState.currentLocalNodes → renderPreview compiles
+/// and executes correctly end-to-end.
+@MainActor
+final class WireRenderingTests: XCTestCase {
+
+    // MARK: - Helpers
+
+    private enum TestError: Error {
+        case bitmapContextCreationFailed
+        case imageEncodingFailed
+    }
+
+    /// Creates a solid-grey PNG at the given URL.
+    private func writeSolidPNG(at url: URL, width: Int = 64, height: Int = 64) throws {
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            throw TestError.bitmapContextCreationFailed
+        }
+        context.setFillColor(NSColor(calibratedRed: 0.5, green: 0.5, blue: 0.5, alpha: 1.0).cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        guard let cgImage = context.makeImage() else { throw TestError.imageEncodingFailed }
+        let rep = NSBitmapImageRep(cgImage: cgImage)
+        guard let data = rep.representation(using: .png, properties: [:]) else { throw TestError.imageEncodingFailed }
+        try data.write(to: url, options: .atomic)
+    }
+
+    // MARK: - Tests
+
+    /// Verifies that renderPreview with a non-empty localNodes array returns a non-nil result,
+    /// proving the wiring compiles and runs without crashing.
+    func test_renderPreview_withLocalNodes_returnsNonNil() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rawctl-wire-rendering-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let imageURL = dir.appendingPathComponent("test-gray.png")
+        try writeSolidPNG(at: imageURL)
+
+        let asset = PhotoAsset(url: imageURL)
+        let recipe = EditRecipe()
+
+        // Build a local node with a radial mask and exposure boost
+        var nodeRecipe = EditRecipe()
+        nodeRecipe.exposure = 0.5
+        var node = ColorNode(name: "TestNode", type: .serial, adjustments: nodeRecipe)
+        node.mask = NodeMask(type: .radial(centerX: 0.5, centerY: 0.5, radius: 0.3))
+
+        await ImagePipeline.shared.clearCache()
+        let result = await ImagePipeline.shared.renderPreview(
+            for: asset,
+            recipe: recipe,
+            maxSize: 64,
+            localNodes: [node]
+        )
+
+        XCTAssertNotNil(result, "renderPreview with localNodes should return a non-nil NSImage")
+    }
+
+    /// Verifies that AppState.currentLocalNodes is accessible and of the correct type
+    /// to be passed directly to renderPreview(localNodes:).
+    func test_appState_currentLocalNodes_typeCompatibleWithRenderPreview() {
+        let state = AppState()
+        let asset = PhotoAsset(url: URL(fileURLWithPath: "/tmp/wire_type_test.ARW"))
+        state.assets = [asset]
+        state.selectedAssetId = asset.id
+
+        var node = ColorNode(name: "WireNode", type: .serial)
+        node.adjustments.exposure = 0.3
+        state.addLocalNode(node)
+
+        // Confirm the state returns the node
+        XCTAssertEqual(state.currentLocalNodes.count, 1)
+        XCTAssertEqual(state.currentLocalNodes.first?.name, "WireNode")
+
+        // Verify type compatibility: [ColorNode] can be assigned from currentLocalNodes
+        // (this is a compile-time proof that wiring is type-correct)
+        let nodes: [ColorNode] = state.currentLocalNodes
+        XCTAssertEqual(nodes.count, 1)
+    }
+}

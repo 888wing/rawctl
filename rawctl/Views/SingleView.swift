@@ -237,6 +237,20 @@ struct SingleView: View {
                     isProcessingPreview = false
                 }
             }
+            .onChange(of: appState.currentLocalNodes) { _, _ in
+                // Re-render when local adjustments (masks/nodes) change
+                previewTask?.cancel()
+                isProcessingPreview = true
+                previewTask = Task {
+                    try? await Task.sleep(nanoseconds: 70_000_000)
+                    guard !Task.isCancelled else {
+                        isProcessingPreview = false
+                        return
+                    }
+                    await loadPreview()
+                    isProcessingPreview = false
+                }
+            }
             .onReceive(NotificationCenter.default.publisher(for: .sliderDragStateChanged)) { notification in
                 // Switch preview quality based on slider drag state
                 if let isDragging = notification.object as? Bool {
@@ -985,7 +999,8 @@ struct SingleView: View {
                 for: asset,
                 recipe: previewRecipe,
                 maxSize: maxSize,
-                fastMode: isFastMode
+                fastMode: isFastMode,
+                localNodes: appState.currentLocalNodes
             )
             
             // Only update if we got a result
