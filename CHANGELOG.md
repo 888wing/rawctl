@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Local Adjustments (Phase 1)
+- **Local adjustment nodes**: Radial and linear gradient masks with exposure, contrast, and other adjustments per-region
+- **MaskingPanel**: Inspector panel for adding, removing, and enabling/disabling local adjustment nodes
+- **LocalAdjustmentRow**: Component with mask type display, enable toggle, edit mask button, and delete action
+- **RadialMaskEditor**: Overlay in SingleView with draggable center handle and radius handle for interactive radial mask editing
+- **LinearMaskEditor**: Overlay in SingleView with draggable position handle for interactive linear gradient mask editing
+- **MaskEditingToolbar**: Toolbar for entering and exiting mask editing mode with overlay toggle
+- **AppState.localNodes**: Persistent local adjustment state keyed by photo URL; wired to `currentLocalNodes` computed property
+- **SidecarService v6 schema**: `localNodes` saved alongside recipe in sidecar JSON; v5 sidecars load without local nodes (backward compatible)
+- **ImagePipeline.renderLocalNodes**: Applies per-node mask density and invert support; uses `CIBlendWithMask` to composite local adjustments onto the base image
+
 #### Crop System Optimization
 - **Draw new crop area**: Drag on dark region outside existing crop frame to draw a completely new crop area
 - **Aspect ratio constraint while drawing**: New crop areas respect locked aspect ratios during drawing

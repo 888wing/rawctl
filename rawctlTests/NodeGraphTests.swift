@@ -645,3 +645,126 @@ final class MaskEditingToolbarTests: XCTestCase {
         XCTAssertTrue(state.showMaskOverlay, "toggleOverlay() should flip showMaskOverlay back to true")
     }
 }
+
+// MARK: - LocalAdjustmentIntegrationTests (Task 14)
+
+/// End-to-end integration test: AppState → SidecarService → ImagePipeline.
+/// Verifies the full pipeline from adding a local node to rendering without crashing.
+@MainActor
+final class LocalAdjustmentIntegrationTests: XCTestCase {
+
+    // MARK: - Helpers
+
+    private enum TestError: Error {
+        case bitmapContextCreationFailed
+        case imageEncodingFailed
+    }
+
+    /// Creates a solid-grey PNG at the given URL so ImagePipeline has a real decodable image.
+    private func writeSolidPNG(at url: URL, width: Int = 64, height: Int = 64) throws {
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            throw TestError.bitmapContextCreationFailed
+        }
+        context.setFillColor(NSColor(calibratedRed: 0.5, green: 0.5, blue: 0.5, alpha: 1.0).cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        guard let cgImage = context.makeImage() else { throw TestError.imageEncodingFailed }
+        let rep = NSBitmapImageRep(cgImage: cgImage)
+        guard let data = rep.representation(using: .png, properties: [:]) else { throw TestError.imageEncodingFailed }
+        try data.write(to: url, options: .atomic)
+    }
+
+    /// Polls for a file to appear on disk, returning when it exists or the deadline is reached.
+    private func waitForFile(at url: URL, timeout: TimeInterval = 3.0) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !FileManager.default.fileExists(atPath: url.path), Date() < deadline {
+            try await Task.sleep(nanoseconds: 50_000_000) // 50 ms
+        }
+    }
+
+    // MARK: - Full Pipeline Test
+
+    /// Tests the complete pipeline:
+    /// 1. AppState with a real PNG photo selected
+    /// 2. Add a local node (radial mask, exposure +1.0)
+    /// 3. Save via AppState.saveCurrentRecipe()
+    /// 4. Poll for the sidecar file to appear on disk
+    /// 5. Load via SidecarService and verify the saved node matches (name, exposure, mask type)
+    /// 6. Render via ImagePipeline.renderPreview with the loaded localNodes
+    /// 7. Assert renderPreview returns non-nil
+    func test_fullPipeline_addNodeSaveLoadRenderDoesNotCrash() async throws {
+        // --- Setup: temp directory with a real PNG ---
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rawctl-e2e-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let photoURL = dir.appendingPathComponent("e2e_test.png")
+        try writeSolidPNG(at: photoURL)
+
+        // --- Step 1: Create AppState with photo selected ---
+        let state = AppState()
+        let asset = PhotoAsset(url: photoURL)
+        state.assets = [asset]
+        state.selectedAssetId = asset.id
+
+        // --- Step 2: Add a local node with a radial mask and exposure +1.0 ---
+        var node = ColorNode(name: "E2E Node", type: .serial)
+        node.mask = NodeMask(type: .radial(centerX: 0.5, centerY: 0.5, radius: 0.3))
+        node.adjustments.exposure = 1.0
+        state.addLocalNode(node)
+
+        XCTAssertEqual(state.currentLocalNodes.count, 1)
+        XCTAssertEqual(state.currentLocalNodes.first?.name, "E2E Node")
+
+        // --- Step 3: Save via AppState.saveCurrentRecipe() ---
+        state.saveCurrentRecipe()
+
+        // --- Step 4: Poll for the sidecar file to appear ---
+        let sidecarURL = FileSystemService.sidecarURL(for: photoURL)
+        try await waitForFile(at: sidecarURL)
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: sidecarURL.path),
+            "Sidecar file should exist after saveCurrentRecipe()"
+        )
+
+        // --- Step 5: Load via SidecarService and verify round-trip ---
+        let service = SidecarService()
+        let loaded = try await service.load(for: photoURL)
+
+        XCTAssertNotNil(loaded.localNodes, "Loaded sidecar should contain localNodes")
+        XCTAssertEqual(loaded.localNodes?.count, 1, "Should have exactly 1 local node")
+
+        let loadedNode = try XCTUnwrap(loaded.localNodes?.first)
+        XCTAssertEqual(loadedNode.name, "E2E Node")
+        XCTAssertEqual(loadedNode.adjustments.exposure, 1.0, accuracy: 0.001)
+
+        guard case .radial(let cx, let cy, let r) = loadedNode.mask?.type else {
+            XCTFail("Loaded node should have a radial mask, got: \(String(describing: loadedNode.mask?.type))")
+            return
+        }
+        XCTAssertEqual(cx, 0.5, accuracy: 0.01)
+        XCTAssertEqual(cy, 0.5, accuracy: 0.01)
+        XCTAssertEqual(r, 0.3, accuracy: 0.01)
+
+        // --- Step 6 & 7: Render via ImagePipeline with the loaded localNodes ---
+        await ImagePipeline.shared.clearCache()
+        let result = await ImagePipeline.shared.renderPreview(
+            for: asset,
+            recipe: loaded.recipe,
+            maxSize: 64,
+            localNodes: loaded.localNodes ?? []
+        )
+
+        XCTAssertNotNil(result, "renderPreview with loaded localNodes should return a non-nil NSImage")
+    }
+}
