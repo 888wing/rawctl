@@ -191,7 +191,8 @@ actor ImagePipeline {
         for asset: PhotoAsset,
         recipe: EditRecipe,
         maxSize: CGFloat = 1600,
-        fastMode: Bool = false
+        fastMode: Bool = false,
+        localNodes: [ColorNode] = []
     ) async -> NSImage? {
         let cacheKey = asset.fingerprint
         let ext = asset.url.pathExtension.lowercased()
@@ -218,7 +219,8 @@ actor ImagePipeline {
                 recipe: recipe,
                 cacheKey: cacheKey,
                 maxSize: maxSize,
-                fastMode: fastMode
+                fastMode: fastMode,
+                localNodes: localNodes
             )
         }
 
@@ -228,7 +230,8 @@ actor ImagePipeline {
             recipe: recipe,
             cacheKey: cacheKey,
             maxSize: maxSize,
-            fastMode: fastMode
+            fastMode: fastMode,
+            localNodes: localNodes
         )
     }
     
@@ -238,7 +241,8 @@ actor ImagePipeline {
         recipe: EditRecipe,
         cacheKey: String,
         maxSize: CGFloat,
-        fastMode: Bool = false
+        fastMode: Bool = false,
+        localNodes: [ColorNode] = []
     ) async -> NSImage? {
         // Get or create RAW filter
         let rawFilter: CIFilter
@@ -277,7 +281,12 @@ actor ImagePipeline {
         
         // Apply post-RAW adjustments (saturation, vibrance, crop, etc.)
         outputImage = applyPostRAWRecipe(recipe, to: outputImage, fastMode: fastMode)
-        
+
+        // Apply local node adjustments if any
+        if !localNodes.isEmpty {
+            outputImage = await renderLocalNodes(localNodes, baseImage: outputImage, originalImage: outputImage, fastMode: fastMode)
+        }
+
         return renderToNSImage(outputImage)
     }
     
@@ -287,7 +296,8 @@ actor ImagePipeline {
         recipe: EditRecipe,
         cacheKey: String,
         maxSize: CGFloat,
-        fastMode: Bool = false
+        fastMode: Bool = false,
+        localNodes: [ColorNode] = []
     ) async -> NSImage? {
         var baseImage: CIImage
         if let cached = imageCache[cacheKey] {
@@ -300,7 +310,13 @@ actor ImagePipeline {
             cacheImage(baseImage, for: cacheKey)
         }
         
-        let processedImage = applyFullRecipe(recipe, to: baseImage, fastMode: fastMode)
+        var processedImage = applyFullRecipe(recipe, to: baseImage, fastMode: fastMode)
+
+        // Apply local node adjustments if any
+        if !localNodes.isEmpty {
+            processedImage = await renderLocalNodes(localNodes, baseImage: processedImage, originalImage: baseImage, fastMode: fastMode)
+        }
+
         return renderToNSImage(processedImage)
     }
     
@@ -1610,8 +1626,81 @@ actor ImagePipeline {
         return NSImage(cgImage: cgImage, size: NSSize(width: extent.width, height: extent.height))
     }
     
+    // MARK: - Local Node Rendering
+
+    /// Apply local-adjustment nodes selectively using masks.
+    /// Each enabled serial node blends its adjusted result onto `baseImage`
+    /// according to the node's mask, density, and invert settings.
+    func renderLocalNodes(
+        _ nodes: [ColorNode],
+        baseImage: CIImage,
+        originalImage: CIImage,
+        fastMode: Bool = false
+    ) async -> CIImage {
+        var result = baseImage
+
+        for node in nodes {
+            // Only process enabled serial nodes
+            guard node.isEnabled && node.type == .serial else { continue }
+
+            // 1. Apply node adjustments to the original (pre-composite) image
+            let adjusted = applyFullRecipe(node.adjustments, to: originalImage, fastMode: fastMode)
+
+            // 2. Build mask image
+            var maskImage: CIImage
+            if let mask = node.mask {
+                switch mask.type {
+                case .radial(let cx, let cy, let radius):
+                    maskImage = createRadialMask(
+                        extent: result.extent,
+                        centerX: cx,
+                        centerY: cy,
+                        radius: radius,
+                        feather: mask.feather
+                    )
+                case .linear(let angle, let position, let falloff):
+                    maskImage = createLinearMask(
+                        extent: result.extent,
+                        angle: angle,
+                        position: position,
+                        falloff: falloff
+                    )
+                case .luminosity, .color:
+                    // Phase 2: return full-white mask for now
+                    maskImage = CIImage(color: CIColor.white).cropped(to: result.extent)
+                }
+
+                // 3. Apply density (0–100) via alpha channel scaling
+                let densityFactor = CGFloat(mask.density) / 100.0
+                let densityFilter = CIFilter(name: "CIColorMatrix")!
+                densityFilter.setValue(maskImage, forKey: kCIInputImageKey)
+                densityFilter.setValue(CIVector(x: 0, y: 0, z: 0, w: densityFactor), forKey: "inputAVector")
+                maskImage = densityFilter.outputImage ?? maskImage
+
+                // 4. Invert mask if requested
+                if mask.invert {
+                    let invertFilter = CIFilter.colorInvert()
+                    invertFilter.inputImage = maskImage
+                    maskImage = invertFilter.outputImage ?? maskImage
+                }
+            } else {
+                // No mask → full apply (solid white)
+                maskImage = CIImage(color: CIColor.white).cropped(to: result.extent)
+            }
+
+            // 5. Blend: adjusted (foreground) over result (background) using mask
+            let blendFilter = CIFilter.blendWithMask()
+            blendFilter.inputImage = adjusted           // foreground (adjusted layer)
+            blendFilter.backgroundImage = result        // current composite
+            blendFilter.maskImage = maskImage
+            result = blendFilter.outputImage ?? result
+        }
+
+        return result
+    }
+
     // MARK: - Node Graph Rendering
-    
+
     /// Render an image using a node graph pipeline
     func renderNodeGraph(
         _ graph: NodeGraph,

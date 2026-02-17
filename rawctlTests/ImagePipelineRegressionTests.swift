@@ -336,3 +336,100 @@ struct ImagePipelineRegressionTests {
         return sorted[mid]
     }
 }
+
+// MARK: - renderLocalNodes Tests
+
+extension ImagePipelineRegressionTests {
+
+    // Helper: create a 1x1 solid-colour CIImage
+    private func solidCIImage(red: CGFloat, green: CGFloat, blue: CGFloat, alpha: CGFloat = 1.0) -> CIImage {
+        CIImage(color: CIColor(red: red, green: green, blue: blue, alpha: alpha))
+            .cropped(to: CGRect(x: 0, y: 0, width: 1, height: 1))
+    }
+
+    @Test func test_renderLocalNodes_emptyArray_returnsBaseUnchanged() async {
+        let base = solidCIImage(red: 0.5, green: 0.5, blue: 0.5)
+        let result = await ImagePipeline.shared.renderLocalNodes([], baseImage: base, originalImage: base)
+        #expect(result.extent == base.extent)
+    }
+
+    @Test func test_renderLocalNodes_disabledNode_isSkipped() async {
+        let base = solidCIImage(red: 0.2, green: 0.2, blue: 0.2)
+
+        // Build a node that would dramatically brighten the image, but is disabled
+        var recipe = EditRecipe()
+        recipe.exposure = 10.0
+        let node = ColorNode(
+            id: UUID(),
+            name: "Disabled Bright",
+            type: .serial,
+            adjustments: recipe
+        )
+        // Default isEnabled is true — disable it
+        var disabledNode = node
+        disabledNode = ColorNode(id: node.id, name: node.name, type: node.type, adjustments: node.adjustments)
+        // We need to set isEnabled to false; ColorNode has a var so we can do:
+        var mutableNode = ColorNode(id: UUID(), name: "Disabled", type: .serial, adjustments: recipe)
+        mutableNode.isEnabled = false
+
+        let result = await ImagePipeline.shared.renderLocalNodes(
+            [mutableNode],
+            baseImage: base,
+            originalImage: base
+        )
+
+        // Extent should be unchanged
+        #expect(result.extent == base.extent)
+
+        // Sample the pixel — since node is skipped, result should match base
+        let ciContext = CIContext()
+        var basePixel = [UInt8](repeating: 0, count: 4)
+        var resultPixel = [UInt8](repeating: 0, count: 4)
+
+        ciContext.render(base,
+                         toBitmap: &basePixel,
+                         rowBytes: 4,
+                         bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+                         format: .RGBA8,
+                         colorSpace: CGColorSpaceCreateDeviceRGB())
+
+        ciContext.render(result,
+                         toBitmap: &resultPixel,
+                         rowBytes: 4,
+                         bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+                         format: .RGBA8,
+                         colorSpace: CGColorSpaceCreateDeviceRGB())
+
+        #expect(basePixel[0] == resultPixel[0])
+        #expect(basePixel[1] == resultPixel[1])
+        #expect(basePixel[2] == resultPixel[2])
+    }
+
+    @Test func test_renderLocalNodes_radialMask_doesNotCrash() async {
+        let base = solidCIImage(red: 0.3, green: 0.4, blue: 0.5)
+        let original = solidCIImage(red: 0.3, green: 0.4, blue: 0.5)
+
+        var recipe = EditRecipe()
+        recipe.exposure = 1.0
+
+        let mask = NodeMask(
+            type: .radial(centerX: 0.5, centerY: 0.5, radius: 0.3),
+            feather: 20.0,
+            density: 80.0,
+            invert: false
+        )
+
+        var node = ColorNode(id: UUID(), name: "Radial Node", type: .serial, adjustments: recipe)
+        node.mask = mask
+
+        let result = await ImagePipeline.shared.renderLocalNodes(
+            [node],
+            baseImage: base,
+            originalImage: original
+        )
+
+        // Must not crash and must return a non-empty image
+        #expect(result.extent.width > 0)
+        #expect(result.extent.height > 0)
+    }
+}
