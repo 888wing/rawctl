@@ -716,12 +716,11 @@ struct InspectorView: View {
                     .padding(.top, 4)
                 }
 
-                Divider()
+                if panelConfig.isVisible(.localAdjustments) {
+                    Divider()
 
-                // Local Adjustments section
-                Divider()
-
-                MaskingPanel(appState: appState)
+                    MaskingPanel(appState: appState)
+                }
 
                 // Snapshots section
                 DisclosureGroup("Versions") {
