@@ -82,13 +82,17 @@ struct MaskEditingToolbar: View {
 
     /// Finish editing: clears editingMaskId and hides the mask overlay.
     func doneEditing() {
-        appState.editingMaskId = nil
-        appState.showMaskOverlay = false
+        withAnimation(.easeInOut(duration: 0.2)) {
+            appState.editingMaskId = nil
+            appState.showMaskOverlay = false
+        }
     }
 
     /// Toggle the mask overlay visibility.
     func toggleOverlay() {
-        appState.showMaskOverlay.toggle()
+        withAnimation(.easeInOut(duration: 0.15)) {
+            appState.showMaskOverlay.toggle()
+        }
     }
 
     // MARK: - Helpers
