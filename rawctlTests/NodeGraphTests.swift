@@ -1035,6 +1035,106 @@ final class BlendModeOpacityTests: XCTestCase {
     }
 }
 
+// MARK: - Task 20: Phase 2 Integration Tests
+
+@MainActor
+final class Phase2IntegrationTests: XCTestCase {
+
+    func test_brushMask_fullPipeline() async throws {
+        // 1. Set up AppState with a local node using a brush mask
+        let state = AppState()
+        let assetURL = URL(fileURLWithPath: "/tmp/test_photo.arw")
+
+        var node = ColorNode(name: "Brush Retouch", type: .serial)
+
+        // 2. Simulate brush strokes → render to PNG → store in node
+        let brushMask = BrushMask()
+        brushMask.canvasSize = CGSize(width: 400, height: 300)
+        brushMask.beginStroke(at: CGPoint(x: 100, y: 100))
+        brushMask.continueStroke(to: CGPoint(x: 200, y: 150))
+        brushMask.continueStroke(to: CGPoint(x: 300, y: 100))
+        brushMask.endStroke()
+
+        let renderSize = CGSize(width: 400, height: 300)
+        let pngData = brushMask.renderToPNG(targetSize: renderSize)
+        XCTAssertNotNil(pngData, "renderToPNG must succeed")
+
+        node.mask = NodeMask(type: .brush(data: pngData!))
+
+        // 3. Adjust the node (opacity + blend mode)
+        node.opacity = 0.8
+        node.blendMode = .multiply
+
+        // 4. Add node to AppState
+        state.localNodes[assetURL] = [node]
+
+        // 5. Verify the node is stored correctly
+        let stored = state.localNodes[assetURL]?.first
+        XCTAssertNotNil(stored)
+        XCTAssertEqual(stored?.name, "Brush Retouch")
+        XCTAssertEqual(stored?.opacity ?? 0, 0.8, accuracy: 0.001)
+        XCTAssertEqual(stored?.blendMode, .multiply)
+
+        // 6. Verify brush mask PNG is stored correctly
+        if case .brush(let data) = stored?.mask?.type {
+            XCTAssertFalse(data.isEmpty, "Brush mask PNG data must be non-empty")
+        } else {
+            XCTFail("Expected .brush mask type")
+        }
+
+        // 7. Verify BrushMaskBitmap can decode the PNG
+        let image = NSImage(data: pngData!)
+        XCTAssertNotNil(image, "PNG data must decode to NSImage")
+        let bitmap = BrushMaskBitmap.from(image: image!)
+        XCTAssertNotNil(bitmap)
+        XCTAssertGreaterThan(bitmap?.width ?? 0, 0)
+        XCTAssertGreaterThan(bitmap?.height ?? 0, 0)
+
+        // 8. Codable roundtrip for the full node with brush mask
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        let data = try encoder.encode(stored)
+        let decoded = try decoder.decode(ColorNode.self, from: data)
+        XCTAssertEqual(decoded.name, "Brush Retouch")
+        XCTAssertEqual(decoded.opacity, node.opacity, accuracy: 0.001)
+        XCTAssertEqual(decoded.blendMode, node.blendMode)
+        if case .brush(let decodedData) = decoded.mask?.type {
+            XCTAssertFalse(decodedData.isEmpty)
+        } else {
+            XCTFail("Decoded node must have .brush mask type")
+        }
+    }
+
+    func test_radialMask_blendMode_opacity_pipeline() throws {
+        // Verify a radial mask node with custom blend mode + opacity roundtrips correctly
+        var node = ColorNode(name: "Radial Vignette", type: .serial)
+        node.mask = NodeMask(type: .radial(centerX: 0.5, centerY: 0.5, radius: 0.4))
+        node.mask?.feather = 30.0
+        node.mask?.density = 80.0
+        node.mask?.invert = true
+        node.opacity = 0.6
+        node.blendMode = .overlay
+
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        let encoded = try encoder.encode(node)
+        let decoded = try decoder.decode(ColorNode.self, from: encoded)
+
+        XCTAssertEqual(decoded.opacity, 0.6, accuracy: 0.001)
+        XCTAssertEqual(decoded.blendMode, .overlay)
+        XCTAssertEqual(decoded.mask?.feather ?? 0, 30.0, accuracy: 0.001)
+        XCTAssertEqual(decoded.mask?.density ?? 0, 80.0, accuracy: 0.001)
+        XCTAssertEqual(decoded.mask?.invert, true)
+        if case .radial(let cx, let cy, let r) = decoded.mask?.type {
+            XCTAssertEqual(cx, 0.5, accuracy: 0.001)
+            XCTAssertEqual(cy, 0.5, accuracy: 0.001)
+            XCTAssertEqual(r, 0.4, accuracy: 0.001)
+        } else {
+            XCTFail("Expected .radial mask type")
+        }
+    }
+}
+
 // MARK: - Task 16: ImagePipeline createBrushMask
 
 final class CreateBrushMaskTests: XCTestCase {

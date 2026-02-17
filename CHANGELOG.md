@@ -20,6 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SidecarService v6 schema**: `localNodes` saved alongside recipe in sidecar JSON; v5 sidecars load without local nodes (backward compatible)
 - **ImagePipeline.renderLocalNodes**: Applies per-node mask density and invert support; uses `CIBlendWithMask` to composite local adjustments onto the base image
 
+#### Local Adjustments (Phase 2)
+- Brush mask: paint-based local adjustment masks with `BrushMask` + `BrushMaskEditor`
+- `.brush(data:)` MaskType case stores PNG bitmap in sidecar via `BrushMaskBitmap`
+- Interactive brush canvas (`MaskCanvasView`) with eraser, undo, clear, size control
+- Keyboard shortcut `M` toggles mask overlay during mask editing
+- Blend mode and opacity controls per local adjustment node (UI, pipeline support future)
+- Performance: brush mask renders capped at 2048px long edge to keep main thread responsive
+- Stroke history capped at 200 to prevent unbounded memory growth
+
 #### Crop System Optimization
 - **Draw new crop area**: Drag on dark region outside existing crop frame to draw a completely new crop area
 - **Aspect ratio constraint while drawing**: New crop areas respect locked aspect ratios during drawing
