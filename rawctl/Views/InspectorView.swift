@@ -718,6 +718,11 @@ struct InspectorView: View {
 
                 Divider()
 
+                // Local Adjustments section
+                Divider()
+
+                MaskingPanel(appState: appState)
+
                 // Snapshots section
                 DisclosureGroup("Versions") {
                     VStack(alignment: .leading, spacing: 8) {

@@ -495,3 +495,14 @@ final class LocalAdjustmentRowTests: XCTestCase {
         XCTAssertEqual(state.currentLocalNodes.first?.isEnabled, false)
     }
 }
+
+// MARK: - InspectorIntegrationTests (Task 10)
+
+@MainActor
+final class InspectorIntegrationTests: XCTestCase {
+    func test_inspectorView_compiles_withMaskingPanel() {
+        let state = AppState()
+        let _ = InspectorView(appState: state)
+        // Smoke test: just verify it compiles and constructs
+    }
+}
