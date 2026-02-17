@@ -32,6 +32,7 @@ actor RenderQueue {
         let assetId: UUID
         let asset: PhotoAsset
         let recipe: EditRecipe
+        let localNodes: [ColorNode]
         let priority: Priority
         let maxSize: CGFloat
         let completion: @Sendable (NSImage?) async -> Void
@@ -51,6 +52,7 @@ actor RenderQueue {
     func enqueue(
         asset: PhotoAsset,
         recipe: EditRecipe,
+        localNodes: [ColorNode] = [],
         priority: Priority,
         maxSize: CGFloat = 1600,
         completion: @escaping @Sendable (NSImage?) async -> Void
@@ -62,6 +64,7 @@ actor RenderQueue {
             assetId: asset.id,
             asset: asset,
             recipe: recipe,
+            localNodes: localNodes,
             priority: priority,
             maxSize: maxSize,
             completion: completion
@@ -101,7 +104,8 @@ actor RenderQueue {
             let result = await ImagePipeline.shared.renderPreview(
                 for: job.asset,
                 recipe: job.recipe,
-                maxSize: job.maxSize
+                maxSize: job.maxSize,
+                localNodes: job.localNodes
             )
             
             // Call completion
@@ -119,6 +123,7 @@ actor RenderQueue {
     func renderUrgent(
         asset: PhotoAsset,
         recipe: EditRecipe,
+        localNodes: [ColorNode] = [],
         maxSize: CGFloat = 1600
     ) async -> NSImage? {
         // Cancel lower priority jobs for this asset
@@ -128,7 +133,8 @@ actor RenderQueue {
         return await ImagePipeline.shared.renderPreview(
             for: asset,
             recipe: recipe,
-            maxSize: maxSize
+            maxSize: maxSize,
+            localNodes: localNodes
         )
     }
     

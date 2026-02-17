@@ -267,6 +267,7 @@ struct SmartExportSheet: View {
 
         for (index, asset) in assetsToExport.enumerated() {
             let recipe = appState.recipes[asset.id] ?? EditRecipe()
+            let localNodes = appState.localNodes[asset.url] ?? []
 
             // Determine subfolder based on organization mode
             let targetFolder = ExportUtilities.determineTargetFolder(
@@ -298,7 +299,8 @@ struct SmartExportSheet: View {
             if let image = await ImagePipeline.shared.renderPreview(
                 for: asset,
                 recipe: recipe,
-                maxSize: maxSizeValue
+                maxSize: maxSizeValue,
+                localNodes: localNodes
             ) {
                 if let tiffData = image.tiffRepresentation,
                    let bitmap = NSBitmapImageRep(data: tiffData),

@@ -239,7 +239,8 @@ struct CompareView: View {
     private func loadImage(for index: Int) async -> NSImage? {
         guard let asset = assets[safe: index] else { return nil }
         let recipe = appState.recipes[asset.id] ?? EditRecipe()
-        return await ImagePipeline.shared.renderPreview(for: asset, recipe: recipe, maxSize: 1200)
+        let localNodes = appState.localNodes[asset.url] ?? []
+        return await ImagePipeline.shared.renderPreview(for: asset, recipe: recipe, maxSize: 1200, localNodes: localNodes)
     }
 }
 

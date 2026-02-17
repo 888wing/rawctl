@@ -100,6 +100,7 @@ actor ExportQueueManager {
         let id: UUID = UUID()
         let assets: [PhotoAsset]
         let recipes: [UUID: EditRecipe]
+        let localNodes: [URL: [ColorNode]]
         let preset: ExportPreset
         let destination: URL
         let organization: ExportOrganizationMode
@@ -120,6 +121,7 @@ actor ExportQueueManager {
     func enqueue(
         assets: [PhotoAsset],
         recipes: [UUID: EditRecipe],
+        localNodes: [URL: [ColorNode]] = [:],
         preset: ExportPreset,
         destination: URL,
         organization: ExportOrganizationMode
@@ -127,6 +129,7 @@ actor ExportQueueManager {
         let item = ExportQueueItem(
             assets: assets,
             recipes: recipes,
+            localNodes: localNodes,
             preset: preset,
             destination: destination,
             organization: organization
@@ -185,10 +188,12 @@ actor ExportQueueManager {
 
             // Render and export
             let maxSizeValue = CGFloat(item.preset.maxSize ?? 4000)
+            let nodeList = item.localNodes[asset.url] ?? []
             if let image = await ImagePipeline.shared.renderPreview(
                 for: asset,
                 recipe: recipe,
-                maxSize: maxSizeValue
+                maxSize: maxSizeValue,
+                localNodes: nodeList
             ) {
                 let outputName = asset.url.deletingPathExtension().lastPathComponent + ".jpg"
                 let outputURL = targetFolder.appendingPathComponent(outputName)
