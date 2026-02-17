@@ -80,6 +80,9 @@ class BrushMask: ObservableObject {
     /// End current stroke
     func endStroke() {
         if let stroke = currentStroke, stroke.isDrawable {
+            if strokes.count >= 200 {
+                strokes.removeFirst()  // Drop oldest stroke to keep count bounded
+            }
             strokes.append(stroke)
         }
         currentStroke = nil

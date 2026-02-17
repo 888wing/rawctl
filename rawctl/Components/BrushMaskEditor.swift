@@ -54,14 +54,31 @@ struct BrushMaskEditor: View {
 
     // MARK: - Commit
 
+    /// Render at reduced resolution (≤2048px long edge) for interactive feedback;
+    /// full-resolution rendering would block the main thread for large RAW files.
+    private var renderSize: CGSize {
+        let maxPx: CGFloat = 2048
+        let longEdge = max(imageSize.width, imageSize.height)
+        guard longEdge > maxPx else { return imageSize }
+        let scale = maxPx / longEdge
+        return CGSize(width: (imageSize.width * scale).rounded(), height: (imageSize.height * scale).rounded())
+    }
+
     /// Renders current brush strokes to PNG and stores the bytes in node.mask.
     func commitBrushMask() {
-        guard let pngData = brushMask.renderToPNG(targetSize: imageSize) else { return }
+        // When the canvas is empty, clear the mask entirely rather than storing an
+        // all-black (no-effect) PNG which wastes space in the sidecar.
+        guard !brushMask.isEmpty else {
+            node.mask = nil
+            return
+        }
+        guard let pngData = brushMask.renderToPNG(targetSize: renderSize) else { return }
         if node.mask == nil {
             node.mask = NodeMask(type: .brush(data: pngData))
         } else {
             node.mask?.type = .brush(data: pngData)
         }
-        appState.updateLocalNode(node)
+        // Note: the binding setter (set: { appState.updateLocalNode($0) }) in SingleView
+        // already calls updateLocalNode on every write to `node`, so no explicit call is needed here.
     }
 }
