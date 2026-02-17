@@ -918,6 +918,39 @@ final class BrushMaskEditorTests: XCTestCase {
     }
 }
 
+// MARK: - Task 18: Keyboard Shortcut M — Mask Overlay Toggle
+
+@MainActor
+final class MaskOverlayShortcutTests: XCTestCase {
+
+    func test_showMaskOverlay_toggles_via_toggleOverlay() {
+        // Verify the toggleOverlay method works correctly
+        let state = AppState()
+        state.showMaskOverlay = false
+
+        let toolbar = MaskEditingToolbar(appState: state)
+        toolbar.toggleOverlay()
+
+        XCTAssertTrue(state.showMaskOverlay)
+
+        toolbar.toggleOverlay()
+        XCTAssertFalse(state.showMaskOverlay)
+    }
+
+    func test_doneEditing_clearsEditingMaskId() {
+        // Verify doneEditing works (shortcut M should not fire after Done)
+        let state = AppState()
+        state.editingMaskId = UUID()
+        state.showMaskOverlay = true
+
+        let toolbar = MaskEditingToolbar(appState: state)
+        toolbar.doneEditing()
+
+        XCTAssertNil(state.editingMaskId)
+        XCTAssertFalse(state.showMaskOverlay)
+    }
+}
+
 // MARK: - Task 16: ImagePipeline createBrushMask
 
 final class CreateBrushMaskTests: XCTestCase {

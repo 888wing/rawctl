@@ -48,7 +48,8 @@ struct MaskEditingToolbar: View {
             }
             .buttonStyle(.plain)
             .foregroundColor(appState.showMaskOverlay ? .accentColor : .white)
-            .help("Toggle mask overlay visibility")
+            .help("Toggle mask overlay visibility (M)")
+            .keyboardShortcut("m", modifiers: [])
 
             Divider()
                 .frame(height: 20)
