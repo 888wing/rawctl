@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import AppKit
 
 /// Editor view for drawing brush masks over the photo for a local adjustment node.
 ///
@@ -18,10 +19,21 @@ struct BrushMaskEditor: View {
     let imageSize: CGSize  // Original image pixel dimensions
 
     @StateObject private var brushMask = BrushMask()
+    @State private var baseMaskData: Data?
+    @State private var baseMaskPreview: NSImage?
     @State private var showBrushToolbar = true
 
     var body: some View {
         ZStack {
+            if let preview = baseMaskPreview {
+                Image(nsImage: preview)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .colorMultiply(.red)
+                    .opacity(0.25)
+                    .allowsHitTesting(false)
+            }
+
             // Canvas fills available space; no background image — the photo is behind the overlay
             MaskCanvasView(
                 mask: brushMask,
@@ -38,6 +50,8 @@ struct BrushMaskEditor: View {
                         mask: brushMask,
                         onClear: {
                             brushMask.clear()
+                            baseMaskData = nil
+                            baseMaskPreview = nil
                             commitBrushMask()
                         },
                         onUndo: {
@@ -48,8 +62,9 @@ struct BrushMaskEditor: View {
                 }
             }
         }
-        // No onAppear reconstruction from PNG — strokes cannot be recovered from a rasterised bitmap.
-        // The canvas starts fresh each time the mask editor is opened.
+        .onAppear {
+            loadBaseMaskFromNode()
+        }
     }
 
     // MARK: - Commit
@@ -66,13 +81,22 @@ struct BrushMaskEditor: View {
 
     /// Renders current brush strokes to PNG and stores the bytes in node.mask.
     func commitBrushMask() {
-        // When the canvas is empty, clear the mask entirely rather than storing an
-        // all-black (no-effect) PNG which wastes space in the sidecar.
-        guard !brushMask.isEmpty else {
-            node.mask = nil
-            return
+        let hasStrokeChanges = !brushMask.isEmpty
+        let deltaData = hasStrokeChanges ? brushMask.renderDeltaToPNG(targetSize: renderSize) : nil
+        let fullStrokeData = hasStrokeChanges ? brushMask.renderToPNG(targetSize: renderSize) : nil
+
+        let finalData: Data?
+        if let base = baseMaskData, let delta = deltaData {
+            finalData = compositeMask(base: base, delta: delta, targetSize: renderSize)
+        } else if let base = baseMaskData {
+            finalData = base
+        } else if let full = fullStrokeData {
+            finalData = full
+        } else {
+            finalData = blackMaskData(targetSize: renderSize)
         }
-        guard let pngData = brushMask.renderToPNG(targetSize: renderSize) else { return }
+
+        guard let pngData = finalData else { return }
         if node.mask == nil {
             node.mask = NodeMask(type: .brush(data: pngData))
         } else {
@@ -80,5 +104,46 @@ struct BrushMaskEditor: View {
         }
         // Note: the binding setter (set: { appState.updateLocalNode($0) }) in SingleView
         // already calls updateLocalNode on every write to `node`, so no explicit call is needed here.
+    }
+
+    private func loadBaseMaskFromNode() {
+        guard case .brush(let data) = node.mask?.type, !data.isEmpty else {
+            baseMaskData = nil
+            baseMaskPreview = nil
+            return
+        }
+        baseMaskData = data
+        baseMaskPreview = NSImage(data: data)
+    }
+
+    private func compositeMask(base: Data, delta: Data, targetSize: CGSize) -> Data? {
+        guard let baseImage = NSImage(data: base), let deltaImage = NSImage(data: delta) else { return nil }
+        let rect = NSRect(origin: .zero, size: targetSize)
+        let image = NSImage(size: targetSize)
+        image.lockFocus()
+        NSColor.black.setFill()
+        rect.fill()
+        baseImage.draw(in: rect)
+        deltaImage.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1.0)
+        image.unlockFocus()
+        return pngData(from: image)
+    }
+
+    private func blackMaskData(targetSize: CGSize) -> Data? {
+        let rect = NSRect(origin: .zero, size: targetSize)
+        let image = NSImage(size: targetSize)
+        image.lockFocus()
+        NSColor.black.setFill()
+        rect.fill()
+        image.unlockFocus()
+        return pngData(from: image)
+    }
+
+    private func pngData(from image: NSImage) -> Data? {
+        guard let tiffData = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiffData) else {
+            return nil
+        }
+        return bitmap.representation(using: .png, properties: [:])
     }
 }

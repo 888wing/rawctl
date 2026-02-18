@@ -446,11 +446,25 @@ extension ImagePipelineRegressionTests {
         #expect(result.extent.height > 0)
     }
 
-    /// Regression: createBrushMask must not crash with empty data and must return correct extent.
-    @Test func test_createBrushMask_emptyData_returnsWhiteFallback() async {
+    /// Regression: createBrushMask must not crash with empty data and should return black no-op mask.
+    @Test func test_createBrushMask_emptyData_returnsBlackNoOpFallback() async {
         let extent = CGRect(x: 0, y: 0, width: 400, height: 300)
         let result = await ImagePipeline.shared.createBrushMask(from: Data(), targetExtent: extent)
         #expect(result.extent == extent)
+
+        let ciContext = CIContext(options: nil)
+        var pixel = [UInt8](repeating: 0, count: 4)
+        ciContext.render(
+            result,
+            toBitmap: &pixel,
+            rowBytes: 4,
+            bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+            format: .RGBA8,
+            colorSpace: CGColorSpaceCreateDeviceRGB()
+        )
+        #expect(pixel[0] < 2)
+        #expect(pixel[1] < 2)
+        #expect(pixel[2] < 2)
     }
 
     /// Regression: createBrushMask with valid PNG data must return image at target extent.

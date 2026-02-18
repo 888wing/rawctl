@@ -160,7 +160,7 @@ struct SidebarView: View {
                     folderManager.updateFolderState(source.id, isLoaded: true, assetCount: assets.count)
                     // Select first photo immediately for responsive UI
                     if let first = appState.assets.first {
-                        appState.selectedAssetId = first.id
+                        appState.select(first, switchToSingleView: false)
                     }
                 }
                 // Load recipes in background (non-blocking)
@@ -282,7 +282,7 @@ struct SidebarView: View {
                     appState.recipes = [:]
                     // Select first photo immediately for responsive UI
                     if let first = appState.assets.first {
-                        appState.selectedAssetId = first.id
+                        appState.select(first, switchToSingleView: false)
                     }
                 }
                 // Load recipes in background (non-blocking)

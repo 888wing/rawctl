@@ -70,6 +70,7 @@ final class AppState: ObservableObject {
     private var recipeLoadTask: Task<Void, Never>?
     private var thumbnailPreloadTask: Task<Void, Never>?
     private var thumbnailAutoHideTask: Task<Void, Never>?
+    private var pendingRecipeSaveTask: Task<Void, Never>?
     private let thumbnailWarmupDelayNs: UInt64 = 120_000_000
     
     // MARK: - Default Folder
@@ -243,7 +244,7 @@ final class AppState: ObservableObject {
 
             // Select first asset
             if let first = assets.first {
-                selectedAssetId = first.id
+                select(first, switchToSingleView: false)
             }
 
             // Load recipes and thumbnails in cancellable background tasks.
@@ -449,13 +450,18 @@ final class AppState: ObservableObject {
         var nodes = localNodes[url] ?? []
         nodes.append(node)
         localNodes[url] = nodes
+        saveCurrentRecipeDebounced()
     }
 
     /// Remove a local node by id for the current photo
     func removeLocalNode(id: UUID) {
         guard let url = selectedAsset?.url else { return }
         localNodes[url]?.removeAll { $0.id == id }
-        saveCurrentRecipe()
+        if editingMaskId == id {
+            editingMaskId = nil
+            showMaskOverlay = false
+        }
+        saveCurrentRecipeDebounced()
     }
 
     /// Update a local node's adjustments or mask
@@ -463,7 +469,7 @@ final class AppState: ObservableObject {
         guard let url = selectedAsset?.url else { return }
         guard let index = localNodes[url]?.firstIndex(where: { $0.id == node.id }) else { return }
         localNodes[url]?[index] = node
-        saveCurrentRecipe()
+        saveCurrentRecipeDebounced()
     }
 
     // MARK: - Memory Card & Auto Export
@@ -793,7 +799,7 @@ final class AppState: ObservableObject {
         }
 
         if let first = filteredAssets.first ?? assets.first {
-            selectedAssetId = first.id
+            select(first, switchToSingleView: false)
             return true
         }
 
@@ -817,9 +823,16 @@ final class AppState: ObservableObject {
     
     // MARK: - Actions
     
-    func select(_ asset: PhotoAsset) {
-        // Save current recipe before switching
-        saveCurrentRecipe()
+    func select(_ asset: PhotoAsset, switchToSingleView: Bool = true) {
+        let isSwitchingAsset = selectedAssetId != asset.id
+        // Save and flush current recipe before switching.
+        flushPendingRecipeSave()
+
+        // Reset mask editing state when switching asset.
+        if isSwitchingAsset {
+            editingMaskId = nil
+            showMaskOverlay = false
+        }
 
         selectedAssetId = asset.id
 
@@ -850,7 +863,9 @@ final class AppState: ObservableObject {
 
         // Switch view mode after recipe is set up
         // This ensures SingleView has data available immediately
-        viewMode = .single
+        if switchToSingleView {
+            viewMode = .single
+        }
     }
     
     func updateRecipe(_ recipe: EditRecipe) {
@@ -859,22 +874,65 @@ final class AppState: ObservableObject {
         saveCurrentRecipe()
     }
     
+    private struct RecipeSavePayload {
+        let asset: PhotoAsset
+        let recipe: EditRecipe
+        let snapshots: [RecipeSnapshot]
+        let nodes: [ColorNode]?
+    }
+
+    private func currentRecipeSavePayload() -> RecipeSavePayload? {
+        guard let asset = selectedAsset else { return nil }
+        return RecipeSavePayload(
+            asset: asset,
+            recipe: recipes[asset.id] ?? EditRecipe(),
+            snapshots: snapshots[asset.id] ?? [],
+            nodes: localNodes[asset.url]
+        )
+    }
+
+    private func persistRecipe(_ payload: RecipeSavePayload) async {
+        // Use save(recipe:localNodes:for:) so localNodes are persisted alongside the recipe.
+        // This method preserves existing sidecar fields (snapshots, AI edits) by reading
+        // the current sidecar before writing. Falls back to the debounced path for snapshots.
+        do {
+            try await SidecarService.shared.save(
+                recipe: payload.recipe,
+                localNodes: payload.nodes,
+                for: payload.asset.url
+            )
+        } catch {
+            print("[AppState] save(recipe:localNodes:) failed: \(error) — localNodes will NOT be persisted in fallback path.")
+            await SidecarService.shared.saveRecipe(payload.recipe, snapshots: payload.snapshots, for: payload.asset.url)
+        }
+    }
+
     func saveCurrentRecipe() {
-        guard let asset = selectedAsset else { return }
-        let recipe = recipes[asset.id] ?? EditRecipe()
-        let snapshots = snapshots[asset.id] ?? []
-        let nodes = localNodes[asset.url]
+        pendingRecipeSaveTask?.cancel()
+        pendingRecipeSaveTask = nil
+        guard let payload = currentRecipeSavePayload() else { return }
         Task {
-            // Use save(recipe:localNodes:for:) so localNodes are persisted alongside the recipe.
-            // This method preserves existing sidecar fields (snapshots, AI edits) by reading
-            // the current sidecar before writing. Falls back to the debounced path for snapshots.
-            do {
-                try await SidecarService.shared.save(recipe: recipe, localNodes: nodes, for: asset.url)
-            } catch {
-                print("[AppState] save(recipe:localNodes:) failed: \(error) — localNodes will NOT be persisted in fallback path.")
-                await SidecarService.shared.saveRecipe(recipe, snapshots: snapshots, for: asset.url)
+            await persistRecipe(payload)
+        }
+    }
+
+    func saveCurrentRecipeDebounced() {
+        pendingRecipeSaveTask?.cancel()
+        guard let payload = currentRecipeSavePayload() else { return }
+        pendingRecipeSaveTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled else { return }
+            await self?.persistRecipe(payload)
+            await MainActor.run {
+                self?.pendingRecipeSaveTask = nil
             }
         }
+    }
+
+    func flushPendingRecipeSave() {
+        pendingRecipeSaveTask?.cancel()
+        pendingRecipeSaveTask = nil
+        saveCurrentRecipe()
     }
     
     // MARK: - Undo/Redo Actions
@@ -973,8 +1031,10 @@ final class AppState: ObservableObject {
     }
     
     func clearSelection() {
-        saveCurrentRecipe()
+        flushPendingRecipeSave()
         selectedAssetId = nil
+        editingMaskId = nil
+        showMaskOverlay = false
         viewMode = .grid
         comparisonMode = .none
         isZoomed = false
@@ -1178,7 +1238,7 @@ final class AppState: ObservableObject {
 
             // Select the first asset immediately so view switching/shortcuts work while edits load.
             if let first = scannedAssets.first {
-                selectedAssetId = first.id
+                select(first, switchToSingleView: false)
                 e2eFirstSelectionLatencyMs = durationMilliseconds(start.duration(to: clock.now))
             } else {
                 e2eFirstSelectionLatencyMs = 0
@@ -1512,7 +1572,7 @@ extension AppState {
 
         // Find asset by path
         if let asset = assets.first(where: { $0.url.path == photoPath }) {
-            selectedAssetId = asset.id
+            select(asset, switchToSingleView: viewMode == .single)
         }
     }
 

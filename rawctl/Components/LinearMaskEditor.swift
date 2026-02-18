@@ -36,33 +36,38 @@ struct LinearMaskEditor: View {
         GeometryReader { geometry in
             let size = geometry.size
             let params = linearParams
-            let angleRad = params.angle * .pi / 180.0
-
-            // Position of the center line in view space (along the perpendicular axis)
-            let posY = CGFloat(params.position) * size.height
-
-            // Falloff half-height in the perpendicular direction (view pixels)
-            let falloffHalf = CGFloat(params.falloff / 100.0) * min(size.width, size.height) * 0.5
-
-            let cosθ = CGFloat(cos(angleRad))
-            let sinθ = CGFloat(sin(angleRad))
+            let center = LinearMaskGeometry.centerPoint(
+                in: size,
+                angle: params.angle,
+                position: params.position
+            )
+            let direction = LinearMaskGeometry.directionVector(angle: params.angle)
+            let normal = LinearMaskGeometry.normalVector(angle: params.angle)
+            let falloffHalf = LinearMaskGeometry.halfFalloffPixels(
+                in: size,
+                falloff: params.falloff
+            )
+            let rotationAnchor = UnitPoint(
+                x: size.width > 0 ? center.x / size.width : 0.5,
+                y: size.height > 0 ? center.y / size.height : 0.5
+            )
 
             // ──────────────────────────────────────────────────────
             // Handle screen-space positions (pre-rotation space)
             // ──────────────────────────────────────────────────────
-            let centerHandle = CGPoint(x: size.width / 2, y: posY)
+            let centerHandle = center
 
             // Rotation handle: along the center line, 40px from right edge
             let armLen = max(0, size.width / 2 - 28)
             let rotHandle = CGPoint(
-                x: size.width / 2 + armLen * cosθ,
-                y: posY + armLen * sinθ
+                x: center.x + armLen * direction.dx,
+                y: center.y + armLen * direction.dy
             )
 
             // Falloff handle: at the upper boundary line midpoint
             let falloffHandle = CGPoint(
-                x: size.width / 2 + falloffHalf * sinθ,
-                y: posY - falloffHalf * cosθ
+                x: center.x - falloffHalf * normal.dx,
+                y: center.y - falloffHalf * normal.dy
             )
 
             ZStack {
@@ -70,43 +75,43 @@ struct LinearMaskEditor: View {
                 Rectangle()
                     .fill(Color.white.opacity(0.08))
                     .frame(width: size.width, height: max(1, falloffHalf * 2))
-                    .position(x: size.width / 2, y: posY)
+                    .position(x: center.x, y: center.y)
                     .rotationEffect(
                         Angle(degrees: params.angle),
-                        anchor: UnitPoint(x: 0.5, y: params.position)
+                        anchor: rotationAnchor
                     )
                     .allowsHitTesting(false)
 
                 // Leading boundary line
                 Path { path in
-                    let y = posY - falloffHalf
+                    let y = center.y - falloffHalf
                     path.move(to: CGPoint(x: 0, y: y))
                     path.addLine(to: CGPoint(x: size.width, y: y))
                 }
                 .stroke(Color.white.opacity(0.85), lineWidth: 1.5)
                 .rotationEffect(
                     Angle(degrees: params.angle),
-                    anchor: UnitPoint(x: 0.5, y: params.position)
+                    anchor: rotationAnchor
                 )
                 .allowsHitTesting(false)
 
                 // Trailing boundary line
                 Path { path in
-                    let y = posY + falloffHalf
+                    let y = center.y + falloffHalf
                     path.move(to: CGPoint(x: 0, y: y))
                     path.addLine(to: CGPoint(x: size.width, y: y))
                 }
                 .stroke(Color.white.opacity(0.85), lineWidth: 1.5)
                 .rotationEffect(
                     Angle(degrees: params.angle),
-                    anchor: UnitPoint(x: 0.5, y: params.position)
+                    anchor: rotationAnchor
                 )
                 .allowsHitTesting(false)
 
                 // Dashed center reference line
                 Path { path in
-                    path.move(to: CGPoint(x: 0, y: posY))
-                    path.addLine(to: CGPoint(x: size.width, y: posY))
+                    path.move(to: CGPoint(x: 0, y: center.y))
+                    path.addLine(to: CGPoint(x: size.width, y: center.y))
                 }
                 .stroke(
                     Color.white.opacity(0.5),
@@ -114,7 +119,7 @@ struct LinearMaskEditor: View {
                 )
                 .rotationEffect(
                     Angle(degrees: params.angle),
-                    anchor: UnitPoint(x: 0.5, y: params.position)
+                    anchor: rotationAnchor
                 )
                 .allowsHitTesting(false)
 
@@ -175,20 +180,12 @@ struct LinearMaskEditor: View {
     /// Move the gradient center line to the dragged view-space location.
     /// Position is measured perpendicularly to the gradient bands.
     func movePositionTo(_ location: CGPoint, in size: CGSize) {
-        guard size.height > 0 else { return }
         let params = linearParams
-        let θ = params.angle * .pi / 180.0
-        let posY = params.position * Double(size.height)
-
-        // Decompose the drag vector into parallel (along bands) and perpendicular components.
-        let dx = Double(location.x) - Double(size.width) / 2
-        let dy = Double(location.y) - posY
-
-        // Perpendicular direction to the bands: (-sin θ, cos θ)
-        // New perpendicular position offset from centre of view
-        let perpComponent = -dx * sin(θ) + dy * cos(θ)
-        let newPosY = Double(size.height) / 2 + perpComponent
-        let newPosition = min(1.0, max(0.0, newPosY / Double(size.height)))
+        let newPosition = LinearMaskGeometry.projectedPosition(
+            from: location,
+            in: size,
+            angle: params.angle
+        )
 
         if case .linear(let a, _, let f) = node.mask?.type {
             node.mask?.type = .linear(angle: a, position: newPosition, falloff: f)
@@ -198,9 +195,9 @@ struct LinearMaskEditor: View {
     /// Rotate the gradient by computing the angle of the drag point relative to the center line.
     func rotateAngleTo(_ location: CGPoint, in size: CGSize) {
         let params = linearParams
-        let posY = CGFloat(params.position) * size.height
-        let dx = location.x - size.width / 2
-        let dy = location.y - posY
+        let center = LinearMaskGeometry.centerPoint(in: size, angle: params.angle, position: params.position)
+        let dx = location.x - center.x
+        let dy = location.y - center.y
         var degrees = atan2(dy, dx) * 180 / .pi
         // Normalise to 0–360
         if degrees < 0 { degrees += 360 }
@@ -213,14 +210,14 @@ struct LinearMaskEditor: View {
     func changeFalloffTo(_ location: CGPoint, in size: CGSize) {
         guard size.width > 0, size.height > 0 else { return }
         let params = linearParams
-        let θ = params.angle * .pi / 180.0
-        let posY = CGFloat(params.position) * size.height
+        let normal = LinearMaskGeometry.normalVector(angle: params.angle)
+        let center = LinearMaskGeometry.centerPoint(in: size, angle: params.angle, position: params.position)
 
-        let dx = location.x - size.width / 2
-        let dy = location.y - posY
+        let dx = location.x - center.x
+        let dy = location.y - center.y
 
         // Perpendicular distance from the centre line (in view pixels)
-        let perpDist = abs(-Double(dx) * sin(θ) + Double(dy) * cos(θ))
+        let perpDist = abs(Double(dx) * Double(normal.dx) + Double(dy) * Double(normal.dy))
 
         // Normalize to percentage of smaller dimension (0–100)
         let minDim = Double(min(size.width, size.height))

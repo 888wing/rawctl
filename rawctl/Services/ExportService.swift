@@ -32,14 +32,16 @@ actor ExportService {
     func startExport(
         assets: [PhotoAsset],
         recipes: [UUID: EditRecipe],
-        settings: ExportSettings
+        settings: ExportSettings,
+        localNodesByURL: [URL: [ColorNode]] = [:]
     ) async {
         guard let destination = settings.destinationFolder else { return }
         
         // Create jobs
         jobs = assets.map { asset in
             let recipe = recipes[asset.id] ?? EditRecipe()
-            return ExportJob(asset: asset, recipe: recipe, settings: settings)
+            let localNodes = localNodesByURL[asset.url] ?? []
+            return ExportJob(asset: asset, recipe: recipe, localNodes: localNodes, settings: settings)
         }
         
         let totalCount = jobs.count
@@ -110,7 +112,8 @@ actor ExportService {
             for: job.asset,
             recipe: job.recipe,
             maxSize: maxSize,
-            useRecipeResize: useRecipeResize
+            useRecipeResize: useRecipeResize,
+            localNodes: job.localNodes
         ) else {
             print("[Export] ERROR: renderForExport returned nil")
             throw ExportError.renderFailed

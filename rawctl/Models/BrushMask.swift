@@ -107,16 +107,24 @@ class BrushMask: ObservableObject {
     
     // MARK: - Rendering
     
-    /// Render mask to NSImage (white strokes on black background)
-    /// - Parameter targetSize: The output image size (typically original image size)
-    func render(to targetSize: CGSize) -> NSImage {
+    /// Render mask to NSImage.
+    /// - Parameters:
+    ///   - targetSize: The output image size (typically original image size)
+    ///   - includeBackground: true renders black background + strokes;
+    ///     false renders transparent background with stroke pixels only.
+    func render(to targetSize: CGSize, includeBackground: Bool = true) -> NSImage {
         let image = NSImage(size: targetSize)
         
         image.lockFocus()
         
-        // Black background (areas to keep)
-        NSColor.black.setFill()
-        NSRect(origin: .zero, size: targetSize).fill()
+        if includeBackground {
+            // Black background (areas to keep)
+            NSColor.black.setFill()
+            NSRect(origin: .zero, size: targetSize).fill()
+        } else {
+            NSColor.clear.setFill()
+            NSRect(origin: .zero, size: targetSize).fill()
+        }
         
         // Calculate scale from canvas to target
         let scaleX = targetSize.width / max(canvasSize.width, 1)
@@ -183,13 +191,25 @@ class BrushMask: ObservableObject {
     
     /// Render to PNG data
     func renderToPNG(targetSize: CGSize) -> Data? {
-        let image = render(to: targetSize)
+        let image = render(to: targetSize, includeBackground: true)
         
         guard let tiffData = image.tiffRepresentation,
               let bitmap = NSBitmapImageRep(data: tiffData) else {
             return nil
         }
         
+        return bitmap.representation(using: .png, properties: [:])
+    }
+
+    /// Render stroke changes only (transparent background) to PNG.
+    func renderDeltaToPNG(targetSize: CGSize) -> Data? {
+        let image = render(to: targetSize, includeBackground: false)
+
+        guard let tiffData = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiffData) else {
+            return nil
+        }
+
         return bitmap.representation(using: .png, properties: [:])
     }
     

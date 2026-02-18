@@ -1512,11 +1512,13 @@ actor ImagePipeline {
         for asset: PhotoAsset,
         recipe: EditRecipe,
         maxSize: CGFloat? = nil,
-        useRecipeResize: Bool = true
+        useRecipeResize: Bool = true,
+        localNodes: [ColorNode] = []
     ) async -> CGImage? {
         let ext = asset.url.pathExtension.lowercased()
 
         var outputImage: CIImage?
+        var localNodeBaseImage: CIImage?
 
         if PhotoAsset.rawExtensions.contains(ext) {
             // RAW export with full quality
@@ -1529,16 +1531,27 @@ actor ImagePipeline {
                 print("[Export] RAW filter produced no output")
                 return nil
             }
-            outputImage = applyPostRAWRecipe(recipe, to: rawOutput)
+            let postRecipe = applyPostRAWRecipe(recipe, to: rawOutput)
+            outputImage = postRecipe
+            localNodeBaseImage = postRecipe
         } else {
             guard let loaded = await loadImage(from: asset.url) else {
                 print("[Export] Failed to load image")
                 return nil
             }
+            localNodeBaseImage = loaded
             outputImage = applyFullRecipe(recipe, to: loaded)
         }
 
         guard var image = outputImage else { return nil }
+
+        if !localNodes.isEmpty, let originalImage = localNodeBaseImage {
+            image = await renderLocalNodes(
+                localNodes,
+                baseImage: image,
+                originalImage: originalImage
+            )
+        }
 
         // Apply recipe resize settings only when requested
         if useRecipeResize && recipe.resize.hasEffect {
@@ -1701,10 +1714,19 @@ actor ImagePipeline {
                 maskImage = CIImage(color: CIColor.white).cropped(to: result.extent)
             }
 
-            // 5. Blend: adjusted (foreground) over result (background) using mask
+            // 5. Compute node blend result (mode + opacity) before mask gating.
+            let blendedNode = blendImages(
+                background: result,
+                foreground: adjusted,
+                mode: node.blendMode,
+                opacity: node.opacity,
+                mask: nil
+            )
+
+            // 6. Apply spatial mask to mix blended node back to current composite.
             let blendFilter = CIFilter.blendWithMask()
-            blendFilter.inputImage = adjusted           // foreground (adjusted layer)
-            blendFilter.backgroundImage = result        // current composite
+            blendFilter.inputImage = blendedNode
+            blendFilter.backgroundImage = result
             blendFilter.maskImage = maskImage
             result = blendFilter.outputImage ?? result
         }
@@ -1896,37 +1918,23 @@ actor ImagePipeline {
     /// Create linear gradient mask
     ///
     /// - Parameters:
-    ///   - angle: Gradient direction in degrees (0 = horizontal, 90 = vertical).
-    ///   - position: Normalized centre position of the transition (0–1, default 0.5).
-    ///   - falloff: Width of the gradient transition zone as a percentage of the
-    ///     shorter image dimension (0 = hard edge, 100 = full-image soft blend).
+    ///   - angle: Mask band orientation in degrees.
+    ///   - position: Normalized centre position in SwiftUI space (0 = top, 1 = bottom).
+    ///   - falloff: Transition width percentage of shorter image dimension.
     private func createLinearMask(extent: CGRect, angle: Double, position: Double, falloff: Double) -> CIImage {
-        let radians = angle * .pi / 180.0
-        let centerX = extent.midX
-        let centerY = extent.midY
-
-        // `position` is stored in SwiftUI convention (0 = top, 1 = bottom).
-        // Core Image Y increases upward, so flip: (1 - position) gives distance from bottom.
-        // The offset shifts the centre line away from the image midpoint.
-        let length = max(extent.width, extent.height)
-        let offset = ((1.0 - position) - 0.5) * Double(length)
-
-        // falloff (0–100) controls the perpendicular distance between point0 and point1.
-        // At 100 the transition spans the full image; at 0 it collapses to a hard edge (1 px).
-        let falloffPixels = max(1.0, Double(extent.width) * (falloff / 100.0))
-        let halfFalloff = falloffPixels / 2.0
-
-        // point0 = white end of gradient, point1 = black end.
-        // They are placed halfFalloff pixels on either side of the centre line,
-        // measured along the gradient direction (perpendicular to the angle).
-        let startX = centerX + CGFloat(offset * cos(radians) - halfFalloff * sin(radians))
-        let startY = centerY + CGFloat(offset * sin(radians) + halfFalloff * cos(radians))
-        let endX   = centerX + CGFloat(offset * cos(radians) + halfFalloff * sin(radians))
-        let endY   = centerY + CGFloat(offset * sin(radians) - halfFalloff * cos(radians))
+        let size = CGSize(width: extent.width, height: extent.height)
+        let points = LinearMaskGeometry.gradientPoints(
+            in: size,
+            angle: angle,
+            position: position,
+            falloff: falloff
+        )
+        let point0 = LinearMaskGeometry.toCoreImagePoint(points.point0, extent: extent)
+        let point1 = LinearMaskGeometry.toCoreImagePoint(points.point1, extent: extent)
         
         let gradient = CIFilter.linearGradient()
-        gradient.point0 = CGPoint(x: startX, y: startY)
-        gradient.point1 = CGPoint(x: endX, y: endY)
+        gradient.point0 = point0
+        gradient.point1 = point1
         gradient.color0 = CIColor.white
         gradient.color1 = CIColor.black
         
@@ -1943,16 +1951,16 @@ actor ImagePipeline {
     ///   - data: PNG image data of the brush mask (white = affected area, black = protected).
     ///   - targetExtent: The output extent the mask should be scaled to match.
     /// - Returns: A CIImage representing the mask at the target extent,
-    ///            or a solid-white fallback if the data cannot be decoded.
+    ///            or a solid-black fallback if the data cannot be decoded.
     func createBrushMask(from data: Data, targetExtent: CGRect) -> CIImage {
         guard let sourceImage = CIImage(data: data) else {
-            // Fallback: if PNG data is invalid, use a full white mask (apply everywhere)
-            return CIImage(color: CIColor.white).cropped(to: targetExtent)
+            // Fallback: invalid data should behave as no-op, not full-image apply.
+            return CIImage(color: CIColor.black).cropped(to: targetExtent)
         }
 
         let sourceExtent = sourceImage.extent
         guard sourceExtent.width > 0, sourceExtent.height > 0 else {
-            return CIImage(color: CIColor.white).cropped(to: targetExtent)
+            return CIImage(color: CIColor.black).cropped(to: targetExtent)
         }
 
         // CIImage(data:) loads PNG data with row 0 mapped to the lowest Y in Core Image,

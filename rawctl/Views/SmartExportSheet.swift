@@ -258,6 +258,7 @@ struct SmartExportSheet: View {
 
     private func performExport() async {
         guard let preset = selectedPreset, let destination = destinationFolder else { return }
+        appState.flushPendingRecipeSave()
 
         isExporting = true
         exportedCount = 0

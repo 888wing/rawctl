@@ -116,6 +116,7 @@ struct ExportJob: Identifiable {
     let id: UUID = UUID()
     let asset: PhotoAsset
     let recipe: EditRecipe
+    let localNodes: [ColorNode]
     let settings: ExportSettings
     var status: ExportStatus = .pending
     var error: String?

@@ -110,7 +110,7 @@ struct SelectionHUD: View {
                                         asset: asset,
                                         isCurrentPhoto: appState.selectedAssetId == asset.id
                                     ) {
-                                        appState.selectedAssetId = asset.id
+                                        appState.select(asset)
                                     } onRemove: {
                                         appState.toggleSelection(asset.id)
                                     }

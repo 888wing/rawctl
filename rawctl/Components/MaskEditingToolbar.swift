@@ -85,6 +85,7 @@ struct MaskEditingToolbar: View {
 
     /// Finish editing: clears editingMaskId and hides the mask overlay.
     func doneEditing() {
+        appState.flushPendingRecipeSave()
         withAnimation(.easeInOut(duration: 0.2)) {
             appState.editingMaskId = nil
             appState.showMaskOverlay = false

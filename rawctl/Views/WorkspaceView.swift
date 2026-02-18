@@ -306,6 +306,7 @@ struct WorkspaceView: View {
             appState.showHUD("Configure export settings first")
             return
         }
+        appState.flushPendingRecipeSave()
 
         guard let asset = appState.selectedAsset else {
             appState.showHUD("No photo selected")
@@ -323,7 +324,8 @@ struct WorkspaceView: View {
             await ExportService.shared.startExport(
                 assets: [asset],
                 recipes: appState.recipes,
-                settings: exportSettings
+                settings: exportSettings,
+                localNodesByURL: [asset.url: appState.localNodes[asset.url] ?? []]
             )
 
             await MainActor.run {

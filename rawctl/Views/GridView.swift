@@ -306,12 +306,12 @@ struct GridView: View {
             if isInMultiSelection && hasMultiSelection {
                 // Clicking on a photo that's part of multi-selection:
                 // Set as primary selection but keep multi-selection intact
-                appState.selectedAssetId = asset.id
+                appState.select(asset, switchToSingleView: false)
             } else {
                 // Clicking on non-selected photo or single selection:
                 // Clear multi-selection and select this one
                 appState.clearMultiSelection()
-                appState.selectedAssetId = asset.id
+                appState.select(asset, switchToSingleView: false)
             }
 
             // Prefetch for SingleView only when selecting a different photo
@@ -604,7 +604,7 @@ struct GridView: View {
                 // Select first photo immediately for responsive UI
                 await MainActor.run {
                     if let first = appState.assets.first {
-                        appState.selectedAssetId = first.id
+                        appState.select(first, switchToSingleView: false)
                     }
                 }
                 // Load recipes in background (non-blocking)

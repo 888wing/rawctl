@@ -225,6 +225,7 @@ struct ExportDialog: View {
     
     private func startExport() {
         guard settings.destinationFolder != nil else { return }
+        appState.flushPendingRecipeSave()
         
         // Save settings for Quick Export
         QuickExportManager.shared.saveSettings(settings)
@@ -253,7 +254,8 @@ struct ExportDialog: View {
             await ExportService.shared.startExport(
                 assets: assetsToExport,
                 recipes: recipes,
-                settings: settings
+                settings: settings,
+                localNodesByURL: appState.localNodes
             )
             
             await MainActor.run {

@@ -135,9 +135,14 @@ final class MemoryCardService {
             
             // Export all photos
             var recipes: [UUID: EditRecipe] = [:]
+            var localNodesByURL: [URL: [ColorNode]] = [:]
             for asset in assets {
-                // Try to load existing sidecar
-                if let (recipe, _) = await SidecarService.shared.loadRecipeAndSnapshots(for: asset.url) {
+                // Try v6 sidecar first (recipe + local nodes)
+                if let loaded = try? await SidecarService.shared.load(for: asset.url) {
+                    recipes[asset.id] = loaded.recipe
+                    localNodesByURL[asset.url] = loaded.localNodes ?? []
+                } else if let (recipe, _) = await SidecarService.shared.loadRecipeAndSnapshots(for: asset.url) {
+                    // Fallback for older sidecars
                     recipes[asset.id] = recipe
                 } else {
                     recipes[asset.id] = EditRecipe()
@@ -155,7 +160,8 @@ final class MemoryCardService {
             await ExportService.shared.startExport(
                 assets: assets,
                 recipes: recipes,
-                settings: settings
+                settings: settings,
+                localNodesByURL: localNodesByURL
             )
             
             appState.isLoading = false
@@ -204,7 +210,7 @@ final class MemoryCardService {
 
             // Select first photo immediately for responsive UI
             if let first = appState.assets.first {
-                appState.selectedAssetId = first.id
+                appState.select(first, switchToSingleView: false)
                 print("[MemoryCard] Selected first asset: \(first.filename)")
             } else {
                 print("[MemoryCard] No assets found!")

@@ -36,6 +36,15 @@ struct InspectorView: View {
     // Spacing based on compact mode
     private var sectionSpacing: CGFloat { isCompact ? 12 : 16 }
     private var controlSpacing: CGFloat { isCompact ? 6 : 8 }
+
+    private var editingLocalNode: ColorNode? {
+        guard let nodeId = appState.editingMaskId else { return nil }
+        return appState.currentLocalNodes.first(where: { $0.id == nodeId })
+    }
+
+    private var isLocalNodeMode: Bool {
+        editingLocalNode != nil
+    }
     
     var body: some View {
         ScrollViewReader { proxy in
@@ -64,80 +73,107 @@ struct InspectorView: View {
                 HistogramView(image: appState.currentPreviewImage, appState: appState)
                 
                 Divider()
-                
-                // Quick Actions Bar
-                QuickActionsBar(
-                    localRecipe: $localRecipe,
-                    copiedRecipe: $copiedRecipe,
-                    appState: appState,
-                    onUndo: { appState.undo() },
-                    onRedo: { appState.redo() },
-                    onAuto: {
-                        pushHistory()
-                        autoAdjust()
-                    },
-                    onReset: {
-                        pushHistory()
-                        localRecipe.reset()
-                    },
-                    onCopy: {
-                        copiedRecipe = localRecipe
-                        appState.showHUD("Settings copied")
-                    },
-                    onPaste: {
-                        if let recipe = copiedRecipe {
-                            pushHistory()
-                            // Paste only edit values, not metadata
-                            localRecipe.exposure = recipe.exposure
-                            localRecipe.contrast = recipe.contrast
-                            localRecipe.highlights = recipe.highlights
-                            localRecipe.shadows = recipe.shadows
-                            localRecipe.whites = recipe.whites
-                            localRecipe.blacks = recipe.blacks
-                            localRecipe.vibrance = recipe.vibrance
-                            localRecipe.saturation = recipe.saturation
-                            localRecipe.whiteBalance = recipe.whiteBalance
-                            localRecipe.clarity = recipe.clarity
-                            localRecipe.dehaze = recipe.dehaze
-                            localRecipe.texture = recipe.texture
-                            localRecipe.profileId = recipe.profileId
-                            appState.showHUD("Settings applied")
+
+                if isLocalNodeMode, let node = editingLocalNode {
+                    HStack(spacing: 8) {
+                        Label("Local Mode", systemImage: "scope")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.accentColor)
+                        Text(node.name)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                        Spacer()
+                        Button("Done") {
+                            appState.flushPendingRecipeSave()
+                            appState.editingMaskId = nil
+                            appState.showMaskOverlay = false
                         }
-                    },
-                    onToggleComparison: {
-                        withAnimation {
-                            appState.comparisonMode = appState.comparisonMode == .sideBySide ? .none : .sideBySide
-                        }
-                    },
-                    onNanoBanana: { resolution in
-                        startNanoBanana(resolution: resolution)
-                    },
-                    onBuyCredits: {
-                        appState.showAccountSheet = true
-                    },
-                    canUndo: appState.history[appState.selectedAssetId ?? UUID()]?.undoStack.isEmpty == false,
-                    canRedo: appState.history[appState.selectedAssetId ?? UUID()]?.redoStack.isEmpty == false,
-                    hasCopied: copiedRecipe != nil,
-                    isComparing: appState.comparisonMode == .sideBySide
-                )
-                
-                // Import Preset button
-                HStack {
-                    Button {
-                        showImportPreset = true
-                    } label: {
-                        Label("Import Lightroom Preset", systemImage: "square.and.arrow.down")
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    .padding(10)
+                    .background(Color.accentColor.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                    Text("Local mode only shows local-safe tone and color controls.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                } else {
+                    // Quick Actions Bar
+                    QuickActionsBar(
+                        localRecipe: $localRecipe,
+                        copiedRecipe: $copiedRecipe,
+                        appState: appState,
+                        onUndo: { appState.undo() },
+                        onRedo: { appState.redo() },
+                        onAuto: {
+                            pushHistory()
+                            autoAdjust()
+                        },
+                        onReset: {
+                            pushHistory()
+                            localRecipe.reset()
+                        },
+                        onCopy: {
+                            copiedRecipe = localRecipe
+                            appState.showHUD("Settings copied")
+                        },
+                        onPaste: {
+                            if let recipe = copiedRecipe {
+                                pushHistory()
+                                // Paste only edit values, not metadata
+                                localRecipe.exposure = recipe.exposure
+                                localRecipe.contrast = recipe.contrast
+                                localRecipe.highlights = recipe.highlights
+                                localRecipe.shadows = recipe.shadows
+                                localRecipe.whites = recipe.whites
+                                localRecipe.blacks = recipe.blacks
+                                localRecipe.vibrance = recipe.vibrance
+                                localRecipe.saturation = recipe.saturation
+                                localRecipe.whiteBalance = recipe.whiteBalance
+                                localRecipe.clarity = recipe.clarity
+                                localRecipe.dehaze = recipe.dehaze
+                                localRecipe.texture = recipe.texture
+                                localRecipe.profileId = recipe.profileId
+                                appState.showHUD("Settings applied")
+                            }
+                        },
+                        onToggleComparison: {
+                            withAnimation {
+                                appState.comparisonMode = appState.comparisonMode == .sideBySide ? .none : .sideBySide
+                            }
+                        },
+                        onNanoBanana: { resolution in
+                            startNanoBanana(resolution: resolution)
+                        },
+                        onBuyCredits: {
+                            appState.showAccountSheet = true
+                        },
+                        canUndo: appState.history[appState.selectedAssetId ?? UUID()]?.undoStack.isEmpty == false,
+                        canRedo: appState.history[appState.selectedAssetId ?? UUID()]?.redoStack.isEmpty == false,
+                        hasCopied: copiedRecipe != nil,
+                        isComparing: appState.comparisonMode == .sideBySide
+                    )
                     
-                    Spacer()
+                    // Import Preset button
+                    HStack {
+                        Button {
+                            showImportPreset = true
+                        } label: {
+                            Label("Import Lightroom Preset", systemImage: "square.and.arrow.down")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        
+                        Spacer()
+                    }
                 }
-                
+
                 Divider()
                 
                 // Metadata: Rating, Color, Flag, Tags + EXIF button
-                if panelConfig.isVisible(.organization) {
+                if panelConfig.isVisible(.organization), !isLocalNodeMode {
                 DisclosureGroup("Organization") {
                     MetadataBar(recipe: $localRecipe)
                     
@@ -166,12 +202,18 @@ struct InspectorView: View {
                 if panelConfig.isVisible(.light) {
                 DisclosureGroup("Light", isExpanded: $lightExpanded) {
                     VStack(spacing: controlSpacing) {
-                        // Camera Profile (v1.2)
-                        ProfilePicker(selectedProfileId: $localRecipe.profileId)
-                            .padding(.bottom, 4)
+                        if !isLocalNodeMode {
+                            // Camera Profile (v1.2)
+                            ProfilePicker(selectedProfileId: $localRecipe.profileId)
+                                .padding(.bottom, 4)
 
-                        Divider()
-                            .padding(.bottom, 4)
+                            Divider()
+                                .padding(.bottom, 4)
+                        } else {
+                            Text("Profile is global-only and unavailable in Local Mode.")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
 
                         ControlSlider(
                             label: "Exposure",
@@ -219,7 +261,7 @@ struct InspectorView: View {
                 Divider()
                 
                 // Tone Curve section
-                if panelConfig.isVisible(.toneCurve) {
+                if panelConfig.isVisible(.toneCurve), !isLocalNodeMode {
                 DisclosureGroup("Tone Curve", isExpanded: $toneCurveExpanded) {
                     ToneCurveView(curve: $localRecipe.toneCurve)
                         .padding(.top, 6)
@@ -228,7 +270,7 @@ struct InspectorView: View {
                 }
                 
                 // RGB Curves section
-                if panelConfig.isVisible(.rgbCurves) {
+                if panelConfig.isVisible(.rgbCurves), !isLocalNodeMode {
                 DisclosureGroup("RGB Curves") {
                     RGBCurvesPanel(curves: $localRecipe.rgbCurves)
                         .padding(.top, 6)
@@ -308,7 +350,7 @@ struct InspectorView: View {
                 Divider()
                 
                 // Composition section - Crop, Rotate, Flip
-                if panelConfig.isVisible(.composition) {
+                if panelConfig.isVisible(.composition), !isLocalNodeMode {
                 DisclosureGroup("Composition", isExpanded: $compositionExpanded) {
                     VStack(spacing: 12) {
                         // Crop preview thumbnail
@@ -425,7 +467,7 @@ struct InspectorView: View {
                 }
 
                 // Resize section
-                if panelConfig.isVisible(.resize) {
+                if panelConfig.isVisible(.resize), !isLocalNodeMode {
                 DisclosureGroup("Resize") {
                     ResizePanel(
                         resize: $localRecipe.resize,
@@ -576,7 +618,7 @@ struct InspectorView: View {
                 Divider()
                 
                 // Transform / Perspective section
-                if panelConfig.isVisible(.transform) {
+                if panelConfig.isVisible(.transform), !isLocalNodeMode {
                 DisclosureGroup("Transform") {
                     VStack(spacing: controlSpacing) {
                         ControlSlider(
@@ -612,7 +654,7 @@ struct InspectorView: View {
                 }
                 
                 // Lens Corrections section
-                if panelConfig.isVisible(.lensCorrections) {
+                if panelConfig.isVisible(.lensCorrections), !isLocalNodeMode {
                 DisclosureGroup("Lens Corrections") {
                     VStack(spacing: controlSpacing) {
                         ControlSlider(
@@ -698,7 +740,7 @@ struct InspectorView: View {
                 Divider()
 
                 // AI Generation section
-                if panelConfig.isVisible(.aiGeneration) {
+                if panelConfig.isVisible(.aiGeneration), !isLocalNodeMode {
                 DisclosureGroup("AI Generation") {
                     AIGenerationPanel(appState: appState)
                         .padding(.top, 6)
@@ -707,7 +749,7 @@ struct InspectorView: View {
                 }
 
                 // AI Layers section
-                if panelConfig.isVisible(.aiLayers), let layerStack = appState.currentAILayerStack {
+                if panelConfig.isVisible(.aiLayers), !isLocalNodeMode, let layerStack = appState.currentAILayerStack {
                 DisclosureGroup("AI Layers") {
                     AILayersPanel(appState: appState, layerStack: layerStack)
                         .padding(.top, 6)
@@ -726,6 +768,7 @@ struct InspectorView: View {
                 }
 
                 // Snapshots section
+                if !isLocalNodeMode {
                 DisclosureGroup("Versions") {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
@@ -777,6 +820,7 @@ struct InspectorView: View {
                     }
                     .padding(.top, 6)
                 }
+                }
                 
                 Spacer(minLength: 20)
                 
@@ -800,40 +844,47 @@ struct InspectorView: View {
         .background(.ultraThinMaterial)
         .disabled(appState.selectedAsset == nil)
         .opacity(appState.selectedAsset == nil ? 0.5 : 1.0)
-        // Sync local recipe with AppState
-        .onChange(of: appState.selectedAssetId) { _, newId in
-            if let id = newId {
-                localRecipe = appState.recipes[id] ?? EditRecipe()
+        // Sync inspector recipe with current context (global vs local node).
+        .onChange(of: appState.selectedAssetId) { _, _ in
+            syncLocalRecipeFromContext()
+        }
+        .onChange(of: appState.editingMaskId) { _, _ in
+            syncLocalRecipeFromContext()
+        }
+        .onChange(of: appState.localNodes) { _, _ in
+            if isLocalNodeMode {
+                syncLocalRecipeFromContext()
             }
         }
         .onChange(of: localRecipe) { oldRecipe, newRecipe in
-            if let id = appState.selectedAssetId {
-                // Skip if the recipe hasn't actually changed (prevents feedback loops)
-                if appState.recipes[id] == newRecipe {
+            guard let id = appState.selectedAssetId else { return }
+
+            if isLocalNodeMode,
+               let nodeId = appState.editingMaskId,
+               let index = appState.currentLocalNodes.firstIndex(where: { $0.id == nodeId }) {
+                var node = appState.currentLocalNodes[index]
+                if node.adjustments == newRecipe {
                     return
                 }
-
-                // Debug: Track profile changes
-                if oldRecipe.profileId != newRecipe.profileId {
-                    print("[Inspector] Profile changed: \(oldRecipe.profileId) → \(newRecipe.profileId)")
-                }
-                appState.recipes[id] = newRecipe
-
-                // Debounce save - only save after user stops adjusting
-                saveTask?.cancel()
-                saveTask = Task {
-                    try? await Task.sleep(nanoseconds: 300_000_000) // 300ms debounce
-                    guard !Task.isCancelled else { return }
-                    await MainActor.run {
-                        appState.saveCurrentRecipe()
-                    }
-                }
+                node.adjustments = newRecipe
+                appState.updateLocalNode(node)
+                return
             }
+
+            // Skip if the recipe hasn't actually changed (prevents feedback loops)
+            if appState.recipes[id] == newRecipe {
+                return
+            }
+
+            // Debug: Track profile changes
+            if oldRecipe.profileId != newRecipe.profileId {
+                print("[Inspector] Profile changed: \(oldRecipe.profileId) → \(newRecipe.profileId)")
+            }
+            appState.recipes[id] = newRecipe
+            appState.saveCurrentRecipeDebounced()
         }
         .onAppear {
-            if let id = appState.selectedAssetId {
-                localRecipe = appState.recipes[id] ?? EditRecipe()
-            }
+            syncLocalRecipeFromContext()
         }
         .sheet(isPresented: $showEXIFViewer) {
             if let asset = appState.selectedAsset {
@@ -892,8 +943,6 @@ struct InspectorView: View {
     } // end ScrollViewReader
     }
     
-    @State private var saveTask: Task<Void, Never>?
-    
     /// Context menu for hiding panels
     @ViewBuilder
     private func panelContextMenu(_ panel: InspectorPanel) -> some View {
@@ -911,6 +960,19 @@ struct InspectorView: View {
             showCustomizeSheet = true
         } label: {
             Label("Customize Panels...", systemImage: "slider.horizontal.3")
+        }
+    }
+
+    private func syncLocalRecipeFromContext() {
+        if let node = editingLocalNode {
+            localRecipe = node.adjustments
+            return
+        }
+
+        if let id = appState.selectedAssetId {
+            localRecipe = appState.recipes[id] ?? EditRecipe()
+        } else {
+            localRecipe = EditRecipe()
         }
     }
     
@@ -970,6 +1032,7 @@ struct InspectorView: View {
     }
     
     private func pushHistory() {
+        guard !isLocalNodeMode else { return }
         appState.pushHistory(localRecipe)
     }
     

@@ -1232,7 +1232,7 @@ struct Filmstrip: View {
                             )
                             .id(asset.id)
                             .onTapGesture {
-                                appState.selectedAssetId = asset.id
+                                appState.select(asset)
                             }
                         }
                     }

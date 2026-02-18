@@ -595,6 +595,32 @@ final class LinearMaskEditorTests: XCTestCase {
         }
     }
 
+    func test_movePositionTo_nonCenteredStart_doesNotJumpToMidline() {
+        var node = ColorNode(name: "Test", type: .serial)
+        node.mask = NodeMask(type: .linear(angle: 45, position: 0.2, falloff: 30))
+        let binding = Binding<ColorNode>(get: { node }, set: { node = $0 })
+        let size = CGSize(width: 800, height: 600)
+        var editor = LinearMaskEditor(node: binding, imageSize: size)
+
+        let center = LinearMaskGeometry.centerPoint(in: size, angle: 45, position: 0.2)
+        editor.movePositionTo(center, in: size)
+        if case .linear(_, let pos, _) = node.mask?.type {
+            XCTAssertEqual(pos, 0.2, accuracy: 0.001, "Dragging on current center should preserve existing position")
+        } else {
+            XCTFail("Expected linear mask type")
+        }
+
+        let normal = LinearMaskGeometry.normalVector(angle: 45)
+        let location = CGPoint(x: center.x + normal.dx * 40, y: center.y + normal.dy * 40)
+        editor.movePositionTo(location, in: size)
+        let expected = LinearMaskGeometry.projectedPosition(from: location, in: size, angle: 45)
+        if case .linear(_, let pos, _) = node.mask?.type {
+            XCTAssertEqual(pos, expected, accuracy: 0.001)
+        } else {
+            XCTFail("Expected linear mask type")
+        }
+    }
+
     func test_rotateAngleTo_updatesAngle() {
         var node = ColorNode(name: "Test", type: .serial)
         node.mask = NodeMask(type: .linear(angle: 0, position: 0.5, falloff: 30))
@@ -643,6 +669,43 @@ final class LinearMaskEditorTests: XCTestCase {
             XCTAssertLessThanOrEqual(falloff, 100.0)
             XCTAssertGreaterThanOrEqual(falloff, 0.0)
         } else { XCTFail() }
+    }
+}
+
+// MARK: - LinearMaskGeometry Tests
+
+final class LinearMaskGeometryTests: XCTestCase {
+
+    func test_positionAffectsGradientAtNinetyDegrees() {
+        let size = CGSize(width: 800, height: 600)
+        let top = LinearMaskGeometry.gradientPoints(in: size, angle: 90, position: 0.2, falloff: 30)
+        let bottom = LinearMaskGeometry.gradientPoints(in: size, angle: 90, position: 0.8, falloff: 30)
+
+        XCTAssertNotEqual(top.point0.x, bottom.point0.x, accuracy: 0.1)
+        XCTAssertNotEqual(top.point1.x, bottom.point1.x, accuracy: 0.1)
+    }
+
+    func test_falloffUsesShortEdgeForLandscapeAndPortrait() {
+        let landscape = CGSize(width: 1000, height: 500)
+        let portrait = CGSize(width: 500, height: 1000)
+
+        let a = LinearMaskGeometry.gradientPoints(in: landscape, angle: 0, position: 0.5, falloff: 20)
+        let b = LinearMaskGeometry.gradientPoints(in: portrait, angle: 0, position: 0.5, falloff: 20)
+
+        let distA = hypot(a.point0.x - a.point1.x, a.point0.y - a.point1.y)
+        let distB = hypot(b.point0.x - b.point1.x, b.point0.y - b.point1.y)
+        XCTAssertEqual(distA, 100, accuracy: 0.5) // 20% of short edge (500)
+        XCTAssertEqual(distB, 100, accuracy: 0.5) // 20% of short edge (500)
+    }
+
+    func test_legacyFalloffUnitIntervalIsUpgradedToPercent() {
+        let size = CGSize(width: 900, height: 600)
+        let legacy = LinearMaskGeometry.gradientPoints(in: size, angle: 45, position: 0.5, falloff: 0.2)
+        let modern = LinearMaskGeometry.gradientPoints(in: size, angle: 45, position: 0.5, falloff: 20)
+
+        let legacyDist = hypot(legacy.point0.x - legacy.point1.x, legacy.point0.y - legacy.point1.y)
+        let modernDist = hypot(modern.point0.x - modern.point1.x, modern.point0.y - modern.point1.y)
+        XCTAssertEqual(legacyDist, modernDist, accuracy: 0.01)
     }
 }
 
@@ -1588,20 +1651,42 @@ final class BrushMaskStrokeCapTests: XCTestCase {
 
 final class BrushMaskEditorLogicTests: XCTestCase {
 
-    func test_commitBrushMask_emptyBrush_setsNilMask() {
-        // When BrushMask is empty, commitBrushMask sets node.mask = nil
-        // Verify the isEmpty guard condition
+    func test_emptyBrushMask_rendersBlackNoEffectMask() {
         let mask = BrushMask()
-        XCTAssertTrue(mask.isEmpty, "Fresh BrushMask must be empty")
+        let renderSize = CGSize(width: 64, height: 64)
+        let pngData = mask.renderToPNG(targetSize: renderSize)
+        XCTAssertNotNil(pngData)
 
-        // Simulate the guard in commitBrushMask:
-        // guard !brushMask.isEmpty else { node.mask = nil; return }
-        var node = ColorNode(name: "Brush", type: .serial)
-        node.mask = NodeMask(type: .brush(data: Data([0x89, 0x50]))) // non-empty placeholder
-        if mask.isEmpty {
-            node.mask = nil
+        guard let data = pngData,
+              let image = NSImage(data: data),
+              let tiff = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff),
+              let color = rep.colorAt(x: 32, y: 32)?.usingColorSpace(.deviceRGB) else {
+            XCTFail("Expected decodable PNG for empty brush mask")
+            return
         }
-        XCTAssertNil(node.mask, "Empty brush must clear node.mask entirely")
+        XCTAssertLessThan(color.redComponent, 0.01)
+        XCTAssertLessThan(color.greenComponent, 0.01)
+        XCTAssertLessThan(color.blueComponent, 0.01)
+    }
+
+    func test_renderDelta_hasTransparentBackground() {
+        let mask = BrushMask()
+        mask.canvasSize = CGSize(width: 100, height: 100)
+        mask.beginStroke(at: CGPoint(x: 10, y: 10))
+        mask.continueStroke(to: CGPoint(x: 30, y: 30))
+        mask.endStroke()
+
+        guard let delta = mask.renderDeltaToPNG(targetSize: CGSize(width: 100, height: 100)),
+              let image = NSImage(data: delta),
+              let tiff = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff),
+              let untouched = rep.colorAt(x: 80, y: 80)?.usingColorSpace(.deviceRGB) else {
+            XCTFail("Expected decodable delta PNG")
+            return
+        }
+
+        XCTAssertLessThan(untouched.alphaComponent, 0.01, "Untouched area should remain transparent in delta mask")
     }
 
     func test_commitBrushMask_nonEmptyBrush_writesData() {
@@ -1649,5 +1734,285 @@ final class BrushMaskEditorLogicTests: XCTestCase {
 
         XCTAssertEqual(renderSize.width,  800)
         XCTAssertEqual(renderSize.height, 600)
+    }
+}
+
+// MARK: - Local Node Render Blend Tests
+
+final class LocalNodeRenderBlendTests: XCTestCase {
+    private enum TestError: Error {
+        case bitmapContextCreationFailed
+        case imageEncodingFailed
+        case imageRenderFailed
+    }
+
+    func test_localNodeOpacityChangesRenderedOutput() async throws {
+        let dir = try makeTempDirectory(prefix: "rawctl-local-opacity")
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let imageURL = dir.appendingPathComponent("base.png")
+        try writeSolidPNG(at: imageURL, width: 320, height: 240, gray: 0.35)
+        let asset = PhotoAsset(url: imageURL)
+
+        var full = ColorNode(name: "Full", type: .serial)
+        full.adjustments.exposure = 1.5
+        full.opacity = 1.0
+        full.blendMode = .normal
+
+        var partial = full
+        partial.opacity = 0.2
+
+        guard let baseline = await ImagePipeline.shared.renderForExport(for: asset, recipe: EditRecipe()) else {
+            throw TestError.imageRenderFailed
+        }
+        guard let fullOutput = await ImagePipeline.shared.renderForExport(for: asset, recipe: EditRecipe(), localNodes: [full]) else {
+            throw TestError.imageRenderFailed
+        }
+        guard let partialOutput = await ImagePipeline.shared.renderForExport(for: asset, recipe: EditRecipe(), localNodes: [partial]) else {
+            throw TestError.imageRenderFailed
+        }
+
+        let baselineLuma = averageLuminance(of: baseline)
+        let fullLuma = averageLuminance(of: fullOutput)
+        let partialLuma = averageLuminance(of: partialOutput)
+
+        XCTAssertGreaterThan(fullLuma, baselineLuma + 0.10)
+        XCTAssertGreaterThan(partialLuma, baselineLuma + 0.02)
+        XCTAssertLessThan(partialLuma, fullLuma - 0.05)
+    }
+
+    func test_localNodeBlendModeAffectsPixels() async throws {
+        let dir = try makeTempDirectory(prefix: "rawctl-local-blend")
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let imageURL = dir.appendingPathComponent("base.png")
+        try writeSolidPNG(at: imageURL, width: 320, height: 240, gray: 0.4)
+        let asset = PhotoAsset(url: imageURL)
+
+        var normal = ColorNode(name: "Normal", type: .serial)
+        normal.adjustments.exposure = 1.2
+        normal.opacity = 1
+        normal.blendMode = .normal
+
+        var multiply = normal
+        multiply.blendMode = .multiply
+
+        guard let normalOutput = await ImagePipeline.shared.renderForExport(for: asset, recipe: EditRecipe(), localNodes: [normal]) else {
+            throw TestError.imageRenderFailed
+        }
+        guard let multiplyOutput = await ImagePipeline.shared.renderForExport(for: asset, recipe: EditRecipe(), localNodes: [multiply]) else {
+            throw TestError.imageRenderFailed
+        }
+
+        let diff = meanAbsoluteDifference(normalOutput, multiplyOutput)
+        XCTAssertGreaterThan(diff, 0.01, "Blend mode should produce visible pixel differences")
+    }
+
+    private func makeTempDirectory(prefix: String) throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(prefix)-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    private func writeSolidPNG(at url: URL, width: Int, height: Int, gray: CGFloat) throws {
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            throw TestError.bitmapContextCreationFailed
+        }
+        context.setFillColor(NSColor(calibratedWhite: gray, alpha: 1.0).cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+
+        guard let cgImage = context.makeImage() else {
+            throw TestError.imageEncodingFailed
+        }
+        let rep = NSBitmapImageRep(cgImage: cgImage)
+        guard let data = rep.representation(using: .png, properties: [:]) else {
+            throw TestError.imageEncodingFailed
+        }
+        try data.write(to: url, options: .atomic)
+    }
+
+    private func averageLuminance(of image: CGImage) -> Double {
+        let rep = NSBitmapImageRep(cgImage: image)
+        let width = rep.pixelsWide
+        let height = rep.pixelsHigh
+        var sum = 0.0
+        var count = 0
+        for y in stride(from: 0, to: height, by: max(1, height / 48)) {
+            for x in stride(from: 0, to: width, by: max(1, width / 48)) {
+                guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                let luma = 0.2126 * Double(color.redComponent)
+                    + 0.7152 * Double(color.greenComponent)
+                    + 0.0722 * Double(color.blueComponent)
+                sum += luma
+                count += 1
+            }
+        }
+        return count > 0 ? sum / Double(count) : 0
+    }
+
+    private func meanAbsoluteDifference(_ lhs: CGImage, _ rhs: CGImage) -> Double {
+        let repA = NSBitmapImageRep(cgImage: lhs)
+        let repB = NSBitmapImageRep(cgImage: rhs)
+        let width = min(repA.pixelsWide, repB.pixelsWide)
+        let height = min(repA.pixelsHigh, repB.pixelsHigh)
+        let step = max(1, min(width, height) / 64)
+
+        var total = 0.0
+        var count = 0
+        for y in stride(from: 0, to: height, by: step) {
+            for x in stride(from: 0, to: width, by: step) {
+                guard let ca = repA.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                      let cb = repB.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                total += abs(Double(ca.redComponent - cb.redComponent))
+                total += abs(Double(ca.greenComponent - cb.greenComponent))
+                total += abs(Double(ca.blueComponent - cb.blueComponent))
+                count += 3
+            }
+        }
+        return count > 0 ? total / Double(count) : 0
+    }
+}
+
+// MARK: - Selection Flow Tests
+
+@MainActor
+final class SelectionFlowTests: XCTestCase {
+    private enum TestError: Error {
+        case timeout
+    }
+
+    func test_selectSwitchingPhotoClearsMaskEditingStateAndRefreshesNodes() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rawctl-selection-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let photoA = dir.appendingPathComponent("a.png")
+        let photoB = dir.appendingPathComponent("b.png")
+        FileManager.default.createFile(atPath: photoA.path, contents: Data("a".utf8))
+        FileManager.default.createFile(atPath: photoB.path, contents: Data("b".utf8))
+
+        let assetA = PhotoAsset(url: photoA)
+        let assetB = PhotoAsset(url: photoB)
+
+        let state = AppState()
+        state.assets = [assetA, assetB]
+        state.select(assetA, switchToSingleView: false)
+
+        var node = ColorNode(name: "Mask A", type: .serial)
+        node.mask = NodeMask(type: .radial(centerX: 0.5, centerY: 0.5, radius: 0.3))
+        try await SidecarService.shared.save(recipe: EditRecipe(), localNodes: [node], for: photoB)
+
+        state.editingMaskId = UUID()
+        state.showMaskOverlay = true
+
+        state.select(assetB, switchToSingleView: false)
+
+        XCTAssertNil(state.editingMaskId)
+        XCTAssertFalse(state.showMaskOverlay)
+
+        let deadline = Date().addingTimeInterval(2.0)
+        while (state.localNodes[photoB] ?? []).isEmpty, Date() < deadline {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+
+        guard let loadedNodes = state.localNodes[photoB], !loadedNodes.isEmpty else {
+            throw TestError.timeout
+        }
+        XCTAssertEqual(loadedNodes.first?.name, "Mask A")
+    }
+}
+
+// MARK: - Brush Mask Fallback Tests
+
+final class BrushMaskFallbackTests: XCTestCase {
+    private enum TestError: Error {
+        case imageRenderFailed
+        case imageEncodingFailed
+    }
+
+    func test_invalidBrushDataBehavesAsNoOpMask() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rawctl-brush-fallback-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let imageURL = dir.appendingPathComponent("base.png")
+        try writeSolidPNG(at: imageURL, width: 220, height: 160, gray: 0.45)
+        let asset = PhotoAsset(url: imageURL)
+
+        var node = ColorNode(name: "Invalid Brush", type: .serial)
+        node.mask = NodeMask(type: .brush(data: Data("invalid".utf8)))
+        node.adjustments.exposure = 2.0
+
+        guard let baseline = await ImagePipeline.shared.renderForExport(for: asset, recipe: EditRecipe()) else {
+            throw TestError.imageRenderFailed
+        }
+        guard let withInvalidBrush = await ImagePipeline.shared.renderForExport(
+            for: asset,
+            recipe: EditRecipe(),
+            localNodes: [node]
+        ) else {
+            throw TestError.imageRenderFailed
+        }
+
+        let diff = meanAbsoluteDifference(baseline, withInvalidBrush)
+        XCTAssertLessThan(diff, 0.002, "Invalid brush data should fall back to no-op mask")
+    }
+
+    private func writeSolidPNG(at url: URL, width: Int, height: Int, gray: CGFloat) throws {
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            throw TestError.imageEncodingFailed
+        }
+        context.setFillColor(NSColor(calibratedWhite: gray, alpha: 1.0).cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+
+        guard let cgImage = context.makeImage() else {
+            throw TestError.imageEncodingFailed
+        }
+        let rep = NSBitmapImageRep(cgImage: cgImage)
+        guard let data = rep.representation(using: .png, properties: [:]) else {
+            throw TestError.imageEncodingFailed
+        }
+        try data.write(to: url, options: .atomic)
+    }
+
+    private func meanAbsoluteDifference(_ lhs: CGImage, _ rhs: CGImage) -> Double {
+        let repA = NSBitmapImageRep(cgImage: lhs)
+        let repB = NSBitmapImageRep(cgImage: rhs)
+        let width = min(repA.pixelsWide, repB.pixelsWide)
+        let height = min(repA.pixelsHigh, repB.pixelsHigh)
+        let step = max(1, min(width, height) / 64)
+
+        var total = 0.0
+        var count = 0
+        for y in stride(from: 0, to: height, by: step) {
+            for x in stride(from: 0, to: width, by: step) {
+                guard let ca = repA.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                      let cb = repB.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                total += abs(Double(ca.redComponent - cb.redComponent))
+                total += abs(Double(ca.greenComponent - cb.greenComponent))
+                total += abs(Double(ca.blueComponent - cb.blueComponent))
+                count += 3
+            }
+        }
+        return count > 0 ? total / Double(count) : 0
     }
 }
