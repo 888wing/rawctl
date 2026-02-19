@@ -85,7 +85,7 @@ final class AccountService: ObservableObject {
     static let shared = AccountService()
     
     // API Configuration - Always use production API
-    private let baseURL = "https://api.rawctl.com"
+    private let baseURL = "https://api.latent-app.com"
     
     // Published state
     @Published var isAuthenticated = false

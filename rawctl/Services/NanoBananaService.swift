@@ -80,7 +80,7 @@ final class NanoBananaService: ObservableObject {
     static let shared = NanoBananaService()
 
     // API Configuration - Always use production API
-    private let baseURL = "https://api.rawctl.com"
+    private let baseURL = "https://api.latent-app.com"
 
     // Request timeouts
     private let uploadTimeout: TimeInterval = 60   // 1 minute for upload

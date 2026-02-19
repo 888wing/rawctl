@@ -30,7 +30,7 @@ final class AIGenerationService: ObservableObject {
     static let shared = AIGenerationService()
 
     // API Configuration - Always use production API
-    private let baseURL = "https://api.rawctl.com"
+    private let baseURL = "https://api.latent-app.com"
 
     // Request timeout
     private let requestTimeout: TimeInterval = 30
