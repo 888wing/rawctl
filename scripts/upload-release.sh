@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 # Configuration
 BUCKET_NAME="rawctl-releases"
@@ -7,6 +7,11 @@ R2_URL="https://releases.rawctl.com"
 VERSION="${1:-$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo "1.0.0")}"
 
 echo "📤 Uploading rawctl v${VERSION} to Cloudflare R2..."
+
+if ! command -v wrangler >/dev/null 2>&1; then
+    echo "❌ wrangler CLI not found. Install with: npm install -g wrangler"
+    exit 1
+fi
 
 # Check if files exist
 DMG_FILE="releases/rawctl-${VERSION}.dmg"
@@ -28,19 +33,22 @@ fi
 echo "📦 Uploading DMG..."
 wrangler r2 object put "${BUCKET_NAME}/rawctl-${VERSION}.dmg" \
     --file="${DMG_FILE}" \
-    --content-type="application/octet-stream"
+    --content-type="application/octet-stream" \
+    --remote
 
 # Upload appcast.xml
 echo "📋 Uploading appcast.xml..."
 wrangler r2 object put "${BUCKET_NAME}/appcast.xml" \
     --file="${APPCAST_FILE}" \
-    --content-type="application/xml"
+    --content-type="application/xml" \
+    --remote
 
 # Also upload as latest for easy download link
 echo "🔗 Creating latest symlink..."
 wrangler r2 object put "${BUCKET_NAME}/rawctl-latest.dmg" \
     --file="${DMG_FILE}" \
-    --content-type="application/octet-stream"
+    --content-type="application/octet-stream" \
+    --remote
 
 echo ""
 echo "✅ Upload complete!"

@@ -13,15 +13,15 @@ set -e
 
 APP_NAME="rawctl"
 BUNDLE_ID="Shacoworkshop.rawctl"
-TEAM_ID="477VK7AAV5"
+TEAM_ID="DTR8DL89SD"
 DEVELOPER_ID="Developer ID Application: Siu Fai Chui (${TEAM_ID})"
 
 # Paths
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="${SCRIPT_DIR}/.."
-XCODE_PROJECT="${PROJECT_ROOT}/rawctl"
-ARCHIVE_PATH="${XCODE_PROJECT}/build/${APP_NAME}.xcarchive"
-EXPORT_PATH="${XCODE_PROJECT}/build/export"
+XCODE_PROJECT="${PROJECT_ROOT}"
+ARCHIVE_PATH="${PROJECT_ROOT}/build/${APP_NAME}.xcarchive"
+EXPORT_PATH="${PROJECT_ROOT}/build/export"
 RELEASE_DIR="${PROJECT_ROOT}/releases"
 BIN_DIR="${PROJECT_ROOT}/bin"
 
@@ -82,7 +82,7 @@ if [ -z "$VERSION" ]; then
 fi
 
 DMG_NAME="${APP_NAME}-${VERSION}.dmg"
-DMG_PATH="${XCODE_PROJECT}/build/${DMG_NAME}"
+DMG_PATH="${PROJECT_ROOT}/build/${DMG_NAME}"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Helper Functions
@@ -118,8 +118,8 @@ print_error() {
 print_step "Pre-flight Checks"
 
 # Check we're in the right directory
-if [ ! -f "${XCODE_PROJECT}/rawctl.xcodeproj/project.pbxproj" ]; then
-    print_error "Must run from rawctl/rawctl directory"
+if [ ! -f "${PROJECT_ROOT}/rawctl.xcodeproj/project.pbxproj" ]; then
+    print_error "rawctl.xcodeproj not found at ${PROJECT_ROOT}"
     exit 1
 fi
 
@@ -149,6 +149,16 @@ fi
 
 print_success "All checks passed"
 
+BUILD_SETTINGS=$(xcodebuild -project "${PROJECT_ROOT}/rawctl.xcodeproj" -scheme rawctl -configuration Release -showBuildSettings 2>/dev/null || true)
+CURRENT_MARKETING_VERSION=$(printf "%s\n" "${BUILD_SETTINGS}" | awk -F'= ' '/^[[:space:]]*MARKETING_VERSION = / { print $2; exit }')
+CURRENT_PROJECT_VERSION=$(printf "%s\n" "${BUILD_SETTINGS}" | awk -F'= ' '/^[[:space:]]*CURRENT_PROJECT_VERSION = / { print $2; exit }')
+if [ -n "${CURRENT_MARKETING_VERSION}" ]; then
+    print_info "Current MARKETING_VERSION: ${CURRENT_MARKETING_VERSION}"
+fi
+if [ -n "${CURRENT_PROJECT_VERSION}" ]; then
+    print_info "Current CURRENT_PROJECT_VERSION: ${CURRENT_PROJECT_VERSION}"
+fi
+
 if [ "$DRY_RUN" = true ]; then
     print_warning "DRY RUN MODE - Will build locally only"
 fi
@@ -159,8 +169,8 @@ fi
 
 print_step "Step 1: Cleaning Build Directory"
 
-rm -rf "${XCODE_PROJECT}/build"
-mkdir -p "${XCODE_PROJECT}/build"
+rm -rf "${PROJECT_ROOT}/build"
+mkdir -p "${PROJECT_ROOT}/build"
 mkdir -p "${RELEASE_DIR}"
 
 print_success "Build directory cleaned"
@@ -175,7 +185,7 @@ print_step "Step 2: Building Archive (Release Configuration)"
 # -allowProvisioningUpdates allows automatic profile generation
 # Code signing will be handled during export via ExportOptions.plist
 xcodebuild archive \
-    -project "${XCODE_PROJECT}/rawctl.xcodeproj" \
+    -project "${PROJECT_ROOT}/rawctl.xcodeproj" \
     -scheme rawctl \
     -configuration Release \
     -archivePath "${ARCHIVE_PATH}" \
@@ -183,7 +193,7 @@ xcodebuild archive \
     DEVELOPMENT_TEAM="${TEAM_ID}" \
     MARKETING_VERSION="${VERSION}" \
     2>&1 | xcpretty 2>/dev/null || xcodebuild archive \
-    -project "${XCODE_PROJECT}/rawctl.xcodeproj" \
+    -project "${PROJECT_ROOT}/rawctl.xcodeproj" \
     -scheme rawctl \
     -configuration Release \
     -archivePath "${ARCHIVE_PATH}" \
