@@ -114,7 +114,7 @@ After completing any significant task:
 
 ### Sidecar Format
 
-Edits stored in `{filename}.rawctl.json` (schema v5):
+Edits stored in `{filename}.latent.json` (schema v5):
 ```json
 {
   "schemaVersion": 5,
