@@ -187,14 +187,29 @@ struct InspectorView: View {
                                     .foregroundColor(.secondary)
                             } else {
                                 Button {
-                                    Task { await appState.startSmartSync() }
+                                    if AppFeatures.smartSyncEnabled {
+                                        Task { await appState.startSmartSync() }
+                                    } else {
+                                        // Non-Pro: redirect to account sheet (paywall).
+                                        appState.showAccountSheet = true
+                                    }
                                 } label: {
-                                    Label("Smart Sync…", systemImage: "sparkles.rectangle.stack")
+                                    HStack(spacing: 4) {
+                                        Label("Smart Sync…", systemImage: "sparkles.rectangle.stack")
+                                        if !AppFeatures.smartSyncEnabled {
+                                            Image(systemName: "crown.fill")
+                                                .font(.caption2)
+                                                .foregroundColor(.yellow)
+                                        }
+                                    }
                                 }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
                                 .disabled(appState.selectedAsset == nil)
-                                .help("Find visually similar scenes and sync this photo's edit settings")
+                                .help(AppFeatures.smartSyncEnabled
+                                    ? "Find visually similar scenes and sync this photo's edit settings"
+                                    : "Smart Sync is a Pro feature — upgrade to unlock"
+                                )
                             }
                         }
                         Spacer()

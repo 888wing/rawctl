@@ -340,8 +340,20 @@ final class AccountService: ObservableObject {
         NSWorkspace.shared.open(url)
     }
     
+    // MARK: - Pro Subscription
+
+    /// True if the current user's subscription plan includes Pro AI features.
+    ///
+    /// Checks the `subscription.plan` field returned by `/user/credits`.
+    /// Non-authenticated and free-tier users both return `false`.
+    var isProUser: Bool {
+        guard isAuthenticated, let balance = creditsBalance else { return false }
+        let plan = balance.subscription.plan.lowercased()
+        return plan.contains("pro") || plan.contains("premium") || plan.contains("yearly")
+    }
+
     // MARK: - AI Operations
-    
+
     /// Check if user has enough credits
     func hasEnoughCredits(for operation: String) -> Bool {
         guard let balance = creditsBalance else { return false }
