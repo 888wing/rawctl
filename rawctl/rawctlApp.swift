@@ -9,7 +9,7 @@ import SwiftUI
 import GoogleSignIn
 
 @main
-struct rawctlApp: App {
+struct LatentApp: App {
     // Initialize the updater manager
     @StateObject private var updaterManager = UpdaterManager.shared
 
@@ -99,7 +99,7 @@ struct rawctlApp: App {
     // MARK: - What's New Check
 
     private func checkForWhatsNew() {
-        if ProcessInfo.processInfo.environment["RAWCTL_DISABLE_WHATS_NEW"] == "1" {
+        if ProcessInfo.processInfo.environment["LATENT_DISABLE_WHATS_NEW"] == "1" {
             return
         }
 
