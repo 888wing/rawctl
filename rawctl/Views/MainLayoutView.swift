@@ -208,6 +208,22 @@ struct MainLayoutView: View {
                             .accessibilityIdentifier("e2e.slider.stress.state")
                             .accessibilityLabel("sliderStress")
                             .accessibilityValue(appState.e2eSliderStressState)
+                        Text("localExportMatch")
+                            .accessibilityIdentifier("e2e.local.export.match")
+                            .accessibilityLabel("localExportMatch")
+                            .accessibilityValue(appState.e2eLocalExportMatch)
+                        Text("localPreviewDiff")
+                            .accessibilityIdentifier("e2e.local.preview.diff")
+                            .accessibilityLabel("localPreviewDiff")
+                            .accessibilityValue(appState.e2eLocalPreviewDiff)
+                        Text("localPreviewHash")
+                            .accessibilityIdentifier("e2e.local.preview.hash")
+                            .accessibilityLabel("localPreviewHash")
+                            .accessibilityValue(appState.e2eLocalPreviewHash)
+                        Text("localExportHash")
+                            .accessibilityIdentifier("e2e.local.export.hash")
+                            .accessibilityLabel("localExportHash")
+                            .accessibilityValue(appState.e2eLocalExportHash)
                         Text("lastCommand")
                             .accessibilityIdentifier("e2e.last.command")
                             .accessibilityLabel("lastCommand")
@@ -229,6 +245,16 @@ struct MainLayoutView: View {
                             Task { await appState.runE2ESliderStress() }
                         }
                         .fixedSize()
+                        E2EAppKitButton(title: "localSetup", identifier: "e2e.action.local.setup") {
+                            e2eLastCommand = "localSetup"
+                            appState.runE2ELocalAdjustmentSetup()
+                        }
+                        .fixedSize()
+                        E2EAppKitButton(title: "localCheck", identifier: "e2e.action.local.check") {
+                            e2eLastCommand = "localCheck"
+                            Task { await appState.runE2ELocalExportConsistencyCheck() }
+                        }
+                        .fixedSize()
                     }
                 }
                 .font(.system(size: 8, design: .monospaced))
@@ -242,25 +268,25 @@ struct MainLayoutView: View {
                 .shadow(radius: 2)
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .rawctlOpenFolderCommand)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .latentOpenFolderCommand)) { _ in
             openFolderFromMenu()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .rawctlGridViewCommand)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .latentGridViewCommand)) { _ in
             withAnimation { appState.viewMode = .grid }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .rawctlSingleViewCommand)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .latentSingleViewCommand)) { _ in
             withAnimation {
                 _ = appState.switchToSingleViewIfPossible()
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .rawctlExportCommand)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .latentExportCommand)) { _ in
             if appState.selectedAssetId != nil {
                 showExportDialog = true
             } else {
                 appState.showHUD("No photo selected")
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .rawctlResetAdjustmentsCommand)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .latentResetAdjustmentsCommand)) { _ in
             resetAdjustments()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in

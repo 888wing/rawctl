@@ -21,7 +21,7 @@ struct RawctlViewCommands: Commands {
                 if isE2E {
                     UserDefaults.standard.set("grid", forKey: "rawctl.e2e.lastCommand")
                 }
-                NotificationCenter.default.post(name: .rawctlGridViewCommand, object: nil)
+                NotificationCenter.default.post(name: .latentGridViewCommand, object: nil)
             }
             .keyboardShortcut("1", modifiers: .command)
 
@@ -29,7 +29,7 @@ struct RawctlViewCommands: Commands {
                 if isE2E {
                     UserDefaults.standard.set("single", forKey: "rawctl.e2e.lastCommand")
                 }
-                NotificationCenter.default.post(name: .rawctlSingleViewCommand, object: nil)
+                NotificationCenter.default.post(name: .latentSingleViewCommand, object: nil)
             }
             .keyboardShortcut("2", modifiers: .command)
         }

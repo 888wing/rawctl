@@ -53,7 +53,7 @@ struct LatentApp: App {
             // File menu
             CommandGroup(replacing: .newItem) {
                 Button("Open Folder…") {
-                    NotificationCenter.default.post(name: .rawctlOpenFolderCommand, object: nil)
+                    NotificationCenter.default.post(name: .latentOpenFolderCommand, object: nil)
                 }
                 .keyboardShortcut("o", modifiers: .command)
             }
@@ -64,14 +64,14 @@ struct LatentApp: App {
             // Photo menu
             CommandMenu("Photo") {
                 Button("Export…") {
-                    NotificationCenter.default.post(name: .rawctlExportCommand, object: nil)
+                    NotificationCenter.default.post(name: .latentExportCommand, object: nil)
                 }
                 .keyboardShortcut("e", modifiers: .command)
 
                 Divider()
 
                 Button("Reset Adjustments") {
-                    NotificationCenter.default.post(name: .rawctlResetAdjustmentsCommand, object: nil)
+                    NotificationCenter.default.post(name: .latentResetAdjustmentsCommand, object: nil)
                 }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
             }
