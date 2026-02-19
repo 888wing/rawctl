@@ -25,7 +25,7 @@ struct AboutView: View {
 
                     // App name and version
                     VStack(spacing: 4) {
-                        Text("rawctl")
+                        Text("Latent")
                             .font(.title.bold())
 
                         HStack(spacing: 8) {
@@ -68,15 +68,15 @@ struct AboutView: View {
 
             // Links
             Section {
-                Link(destination: URL(string: "https://rawctl.com")!) {
+                Link(destination: URL(string: "https://latent-app.com")!) {
                     Label("Website", systemImage: "globe")
                 }
 
-                Link(destination: URL(string: "https://github.com/nicholasleexyz/rawctl")!) {
+                Link(destination: URL(string: "https://github.com/888wing/rawctl")!) {
                     Label("GitHub Repository", systemImage: "chevron.left.forwardslash.chevron.right")
                 }
 
-                Link(destination: URL(string: "https://rawctl.com/#pricing")!) {
+                Link(destination: URL(string: "https://latent-app.com/#pricing")!) {
                     Label("Pricing & Plans", systemImage: "creditcard")
                 }
             } header: {
@@ -85,11 +85,11 @@ struct AboutView: View {
 
             // Legal
             Section {
-                Link(destination: URL(string: "https://rawctl.com/privacy")!) {
+                Link(destination: URL(string: "https://latent-app.com/privacy")!) {
                     Label("Privacy Policy", systemImage: "hand.raised")
                 }
 
-                Link(destination: URL(string: "https://rawctl.com/terms")!) {
+                Link(destination: URL(string: "https://latent-app.com/terms")!) {
                     Label("Terms of Service", systemImage: "doc.text")
                 }
             } header: {
@@ -117,7 +117,7 @@ struct AboutView: View {
             // Copyright
             Section {
                 VStack(spacing: 4) {
-                    Text("rawctl")
+                    Text("Latent")
                         .font(.caption.bold())
 
                     Text("Copyright 2024-2025 Nicholas Lee")
