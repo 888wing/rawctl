@@ -45,33 +45,32 @@ struct ReleaseHistory {
         ReleaseNote(
             id: "1.4.0",
             version: "1.4.0",
-            date: dateFrom("2026-01-21"),
-            title: "Crop System & Performance",
+            date: dateFrom("2026-02-19"),
+            title: "Local Masks & Workflow Parity",
             highlights: [
-                "Draw new crop areas by dragging on dark region",
-                "Enhanced zoom controls (scroll wheel, pinch, 25%-800%)",
-                "Lightroom-style crop toolbar with grid overlays",
-                "Fixed macOS 15.1 installation issue"
+                "Local mask workflow is now fully integrated into day-to-day editing",
+                "Linear and brush mask interactions are now stable and predictable",
+                "Local adjustments are consistently applied in preview and export",
+                "Selection, save, and render flows are smoother under heavy editing"
             ],
             sections: [
-                ReleaseSection(title: "Crop System", items: [
-                    "Draw new crop area by dragging on dark region outside frame",
-                    "Instant aspect ratio application with smooth animation",
-                    "CropPreviewThumbnail shows crop overlay in Inspector",
-                    "Lightroom-style crop toolbar with aspect ratio picker",
-                    "Grid overlays: Rule of Thirds, Golden Ratio, Diagonals, Golden Spiral"
+                ReleaseSection(title: "Added", items: [
+                    "Local Adjustment workflow with Radial, Linear, and Brush masks is now production-ready",
+                    "Inspector supports direct local-node editing mode with clear context and exit flow",
+                    "Export pipeline now receives localNodes so output matches on-screen edits",
+                    "E2E local parity checks added for preview/export hash and diff monitoring"
                 ]),
-                ReleaseSection(title: "Zoom Controls", items: [
-                    "Scroll wheel zoom at cursor position (25%-800%)",
-                    "Pinch gesture zoom on trackpad",
-                    "Fit, 50%, 100%, 200% quick access buttons",
-                    "Live zoom percentage indicator"
+                ReleaseSection(title: "Improved", items: [
+                    "Linear mask geometry unified between editor and renderer for consistent placement",
+                    "Brush mask keeps bitmap continuity so users can reopen and continue painting",
+                    "Selection flow now clears stale mask-editing state when switching photos",
+                    "Recipe persistence now uses debounced saves plus flush on context switches for smoother interaction"
                 ]),
                 ReleaseSection(title: "Fixed", items: [
-                    "macOS 15.1 users unable to install (deployment target fixed)",
-                    "Filmstrip bar now visible at bottom of SingleView",
-                    "Performance degradation when loading 800+ images",
-                    "Camera profiles now apply to JPG/PNG images"
+                    "Linear mask position/falloff mismatches that caused visual offset and jumpy dragging",
+                    "Invalid brush fallback that could incorrectly apply edits across the full image",
+                    "Local opacity/blend controls not taking effect in final local compositing",
+                    "Narrow-window filter/selection bars overflowing and deforming the UI"
                 ])
             ]
         ),
