@@ -93,8 +93,16 @@ actor FileSystemService {
         return assets
     }
     
-    /// Get sidecar file URL for an asset
+    /// Get sidecar file URL for an asset (current format: .latent.json)
     static func sidecarURL(for assetURL: URL) -> URL {
+        let filename = assetURL.lastPathComponent
+        let sidecarName = "\(filename).latent.json"
+        return assetURL.deletingLastPathComponent().appendingPathComponent(sidecarName)
+    }
+
+    /// Get legacy sidecar file URL for an asset (old format: .rawctl.json)
+    /// Used only for silent migration on first open.
+    static func legacySidecarURL(for assetURL: URL) -> URL {
         let filename = assetURL.lastPathComponent
         let sidecarName = "\(filename).rawctl.json"
         return assetURL.deletingLastPathComponent().appendingPathComponent(sidecarName)
@@ -146,7 +154,7 @@ actor FileSystemService {
     struct IncrementalScanResult {
         var unchanged: [PhotoAsset]  // Assets that haven't changed
         var added: [PhotoAsset]      // New assets
-        var removed: [String]        // Fingerprints of removed assets
+        var removed: [PhotoAsset]    // Removed or changed-path assets
     }
     
     /// Perform incremental folder scan
@@ -174,15 +182,15 @@ actor FileSystemService {
             throw FileSystemError.cannotEnumerateFolder
         }
         
-        // Build lookup from previous assets
-        var previousByFingerprint: [String: PhotoAsset] = [:]
+        // Build lookup from previous assets by canonical path.
+        var previousByPath: [String: PhotoAsset] = [:]
         for asset in previousAssets {
-            previousByFingerprint[asset.fingerprint] = asset
+            previousByPath[asset.url.standardizedFileURL.path] = asset
         }
         
         var unchanged: [PhotoAsset] = []
         var added: [PhotoAsset] = []
-        var seenFingerprints: Set<String> = []
+        var currentFingerprintByPath: [String: String] = [:]
         
         // Avoid `DirectoryEnumerator` Sequence iteration in async context (Swift 6 `noasync`).
         while let fileURL = enumerator.nextObject() as? URL {
@@ -202,10 +210,12 @@ actor FileSystemService {
             let creationDate = resourceValues.creationDate
             let modificationDate = resourceValues.contentModificationDate
             let fingerprint = PhotoAsset.createFingerprint(fileSize: fileSize, modificationDate: modificationDate)
-            seenFingerprints.insert(fingerprint)
-            
-            // Check if asset existed before
-            if let existing = previousByFingerprint[fingerprint] {
+            let canonicalPath = fileURL.standardizedFileURL.path
+            currentFingerprintByPath[canonicalPath] = fingerprint
+
+            // Unchanged only when both path and fingerprint match.
+            if let existing = previousByPath[canonicalPath],
+               existing.fingerprint == fingerprint {
                 unchanged.append(existing)
             } else {
                 added.append(
@@ -220,15 +230,21 @@ actor FileSystemService {
             }
         }
         
-        // Find removed
-        let removedFingerprints = Set(previousByFingerprint.keys).subtracting(seenFingerprints)
+        // Find removed assets: path disappeared OR path stayed but fingerprint changed.
+        let removedAssets = previousAssets.filter { asset in
+            let canonicalPath = asset.url.standardizedFileURL.path
+            guard let currentFingerprint = currentFingerprintByPath[canonicalPath] else {
+                return true
+            }
+            return currentFingerprint != asset.fingerprint
+        }
         
-        print("[FileSystem] Incremental result: \(unchanged.count) unchanged, \(added.count) added, \(removedFingerprints.count) removed")
+        print("[FileSystem] Incremental result: \(unchanged.count) unchanged, \(added.count) added, \(removedAssets.count) removed")
         
         return IncrementalScanResult(
             unchanged: unchanged,
             added: added,
-            removed: Array(removedFingerprints)
+            removed: removedAssets
         )
     }
     

@@ -22,11 +22,36 @@ actor SidecarService {
     private var pendingSaves: [URL: PendingSave] = [:]      // sidecarURL -> save payload
     private var saveTasks: [URL: Task<Void, Never>] = [:]   // sidecarURL -> debounce task
     private let debounceInterval: TimeInterval = 0.3 // 300ms debounce
+    private var lastSemanticSignature: [URL: String] = [:]
+
+    private struct SemanticSidecar: Codable {
+        var asset: SidecarFile.AssetInfo
+        var edit: EditRecipe
+        var snapshots: [RecipeSnapshot]
+        var aiEdits: [AIEdit]
+        var localNodes: [ColorNode]?
+    }
     
+    /// Silently migrate legacy .rawctl.json sidecar to .latent.json if needed.
+    /// Called before any load to ensure old user files are transparently migrated.
+    private func migrateLegacySidecarIfNeeded(for assetURL: URL) {
+        let newURL = FileSystemService.sidecarURL(for: assetURL)
+        let oldURL = FileSystemService.legacySidecarURL(for: assetURL)
+        guard !FileManager.default.fileExists(atPath: newURL.path),
+              FileManager.default.fileExists(atPath: oldURL.path) else { return }
+        do {
+            try FileManager.default.copyItem(at: oldURL, to: newURL)
+            try FileManager.default.removeItem(at: oldURL)
+        } catch {
+            print("Sidecar migration failed: \(error)")
+        }
+    }
+
     /// Read recipe and snapshots from sidecar file
     func loadRecipeAndSnapshots(for assetURL: URL) async -> (EditRecipe, [RecipeSnapshot])? {
+        migrateLegacySidecarIfNeeded(for: assetURL)
         let sidecarURL = FileSystemService.sidecarURL(for: assetURL)
-        
+
         guard FileManager.default.fileExists(atPath: sidecarURL.path) else {
             return nil
         }
@@ -44,8 +69,9 @@ actor SidecarService {
     
     /// Read recipe, snapshots, and AI edits from sidecar file
     func loadRecipeAndAIEdits(for assetURL: URL) async -> (EditRecipe, [RecipeSnapshot], [AIEdit])? {
+        migrateLegacySidecarIfNeeded(for: assetURL)
         let sidecarURL = FileSystemService.sidecarURL(for: assetURL)
-        
+
         guard FileManager.default.fileExists(atPath: sidecarURL.path) else {
             return nil
         }
@@ -59,6 +85,38 @@ actor SidecarService {
             print("Failed to load sidecar: \(error)")
             return nil
         }
+    }
+
+    private func semanticSnapshot(from sidecar: SidecarFile) -> SemanticSidecar {
+        SemanticSidecar(
+            asset: sidecar.asset,
+            edit: sidecar.edit,
+            snapshots: sidecar.snapshots,
+            aiEdits: sidecar.aiEdits,
+            localNodes: sidecar.localNodes
+        )
+    }
+
+    private func semanticSignature(for sidecar: SidecarFile) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(semanticSnapshot(from: sidecar)) else {
+            return UUID().uuidString
+        }
+        return data.base64EncodedString()
+    }
+
+    private func shouldSkipWrite(_ sidecar: SidecarFile, existing: SidecarFile?, sidecarURL: URL) -> Bool {
+        let nextSignature = semanticSignature(for: sidecar)
+        if let current = existing, semanticSignature(for: current) == nextSignature {
+            lastSemanticSignature[sidecarURL] = nextSignature
+            return true
+        }
+        if lastSemanticSignature[sidecarURL] == nextSignature {
+            return true
+        }
+        lastSemanticSignature[sidecarURL] = nextSignature
+        return false
     }
     
     /// Save recipe and snapshots to sidecar file (debounced)
@@ -102,15 +160,21 @@ actor SidecarService {
 
         // Preserve existing AI edits and other sidecar fields when saving.
         var sidecar: SidecarFile
+        var existingSidecar: SidecarFile?
         if FileManager.default.fileExists(atPath: sidecarURL.path),
            let data = try? Data(contentsOf: sidecarURL),
            let existing = try? JSONDecoder().decode(SidecarFile.self, from: data) {
+            existingSidecar = existing
             sidecar = existing
             sidecar.edit = recipe
             sidecar.snapshots = snapshots
         } else {
             sidecar = SidecarFile(for: assetURL, recipe: recipe)
             sidecar.snapshots = snapshots
+        }
+
+        if shouldSkipWrite(sidecar, existing: existingSidecar, sidecarURL: sidecarURL) {
+            return
         }
 
         sidecar.updatedAt = Date().timeIntervalSince1970
@@ -131,13 +195,19 @@ actor SidecarService {
 
         // Load existing sidecar to preserve snapshots and AI edits
         var sidecar: SidecarFile
+        var existingSidecar: SidecarFile?
         if FileManager.default.fileExists(atPath: sidecarURL.path),
            let data = try? Data(contentsOf: sidecarURL),
            let existing = try? JSONDecoder().decode(SidecarFile.self, from: data) {
+            existingSidecar = existing
             sidecar = existing
             sidecar.edit = recipe
         } else {
             sidecar = SidecarFile(for: assetURL, recipe: recipe)
+        }
+
+        if shouldSkipWrite(sidecar, existing: existingSidecar, sidecarURL: sidecarURL) {
+            return
         }
 
         sidecar.updatedAt = Date().timeIntervalSince1970
@@ -160,10 +230,12 @@ actor SidecarService {
         let sidecarURL = FileSystemService.sidecarURL(for: assetURL)
 
         var sidecar: SidecarFile
+        var existingSidecar: SidecarFile?
         if FileManager.default.fileExists(atPath: sidecarURL.path) {
             do {
                 let data = try Data(contentsOf: sidecarURL)
                 var existing = try JSONDecoder().decode(SidecarFile.self, from: data)
+                existingSidecar = existing
                 existing.edit = recipe
                 sidecar = existing
             } catch {
@@ -175,6 +247,9 @@ actor SidecarService {
         }
 
         sidecar.localNodes = localNodes
+        if shouldSkipWrite(sidecar, existing: existingSidecar, sidecarURL: sidecarURL) {
+            return
+        }
         sidecar.updatedAt = Date().timeIntervalSince1970
 
         let encoder = JSONEncoder()
@@ -211,9 +286,11 @@ actor SidecarService {
         
         // Load existing sidecar or create new one
         var sidecar: SidecarFile
+        var existingSidecar: SidecarFile?
         if FileManager.default.fileExists(atPath: sidecarURL.path),
            let data = try? Data(contentsOf: sidecarURL),
            let existing = try? JSONDecoder().decode(SidecarFile.self, from: data) {
+            existingSidecar = existing
             sidecar = existing
         } else {
             sidecar = SidecarFile(for: assetURL, recipe: EditRecipe())
@@ -221,6 +298,9 @@ actor SidecarService {
         
         // Update AI edits
         sidecar.aiEdits = aiEdits
+        if shouldSkipWrite(sidecar, existing: existingSidecar, sidecarURL: sidecarURL) {
+            return
+        }
         sidecar.updatedAt = Date().timeIntervalSince1970
         
         do {
@@ -230,6 +310,18 @@ actor SidecarService {
             try data.write(to: sidecarURL, options: .atomic)
         } catch {
             print("[SidecarService] Failed to save AI edits: \(error)")
+        }
+    }
+
+    /// Flush all pending debounced `saveRecipe` operations immediately.
+    func flushPendingDebouncedSaves() async {
+        let sidecarURLs = Array(pendingSaves.keys)
+        for sidecarURL in sidecarURLs {
+            guard let pending = pendingSaves[sidecarURL] else { continue }
+            saveTasks[sidecarURL]?.cancel()
+            saveTasks[sidecarURL] = nil
+            pendingSaves[sidecarURL] = nil
+            await performSave(pending.recipe, snapshots: pending.snapshots, for: pending.assetURL)
         }
     }
     
