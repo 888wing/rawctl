@@ -18,7 +18,7 @@ if [ -z "${BUILD_NUMBER}" ]; then
 fi
 
 FILE_SIZE=$(stat -f%z "${DMG_PATH}")
-SIGNATURE=$(./bin/sign_update "${DMG_PATH}" 2>&1 | grep "sparkle:edSignature" | sed 's/.*"\(.*\)".*/\1/')
+SIGNATURE=$(./bin/sign_update "${DMG_PATH}" 2>&1 | sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p')
 PUB_DATE=$(date -R)
 
 cat > "${APPCAST_PATH}" << EOF

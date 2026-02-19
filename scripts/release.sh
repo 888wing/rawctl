@@ -235,6 +235,7 @@ if command -v create-dmg &> /dev/null; then
         ICON_PATH=""
     fi
 
+    set +e
     create-dmg \
         --volname "${APP_NAME}" \
         ${ICON_PATH:+--volicon "$ICON_PATH"} \
@@ -246,7 +247,18 @@ if command -v create-dmg &> /dev/null; then
         --app-drop-link 450 185 \
         ${BG_OPTION} \
         "${DMG_PATH}" \
-        "${EXPORT_PATH}/${APP_NAME}.app" || true
+        "${EXPORT_PATH}/${APP_NAME}.app"
+    CREATE_DMG_EXIT=$?
+    set -e
+
+    if [ "${CREATE_DMG_EXIT}" -ne 0 ] || [ ! -f "${DMG_PATH}" ]; then
+        print_warning "create-dmg failed (exit ${CREATE_DMG_EXIT}), falling back to hdiutil"
+        rm -f "${DMG_PATH}"
+        hdiutil create -volname "${APP_NAME}" \
+            -srcfolder "${EXPORT_PATH}/${APP_NAME}.app" \
+            -ov -format UDZO \
+            "${DMG_PATH}"
+    fi
 else
     # Fallback to hdiutil
     print_info "Using hdiutil fallback..."
@@ -292,7 +304,7 @@ print_step "Step 6: Generating Sparkle EdDSA Signature"
 
 SIGNATURE=""
 if [ -f "${BIN_DIR}/sign_update" ]; then
-    SIGNATURE=$("${BIN_DIR}/sign_update" "${DMG_PATH}" 2>&1 | grep "sparkle:edSignature" | sed 's/.*"\(.*\)".*/\1/' || echo "")
+    SIGNATURE=$("${BIN_DIR}/sign_update" "${DMG_PATH}" 2>&1 | sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p' || echo "")
 
     if [ -n "$SIGNATURE" ]; then
         print_success "Signature generated"

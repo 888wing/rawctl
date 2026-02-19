@@ -5,7 +5,9 @@
     <key>method</key>
     <string>developer-id</string>
     <key>teamID</key>
-    <string>YOUR_TEAM_ID</string>
+    <string>DTR8DL89SD</string>
+    <key>signingCertificate</key>
+    <string>Developer ID Application</string>
     <key>signingStyle</key>
     <string>automatic</string>
     <key>destination</key>
