@@ -307,9 +307,12 @@ struct CullingView: View {
         
         Task {
             let recipe = await MainActor.run { currentRecipe }
+            let renderContext = await MainActor.run {
+                appState.makeRenderContext(for: asset, recipe: recipe)
+            }
             if let image = await ImagePipeline.shared.renderPreview(
                 for: asset,
-                recipe: recipe,
+                context: renderContext,
                 maxSize: 1600
             ) {
                 await MainActor.run {

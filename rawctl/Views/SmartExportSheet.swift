@@ -295,27 +295,30 @@ struct SmartExportSheet: View {
             let outputName = asset.url.deletingPathExtension().lastPathComponent + ".jpg"
             let outputURL = targetFolder.appendingPathComponent(outputName)
 
-            // Render and save
-            let maxSizeValue = CGFloat(preset.maxSize ?? 4000)
-            if let image = await ImagePipeline.shared.renderPreview(
+            // Render and save through export pipeline for parity with standard export.
+            let maxSizeValue = preset.maxSize.map(CGFloat.init)
+            let renderContext = appState.makeRenderContext(
                 for: asset,
                 recipe: recipe,
-                maxSize: maxSizeValue,
                 localNodes: localNodes
-            ) {
-                if let tiffData = image.tiffRepresentation,
-                   let bitmap = NSBitmapImageRep(data: tiffData),
-                   let jpegData = bitmap.representation(
-                       using: NSBitmapImageRep.FileType.jpeg,
-                       properties: [NSBitmapImageRep.PropertyKey.compressionFactor: Double(preset.quality) / 100.0]
-                   ) {
-                    do {
-                        try jpegData.write(to: outputURL)
-                    } catch {
-                        await MainActor.run {
-                            failedExports.append("\(asset.url.lastPathComponent): write failed")
-                        }
-                    }
+            )
+            guard let image = await ImagePipeline.shared.renderForExport(
+                for: asset,
+                context: renderContext,
+                maxSize: maxSizeValue,
+                useRecipeResize: false
+            ) else {
+                await MainActor.run {
+                    failedExports.append("\(asset.url.lastPathComponent): render failed")
+                }
+                continue
+            }
+
+            do {
+                try ExportUtilities.writeJPEG(image, to: outputURL, quality: preset.quality)
+            } catch {
+                await MainActor.run {
+                    failedExports.append("\(asset.url.lastPathComponent): write failed")
                 }
             }
 

@@ -122,9 +122,82 @@ struct FilterRule: Codable, Equatable, Identifiable {
             }
 
         case .captureDate:
-            // Date filtering would need asset metadata
-            return true
+            guard let captureDate = resolvedCaptureDate(for: asset),
+                  let query = parseCaptureDateQuery(value) else {
+                return false
+            }
+            switch operation {
+            case .equals:
+                return query.contains(captureDate)
+            case .notEquals:
+                return !query.contains(captureDate)
+            case .greaterThan:
+                return captureDate >= query.end
+            case .greaterThanOrEqual:
+                return captureDate >= query.start
+            case .lessThan:
+                return captureDate < query.start
+            case .lessThanOrEqual:
+                return captureDate < query.end
+            default:
+                return false
+            }
         }
+    }
+
+    private func resolvedCaptureDate(for asset: PhotoAsset?) -> Date? {
+        guard let asset else { return nil }
+        return asset.metadata?.dateTime ?? asset.creationDate ?? asset.modificationDate
+    }
+
+    private func parseCaptureDateQuery(_ rawValue: String) -> DateInterval? {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let calendar = Calendar.current
+
+        if trimmed.caseInsensitiveCompare("today") == .orderedSame {
+            return dayInterval(for: Date(), calendar: calendar)
+        }
+        if trimmed.caseInsensitiveCompare("yesterday") == .orderedSame,
+           let yesterday = calendar.date(byAdding: .day, value: -1, to: Date()) {
+            return dayInterval(for: yesterday, calendar: calendar)
+        }
+
+        // Treat YYYY-MM-DD and YYYY/MM/DD as day-range queries.
+        if let dayDate = parseDateOnly(trimmed) {
+            return dayInterval(for: dayDate, calendar: calendar)
+        }
+
+        // Fall back to ISO-8601 timestamp input.
+        let iso8601 = ISO8601DateFormatter()
+        if let absoluteDate = iso8601.date(from: trimmed) {
+            return DateInterval(start: absoluteDate, end: absoluteDate.addingTimeInterval(1))
+        }
+
+        return nil
+    }
+
+    private func dayInterval(for date: Date, calendar: Calendar) -> DateInterval? {
+        let start = calendar.startOfDay(for: date)
+        guard let end = calendar.date(byAdding: .day, value: 1, to: start) else {
+            return nil
+        }
+        return DateInterval(start: start, end: end)
+    }
+
+    private func parseDateOnly(_ value: String) -> Date? {
+        let formats = ["yyyy-MM-dd", "yyyy/MM/dd"]
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone.current
+        for format in formats {
+            formatter.dateFormat = format
+            if let parsed = formatter.date(from: value) {
+                return parsed
+            }
+        }
+        return nil
     }
 
     private func compareNumeric(_ value: Int, to target: Int) -> Bool {

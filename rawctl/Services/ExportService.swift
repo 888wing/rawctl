@@ -31,17 +31,22 @@ actor ExportService {
     /// Start export with given jobs
     func startExport(
         assets: [PhotoAsset],
-        recipes: [UUID: EditRecipe],
-        settings: ExportSettings,
-        localNodesByURL: [URL: [ColorNode]] = [:]
+        renderContextsByAssetID: [UUID: RenderContext],
+        settings: ExportSettings
     ) async {
         guard let destination = settings.destinationFolder else { return }
         
         // Create jobs
         jobs = assets.map { asset in
-            let recipe = recipes[asset.id] ?? EditRecipe()
-            let localNodes = localNodesByURL[asset.url] ?? []
-            return ExportJob(asset: asset, recipe: recipe, localNodes: localNodes, settings: settings)
+            let renderContext = renderContextsByAssetID[asset.id] ?? RenderContext(
+                assetId: asset.id,
+                recipe: EditRecipe()
+            )
+            return ExportJob(
+                asset: asset,
+                renderContext: renderContext,
+                settings: settings
+            )
         }
         
         let totalCount = jobs.count
@@ -110,10 +115,9 @@ actor ExportService {
         // Render with ImagePipeline
         guard let cgImage = await ImagePipeline.shared.renderForExport(
             for: job.asset,
-            recipe: job.recipe,
+            context: job.renderContext,
             maxSize: maxSize,
-            useRecipeResize: useRecipeResize,
-            localNodes: job.localNodes
+            useRecipeResize: useRecipeResize
         ) else {
             print("[Export] ERROR: renderForExport returned nil")
             throw ExportError.renderFailed
@@ -127,34 +131,18 @@ actor ExportService {
         let outputURL = destination.appendingPathComponent(outputName)
         
         print("[Export] Writing to: \(outputURL.path)")
-        
-        // Write JPG
-        try writeJPG(cgImage, to: outputURL, quality: job.settings.quality)
+
+        do {
+            try ExportUtilities.writeJPEG(cgImage, to: outputURL, quality: job.settings.quality)
+        } catch let error as ExportUtilities.JPEGWriteError {
+            switch error {
+            case .cannotCreateDestination:
+                throw ExportError.cannotCreateDestination
+            case .writeFailed:
+                throw ExportError.writeFailed
+            }
+        }
         print("[Export] Success: \(outputName)")
-    }
-    
-    private func writeJPG(_ image: CGImage, to url: URL, quality: Int) throws {
-        // Create destination with sRGB color space
-        guard let destination = CGImageDestinationCreateWithURL(
-            url as CFURL,
-            "public.jpeg" as CFString,
-            1,
-            nil
-        ) else {
-            throw ExportError.cannotCreateDestination
-        }
-        
-        // Set options
-        let options: [CFString: Any] = [
-            kCGImageDestinationLossyCompressionQuality: Double(quality) / 100.0,
-            kCGImagePropertyProfileName: "sRGB" as CFString
-        ]
-        
-        CGImageDestinationAddImage(destination, image, options as CFDictionary)
-        
-        guard CGImageDestinationFinalize(destination) else {
-            throw ExportError.writeFailed
-        }
     }
 }
 

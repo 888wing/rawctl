@@ -244,8 +244,7 @@ struct SingleView: View {
             }
             .background(Color.black)
             .task(id: appState.selectedAssetId) {
-                // Load preview only (critical path)
-                await loadPreview()
+                schedulePreviewRefresh()
                 
                 // Clear original when switching photos - will reload on-demand
                 originalImage = nil
@@ -273,34 +272,17 @@ struct SingleView: View {
                     return
                 }
 
-                previewTask?.cancel()
-                // Show processing indicator when starting a new render
-                isProcessingPreview = true
-                previewTask = Task {
-                    // Keep drag rendering responsive while reducing render thrash.
-                    let delay: UInt64 = isSliderDragging ? 24_000_000 : 70_000_000
-                    try? await Task.sleep(nanoseconds: delay)
-                    guard !Task.isCancelled else {
-                        isProcessingPreview = false
-                        return
-                    }
-                    await loadPreview()
-                    isProcessingPreview = false
-                }
+                // Keep drag rendering responsive while reducing render thrash.
+                let delay: UInt64 = isSliderDragging ? 24_000_000 : 70_000_000
+                schedulePreviewRefresh(delayNs: delay)
             }
             .onChange(of: appState.currentLocalNodes) { _, _ in
                 // Re-render when local adjustments (masks/nodes) change
-                previewTask?.cancel()
-                isProcessingPreview = true
-                previewTask = Task {
-                    try? await Task.sleep(nanoseconds: 70_000_000)
-                    guard !Task.isCancelled else {
-                        isProcessingPreview = false
-                        return
-                    }
-                    await loadPreview()
-                    isProcessingPreview = false
-                }
+                schedulePreviewRefresh(delayNs: 70_000_000)
+            }
+            .onChange(of: appState.currentAIEdits) { _, _ in
+                // Re-render when AI edit visibility/history changes.
+                schedulePreviewRefresh(delayNs: 70_000_000)
             }
             .onReceive(NotificationCenter.default.publisher(for: .sliderDragStateChanged)) { notification in
                 // Switch preview quality based on slider drag state
@@ -315,10 +297,7 @@ struct SingleView: View {
             .onChange(of: appState.previewQuality) { _, newQuality in
                 // Finalize with full-quality render after slider release.
                 guard newQuality == .full else { return }
-                previewTask?.cancel()
-                previewTask = Task {
-                    await loadPreview()
-                }
+                schedulePreviewRefresh(delayNs: 0)
             }
             .onChange(of: appState.transformMode) { _, isActive in
                 if isActive {
@@ -330,10 +309,7 @@ struct SingleView: View {
                     }
                 }
 
-                previewTask?.cancel()
-                previewTask = Task {
-                    await loadPreview()
-                }
+                schedulePreviewRefresh(delayNs: 0)
             }
             .onChange(of: appState.isZoomed) { _, newValue in
                 withAnimation(.spring(response: 0.3)) {
@@ -994,14 +970,42 @@ struct SingleView: View {
     }
     
     @State private var previewTask: Task<Void, Never>?
+    @State private var previewRequestVersion: UInt64 = 0
+
+    private func schedulePreviewRefresh(delayNs: UInt64 = 0) {
+        previewTask?.cancel()
+        previewRequestVersion &+= 1
+        let requestVersion = previewRequestVersion
+        isProcessingPreview = previewImage != nil
+
+        previewTask = Task {
+            if delayNs > 0 {
+                try? await Task.sleep(nanoseconds: delayNs)
+            }
+
+            guard !Task.isCancelled else { return }
+            guard requestVersion == previewRequestVersion else { return }
+
+            await loadPreview(requestVersion: requestVersion)
+
+            if requestVersion == previewRequestVersion {
+                isProcessingPreview = false
+            }
+        }
+    }
     
-    private func loadPreview() async {
+    private func loadPreview(requestVersion: UInt64? = nil) async {
+        if let requestVersion, requestVersion != previewRequestVersion {
+            return
+        }
         guard let asset = appState.selectedAsset else {
             previewImage = nil
             return
         }
         
-        isLoadingPreview = true
+        if previewImage == nil {
+            isLoadingPreview = true
+        }
         
         // Get recipe for this specific asset
         let recipe = appState.recipes[asset.id] ?? EditRecipe()
@@ -1021,6 +1025,10 @@ struct SingleView: View {
         if isInitialLoad {
             // First time loading - show quick preview immediately
             if let quickPreview = await ImagePipeline.shared.quickPreview(for: asset) {
+                guard !Task.isCancelled else { return }
+                if let requestVersion, requestVersion != previewRequestVersion {
+                    return
+                }
                 previewImage = quickPreview
                 appState.currentPreviewImage = quickPreview
                 isLoadingPreview = false  // Hide loading immediately
@@ -1044,15 +1052,24 @@ struct SingleView: View {
                 ? PerformanceSignposts.begin("sliderDragRender", id: sliderSignpostId)
                 : nil
             defer { PerformanceSignposts.end("sliderDragRender", sliderSignpostState) }
+            let renderContext = appState.makeRenderContext(
+                for: asset,
+                recipe: previewRecipe,
+                localNodes: appState.currentLocalNodes
+            )
             
             // Use ImagePipeline for preview with recipe applied
             let fullPreview = await ImagePipeline.shared.renderPreview(
                 for: asset,
-                recipe: previewRecipe,
+                context: renderContext,
                 maxSize: maxSize,
-                fastMode: isFastMode,
-                localNodes: appState.currentLocalNodes
+                fastMode: isFastMode
             )
+
+            guard !Task.isCancelled else { return }
+            if let requestVersion, requestVersion != previewRequestVersion {
+                return
+            }
             
             // Only update if we got a result
             if let full = fullPreview {
@@ -1063,8 +1080,10 @@ struct SingleView: View {
                 }
             }
         }
-        
-        isLoadingPreview = false
+
+        if requestVersion == nil || requestVersion == previewRequestVersion {
+            isLoadingPreview = false
+        }
     }
     
     private func loadOriginal() async {
@@ -1074,9 +1093,14 @@ struct SingleView: View {
         }
         
         // Load original without any recipe applied
+        let renderContext = appState.makeRenderContext(
+            for: asset,
+            recipe: EditRecipe(),
+            localNodes: []
+        )
         originalImage = await ImagePipeline.shared.renderPreview(
             for: asset,
-            recipe: EditRecipe(), // Empty recipe = original
+            context: renderContext, // Empty recipe = original
             maxSize: 1600
         )
     }

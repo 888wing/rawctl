@@ -13,6 +13,30 @@ import AppKit
 /// Image rendering pipeline using Core Image
 actor ImagePipeline {
     static let shared = ImagePipeline()
+
+    struct EvictionStats: Equatable {
+        var entries: Int
+        var estimatedBytes: Int64
+    }
+
+    struct StageBenchmarkSample: Equatable {
+        var stage: String
+        var milliseconds: Int
+    }
+
+    struct PreviewCacheTelemetry: Equatable {
+        var entryCount: Int
+        var estimatedMemoryBytes: Int64
+        var hits: Int
+        var misses: Int
+        var evictedEntries: Int
+        var evictedBytes: Int64
+    }
+
+    private struct PipelineStage {
+        let name: String
+        let run: (CIImage) async -> CIImage
+    }
     
     private let context: CIContext
     
@@ -36,6 +60,10 @@ actor ImagePipeline {
     // Memory management
     private let maxMemoryMB: Int = 400  // Max cache memory in MB
     private var lastMemoryCheck: Date = .distantPast
+    private var previewCacheHitCount = 0
+    private var previewCacheMissCount = 0
+    private var previewEvictedEntries = 0
+    private var previewEvictedBytes: Int64 = 0
 
     /// Filters to skip in fast mode (expensive operations)
     private let expensiveFilters: Set<String> = ["clarity", "dehaze", "texture", "grain", "noiseReduction", "hsl"]
@@ -96,12 +124,7 @@ actor ImagePipeline {
     /// Handle memory pressure by clearing caches
     private func handleMemoryPressure() {
         print("[ImagePipeline] Memory pressure detected, clearing caches")
-        rawFilterCache.removeAll()
-        rawWhiteBalanceDefaults.removeAll()
-        imageCache.removeAll()
-        intermediateCache.removeAll()
-        lastRecipeHash.removeAll()
-        cacheOrder.removeAll()
+        _ = clearAllPreviewCaches()
     }
     
     /// Check if we should reduce memory usage
@@ -123,15 +146,41 @@ actor ImagePipeline {
             let usedMB = Int(info.resident_size / 1024 / 1024)
             if usedMB > maxMemoryMB {
                 print("[ImagePipeline] Memory usage \(usedMB)MB exceeds \(maxMemoryMB)MB, evicting cache")
-                // Evict oldest entries
-                if !cacheOrder.isEmpty {
-                    let keyToRemove = cacheOrder.removeFirst()
-                    rawFilterCache.removeValue(forKey: keyToRemove)
-                    rawWhiteBalanceDefaults.removeValue(forKey: keyToRemove)
-                    imageCache.removeValue(forKey: keyToRemove)
-                }
+                _ = evictPreviewEntries(count: 1)
             }
         }
+    }
+
+    private func durationMilliseconds(_ duration: Duration) -> Int {
+        let components = duration.components
+        let secondsMs = Int(components.seconds) * 1_000
+        let attosecondsMs = Int(components.attoseconds / 1_000_000_000_000_000)
+        return max(0, secondsMs + attosecondsMs)
+    }
+
+    private func runPipelineStages(
+        _ stages: [PipelineStage],
+        input: CIImage,
+        collectBenchmark: Bool = false
+    ) async -> (image: CIImage, benchmark: [StageBenchmarkSample]) {
+        var output = input
+        var samples: [StageBenchmarkSample] = []
+        let clock = ContinuousClock()
+
+        for stage in stages {
+            let start = clock.now
+            output = await stage.run(output)
+            if collectBenchmark {
+                samples.append(
+                    StageBenchmarkSample(
+                        stage: stage.name,
+                        milliseconds: durationMilliseconds(start.duration(to: clock.now))
+                    )
+                )
+            }
+        }
+
+        return (output, samples)
     }
     
     // MARK: - P0: Fast Embedded Preview Extraction
@@ -181,18 +230,12 @@ actor ImagePipeline {
         return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
     }
     
-    /// Render preview with recipe applied (true RAW processing)
-    /// - Parameters:
-    ///   - asset: The photo asset to render
-    ///   - recipe: Edit recipe to apply
-    ///   - maxSize: Maximum dimension for output
-    ///   - fastMode: If true, skip expensive filters (for slider dragging)
+    /// Render preview using unified render context (shared contract with export).
     func renderPreview(
         for asset: PhotoAsset,
-        recipe: EditRecipe,
+        context renderContext: RenderContext,
         maxSize: CGFloat = 1600,
-        fastMode: Bool = false,
-        localNodes: [ColorNode] = []
+        fastMode: Bool = false
     ) async -> NSImage? {
         let cacheKey = asset.fingerprint
         let ext = asset.url.pathExtension.lowercased()
@@ -216,39 +259,157 @@ actor ImagePipeline {
         if isRaw {
             return await renderRAWPreview(
                 for: asset,
-                recipe: recipe,
+                renderContext: renderContext,
                 cacheKey: cacheKey,
                 maxSize: maxSize,
-                fastMode: fastMode,
-                localNodes: localNodes
+                fastMode: fastMode
             )
         }
 
         // Non-RAW: use standard pipeline
         return await renderStandardPreview(
             for: asset,
-            recipe: recipe,
+            renderContext: renderContext,
             cacheKey: cacheKey,
             maxSize: maxSize,
-            fastMode: fastMode,
-            localNodes: localNodes
+            fastMode: fastMode
         )
+    }
+
+    /// Benchmark stage-level timings for preview rendering.
+    /// Used by upgrade/performance gates to catch regressions when stage ordering changes.
+    func benchmarkRenderStages(
+        for asset: PhotoAsset,
+        context renderContext: RenderContext,
+        maxSize: CGFloat = 1600,
+        fastMode: Bool = false
+    ) async -> [StageBenchmarkSample]? {
+        let ext = asset.url.pathExtension.lowercased()
+        let isRaw = PhotoAsset.rawExtensions.contains(ext)
+
+        if isRaw {
+            guard let filter = CIFilter(imageURL: asset.url, options: nil) else {
+                return nil
+            }
+
+            applyRecipeToRAWFilter(filter, recipe: renderContext.recipe)
+            guard var rawOutput = filter.outputImage else {
+                return nil
+            }
+
+            rawOutput = scaleImage(rawOutput, maxSize: maxSize)
+
+            var stages: [PipelineStage] = [
+                PipelineStage(name: "postRAWRecipe") { [recipe = renderContext.recipe] image in
+                    self.applyPostRAWRecipe(recipe, to: image, fastMode: fastMode)
+                }
+            ]
+
+            if !renderContext.localNodes.isEmpty {
+                stages.append(
+                    PipelineStage(name: "localNodes") { [nodes = renderContext.localNodes] image in
+                        await self.renderLocalNodes(nodes, baseImage: image, originalImage: image, fastMode: fastMode)
+                    }
+                )
+            }
+
+            if !renderContext.aiEdits.isEmpty {
+                stages.append(
+                    PipelineStage(name: "aiEdits") { [edits = renderContext.aiEdits, fingerprint = asset.fingerprint] image in
+                        self.applyAIEdits(edits, to: image, assetFingerprint: fingerprint)
+                    }
+                )
+            }
+
+            if !renderContext.aiLayers.isEmpty {
+                stages.append(
+                    PipelineStage(name: "aiLayers") { [layers = renderContext.aiLayers, fingerprint = asset.fingerprint] image in
+                        self.applyAILayers(layers, to: image, assetFingerprint: fingerprint)
+                    }
+                )
+            }
+
+            let (_, benchmark) = await runPipelineStages(stages, input: rawOutput, collectBenchmark: true)
+            return benchmark
+        }
+
+        guard let loaded = await loadImage(from: asset.url) else {
+            return nil
+        }
+
+        let baseImage = scaleImage(loaded, maxSize: maxSize)
+        var stages: [PipelineStage] = [
+            PipelineStage(name: "globalRecipe") { [recipe = renderContext.recipe] image in
+                self.applyFullRecipe(recipe, to: image, fastMode: fastMode)
+            }
+        ]
+
+        if !renderContext.localNodes.isEmpty {
+            stages.append(
+                PipelineStage(name: "localNodes") { [nodes = renderContext.localNodes, originalImage = baseImage] image in
+                    await self.renderLocalNodes(nodes, baseImage: image, originalImage: originalImage, fastMode: fastMode)
+                }
+            )
+        }
+
+        if !renderContext.aiEdits.isEmpty {
+            stages.append(
+                PipelineStage(name: "aiEdits") { [edits = renderContext.aiEdits, fingerprint = asset.fingerprint] image in
+                    self.applyAIEdits(edits, to: image, assetFingerprint: fingerprint)
+                }
+            )
+        }
+
+        if !renderContext.aiLayers.isEmpty {
+            stages.append(
+                PipelineStage(name: "aiLayers") { [layers = renderContext.aiLayers, fingerprint = asset.fingerprint] image in
+                    self.applyAILayers(layers, to: image, assetFingerprint: fingerprint)
+                }
+            )
+        }
+
+        let (_, benchmark) = await runPipelineStages(stages, input: baseImage, collectBenchmark: true)
+        return benchmark
+    }
+
+    @available(*, unavailable, message: "Use renderPreview(for:context:maxSize:fastMode:) with RenderContext.")
+    func renderPreview(
+        for asset: PhotoAsset,
+        recipe: EditRecipe,
+        maxSize: CGFloat = 1600,
+        fastMode: Bool = false
+    ) async -> NSImage? {
+        nil
+    }
+
+    @available(*, unavailable, message: "Use renderPreview(for:context:maxSize:fastMode:) with RenderContext.")
+    func renderPreview(
+        for asset: PhotoAsset,
+        recipe: EditRecipe,
+        localNodes: [ColorNode],
+        maxSize: CGFloat = 1600,
+        fastMode: Bool = false
+    ) async -> NSImage? {
+        nil
     }
     
     /// True RAW processing - adjustments applied at RAW decode level
     private func renderRAWPreview(
         for asset: PhotoAsset,
-        recipe: EditRecipe,
+        renderContext: RenderContext,
         cacheKey: String,
         maxSize: CGFloat,
-        fastMode: Bool = false,
-        localNodes: [ColorNode] = []
+        fastMode: Bool = false
     ) async -> NSImage? {
+        let recipe = renderContext.recipe
+
         // Get or create RAW filter
         let rawFilter: CIFilter
         if let cached = rawFilterCache[cacheKey] {
+            previewCacheHitCount += 1
             rawFilter = cached
         } else {
+            previewCacheMissCount += 1
             guard let filter = CIFilter(imageURL: asset.url, options: nil) else {
                 print("[ImagePipeline] Failed to create RAW filter for: \(asset.filename)")
                 return nil
@@ -278,45 +439,95 @@ actor ImagePipeline {
         
         // Scale for preview
         outputImage = scaleImage(outputImage, maxSize: maxSize)
-        
-        // Apply post-RAW adjustments (saturation, vibrance, crop, etc.)
-        outputImage = applyPostRAWRecipe(recipe, to: outputImage, fastMode: fastMode)
 
-        // Apply local node adjustments if any
-        if !localNodes.isEmpty {
-            outputImage = await renderLocalNodes(localNodes, baseImage: outputImage, originalImage: outputImage, fastMode: fastMode)
+        var stages: [PipelineStage] = [
+            PipelineStage(name: "postRAWRecipe") { image in
+                self.applyPostRAWRecipe(recipe, to: image, fastMode: fastMode)
+            }
+        ]
+
+        if !renderContext.localNodes.isEmpty {
+            stages.append(
+                PipelineStage(name: "localNodes") { [nodes = renderContext.localNodes] image in
+                    await self.renderLocalNodes(nodes, baseImage: image, originalImage: image, fastMode: fastMode)
+                }
+            )
         }
 
-        return renderToNSImage(outputImage)
+        if !renderContext.aiEdits.isEmpty {
+            stages.append(
+                PipelineStage(name: "aiEdits") { [edits = renderContext.aiEdits, fingerprint = asset.fingerprint] image in
+                    self.applyAIEdits(edits, to: image, assetFingerprint: fingerprint)
+                }
+            )
+        }
+
+        if !renderContext.aiLayers.isEmpty {
+            stages.append(
+                PipelineStage(name: "aiLayers") { [layers = renderContext.aiLayers, fingerprint = asset.fingerprint] image in
+                    self.applyAILayers(layers, to: image, assetFingerprint: fingerprint)
+                }
+            )
+        }
+
+        let (processedImage, _) = await runPipelineStages(stages, input: outputImage)
+        return renderToNSImage(processedImage)
     }
     
     /// Standard pipeline for non-RAW images
     private func renderStandardPreview(
         for asset: PhotoAsset,
-        recipe: EditRecipe,
+        renderContext: RenderContext,
         cacheKey: String,
         maxSize: CGFloat,
-        fastMode: Bool = false,
-        localNodes: [ColorNode] = []
+        fastMode: Bool = false
     ) async -> NSImage? {
+        let recipe = renderContext.recipe
+
         var baseImage: CIImage
         if let cached = imageCache[cacheKey] {
+            previewCacheHitCount += 1
             baseImage = cached
         } else {
+            previewCacheMissCount += 1
             guard let loaded = await loadImage(from: asset.url) else {
                 return nil
             }
             baseImage = scaleImage(loaded, maxSize: maxSize)
             cacheImage(baseImage, for: cacheKey)
         }
-        
-        var processedImage = applyFullRecipe(recipe, to: baseImage, fastMode: fastMode)
 
-        // Apply local node adjustments if any
-        if !localNodes.isEmpty {
-            processedImage = await renderLocalNodes(localNodes, baseImage: processedImage, originalImage: baseImage, fastMode: fastMode)
+        var stages: [PipelineStage] = [
+            PipelineStage(name: "globalRecipe") { image in
+                self.applyFullRecipe(recipe, to: image, fastMode: fastMode)
+            }
+        ]
+
+        if !renderContext.localNodes.isEmpty {
+            stages.append(
+                PipelineStage(name: "localNodes") { [nodes = renderContext.localNodes, originalImage = baseImage] image in
+                    await self.renderLocalNodes(nodes, baseImage: image, originalImage: originalImage, fastMode: fastMode)
+                }
+            )
         }
 
+        if !renderContext.aiEdits.isEmpty {
+            stages.append(
+                PipelineStage(name: "aiEdits") { [edits = renderContext.aiEdits, fingerprint = asset.fingerprint] image in
+                    self.applyAIEdits(edits, to: image, assetFingerprint: fingerprint)
+                }
+            )
+        }
+
+        if !renderContext.aiLayers.isEmpty {
+            stages.append(
+                PipelineStage(name: "aiLayers") { [layers = renderContext.aiLayers, fingerprint = asset.fingerprint] image in
+                    self.applyAILayers(layers, to: image, assetFingerprint: fingerprint)
+                }
+            )
+        }
+
+        let (processedImage, _) = await runPipelineStages(stages, input: baseImage)
         return renderToNSImage(processedImage)
     }
     
@@ -1502,24 +1713,18 @@ actor ImagePipeline {
     
     // MARK: - Export
     
-    /// Render full resolution with recipe for export (true RAW)
-    /// - Parameters:
-    ///   - asset: Photo asset to render
-    ///   - recipe: Edit recipe to apply
-    ///   - maxSize: Optional export-time size override (long edge)
-    ///   - useRecipeResize: Whether to apply recipe's resize settings (default: true)
+    /// Render full resolution for export using unified render context.
     func renderForExport(
         for asset: PhotoAsset,
-        recipe: EditRecipe,
+        context renderContext: RenderContext,
         maxSize: CGFloat? = nil,
-        useRecipeResize: Bool = true,
-        localNodes: [ColorNode] = []
+        useRecipeResize: Bool = true
     ) async -> CGImage? {
+        let recipe = renderContext.recipe
         let ext = asset.url.pathExtension.lowercased()
 
-        var outputImage: CIImage?
-        var localNodeBaseImage: CIImage?
-
+        var baseImage: CIImage?
+        var stages: [PipelineStage] = []
         if PhotoAsset.rawExtensions.contains(ext) {
             // RAW export with full quality
             guard let filter = CIFilter(imageURL: asset.url, options: nil) else {
@@ -1531,27 +1736,57 @@ actor ImagePipeline {
                 print("[Export] RAW filter produced no output")
                 return nil
             }
-            let postRecipe = applyPostRAWRecipe(recipe, to: rawOutput)
-            outputImage = postRecipe
-            localNodeBaseImage = postRecipe
+            baseImage = rawOutput
+            stages.append(
+                PipelineStage(name: "postRAWRecipe") { image in
+                    self.applyPostRAWRecipe(recipe, to: image, fastMode: false)
+                }
+            )
+            if !renderContext.localNodes.isEmpty {
+                stages.append(
+                    PipelineStage(name: "localNodes") { [nodes = renderContext.localNodes] image in
+                        await self.renderLocalNodes(nodes, baseImage: image, originalImage: image)
+                    }
+                )
+            }
         } else {
             guard let loaded = await loadImage(from: asset.url) else {
                 print("[Export] Failed to load image")
                 return nil
             }
-            localNodeBaseImage = loaded
-            outputImage = applyFullRecipe(recipe, to: loaded)
+            baseImage = loaded
+            stages.append(
+                PipelineStage(name: "globalRecipe") { image in
+                    self.applyFullRecipe(recipe, to: image)
+                }
+            )
+            if !renderContext.localNodes.isEmpty {
+                stages.append(
+                    PipelineStage(name: "localNodes") { [nodes = renderContext.localNodes, originalImage = loaded] image in
+                        await self.renderLocalNodes(nodes, baseImage: image, originalImage: originalImage)
+                    }
+                )
+            }
         }
 
-        guard var image = outputImage else { return nil }
-
-        if !localNodes.isEmpty, let originalImage = localNodeBaseImage {
-            image = await renderLocalNodes(
-                localNodes,
-                baseImage: image,
-                originalImage: originalImage
+        if !renderContext.aiEdits.isEmpty {
+            stages.append(
+                PipelineStage(name: "aiEdits") { [edits = renderContext.aiEdits, fingerprint = asset.fingerprint] image in
+                    self.applyAIEdits(edits, to: image, assetFingerprint: fingerprint)
+                }
             )
         }
+
+        if !renderContext.aiLayers.isEmpty {
+            stages.append(
+                PipelineStage(name: "aiLayers") { [layers = renderContext.aiLayers, fingerprint = asset.fingerprint] image in
+                    self.applyAILayers(layers, to: image, assetFingerprint: fingerprint)
+                }
+            )
+        }
+
+        guard let inputImage = baseImage else { return nil }
+        var image = await runPipelineStages(stages, input: inputImage).image
 
         // Apply recipe resize settings only when requested
         if useRecipeResize && recipe.resize.hasEffect {
@@ -1566,42 +1801,152 @@ actor ImagePipeline {
         let extent = image.extent
         return context.createCGImage(image, from: extent)
     }
+
+    @available(*, unavailable, message: "Use renderForExport(for:context:maxSize:useRecipeResize:) with RenderContext.")
+    func renderForExport(
+        for asset: PhotoAsset,
+        recipe: EditRecipe,
+        maxSize: CGFloat? = nil,
+        useRecipeResize: Bool = true
+    ) async -> CGImage? {
+        nil
+    }
+
+    @available(*, unavailable, message: "Use renderForExport(for:context:maxSize:useRecipeResize:) with RenderContext.")
+    func renderForExport(
+        for asset: PhotoAsset,
+        recipe: EditRecipe,
+        localNodes: [ColorNode],
+        maxSize: CGFloat? = nil,
+        useRecipeResize: Bool = true
+    ) async -> CGImage? {
+        nil
+    }
     
     // MARK: - Cache Management
     
     private func cacheRAWFilter(_ filter: CIFilter, for key: String) {
-        if cacheOrder.count >= maxCacheSize {
-            if let oldest = cacheOrder.first {
-                rawFilterCache.removeValue(forKey: oldest)
-                rawWhiteBalanceDefaults.removeValue(forKey: oldest)
-                imageCache.removeValue(forKey: oldest)
-                cacheOrder.removeFirst()
+        if rawFilterCache[key] == nil && imageCache[key] == nil {
+            while cacheOrder.count >= maxCacheSize {
+                _ = removeOldestPreviewCacheEntry()
             }
         }
         rawFilterCache[key] = filter
-        cacheOrder.append(key)
+        touchCacheKey(key)
     }
     
     private func cacheImage(_ image: CIImage, for key: String) {
-        if cacheOrder.count >= maxCacheSize {
-            if let oldest = cacheOrder.first {
-                rawFilterCache.removeValue(forKey: oldest)
-                rawWhiteBalanceDefaults.removeValue(forKey: oldest)
-                imageCache.removeValue(forKey: oldest)
-                cacheOrder.removeFirst()
+        if rawFilterCache[key] == nil && imageCache[key] == nil {
+            while cacheOrder.count >= maxCacheSize {
+                _ = removeOldestPreviewCacheEntry()
             }
         }
         imageCache[key] = image
+        touchCacheKey(key)
+    }
+
+    private func touchCacheKey(_ key: String) {
+        if let existingIndex = cacheOrder.firstIndex(of: key) {
+            cacheOrder.remove(at: existingIndex)
+        }
         cacheOrder.append(key)
+    }
+
+    private func estimatedBytes(for image: CIImage) -> Int64 {
+        let extent = image.extent.integral
+        let width = max(1, Int(extent.width))
+        let height = max(1, Int(extent.height))
+        // CIImage is often lazily-evaluated; use conservative 16 bytes/pixel estimate for cache budgeting.
+        return Int64(width * height * 16)
+    }
+
+    @discardableResult
+    private func removeOldestPreviewCacheEntry() -> EvictionStats {
+        guard let oldest = cacheOrder.first else {
+            return EvictionStats(entries: 0, estimatedBytes: 0)
+        }
+
+        cacheOrder.removeFirst()
+        rawFilterCache.removeValue(forKey: oldest)
+        rawWhiteBalanceDefaults.removeValue(forKey: oldest)
+        intermediateCache.removeValue(forKey: oldest)
+        lastRecipeHash.removeValue(forKey: oldest)
+
+        var removedBytes: Int64 = 0
+        if let removedImage = imageCache.removeValue(forKey: oldest) {
+            removedBytes += estimatedBytes(for: removedImage)
+        }
+
+        previewEvictedEntries += 1
+        previewEvictedBytes += removedBytes
+        return EvictionStats(entries: 1, estimatedBytes: removedBytes)
     }
     
     func clearCache() {
+        _ = clearAllPreviewCaches()
+        previewCacheHitCount = 0
+        previewCacheMissCount = 0
+        previewEvictedEntries = 0
+        previewEvictedBytes = 0
+    }
+
+    /// Evict oldest preview cache entries (shared RAW/non-RAW cache keys).
+    func evictPreviewEntries(count: Int) -> EvictionStats {
+        guard count > 0 else {
+            return EvictionStats(entries: 0, estimatedBytes: 0)
+        }
+
+        var removedEntries = 0
+        var removedBytes: Int64 = 0
+        let target = min(count, cacheOrder.count)
+        while removedEntries < target {
+            let removed = removeOldestPreviewCacheEntry()
+            if removed.entries == 0 {
+                break
+            }
+            removedEntries += removed.entries
+            removedBytes += removed.estimatedBytes
+        }
+        return EvictionStats(entries: removedEntries, estimatedBytes: removedBytes)
+    }
+
+    /// Clear all preview-related caches and return eviction summary.
+    func clearAllPreviewCaches() -> EvictionStats {
+        let removedEntries = cacheOrder.count
+        let removedBytes = Int64(
+            imageCache
+                .values
+                .reduce(0) { $0 + Int(estimatedBytes(for: $1)) }
+        )
+
         rawFilterCache.removeAll()
         rawWhiteBalanceDefaults.removeAll()
         imageCache.removeAll()
+        intermediateCache.removeAll()
+        lastRecipeHash.removeAll()
         cacheOrder.removeAll()
         profileToneCurveCache.removeAll()
         profileShoulderCache.removeAll()
+
+        previewEvictedEntries += removedEntries
+        previewEvictedBytes += removedBytes
+        return EvictionStats(entries: removedEntries, estimatedBytes: removedBytes)
+    }
+
+    func previewCacheTelemetry() -> PreviewCacheTelemetry {
+        let estimatedMemoryBytes = Int64(
+            imageCache
+                .values
+                .reduce(0) { $0 + Int(estimatedBytes(for: $1)) }
+        )
+        return PreviewCacheTelemetry(
+            entryCount: cacheOrder.count,
+            estimatedMemoryBytes: estimatedMemoryBytes,
+            hits: previewCacheHitCount,
+            misses: previewCacheMissCount,
+            evictedEntries: previewEvictedEntries,
+            evictedBytes: previewEvictedBytes
+        )
     }
     
     // MARK: - Utilities
@@ -1637,6 +1982,196 @@ actor ImagePipeline {
             return nil
         }
         return NSImage(cgImage: cgImage, size: NSSize(width: extent.width, height: extent.height))
+    }
+
+    // MARK: - AI Compositing
+
+    /// Composite legacy AI edits (NanoBanana sidecar history) in creation order.
+    private func applyAIEdits(
+        _ aiEdits: [AIEdit],
+        to baseImage: CIImage,
+        assetFingerprint: String
+    ) -> CIImage {
+        var result = baseImage
+
+        for edit in aiEdits where edit.enabled {
+            guard let editImage = loadAICacheImage(
+                relativePath: edit.resultPath,
+                assetFingerprint: assetFingerprint,
+                targetExtent: result.extent
+            ) else {
+                continue
+            }
+
+            if let maskPath = edit.maskPath,
+               let maskImage = loadAICacheImage(
+                relativePath: maskPath,
+                assetFingerprint: assetFingerprint,
+                targetExtent: result.extent
+               ) {
+                let blendFilter = CIFilter.blendWithMask()
+                blendFilter.inputImage = editImage
+                blendFilter.backgroundImage = result
+                blendFilter.maskImage = maskImage
+                result = blendFilter.outputImage ?? result
+            } else {
+                result = blendImages(
+                    background: result,
+                    foreground: editImage,
+                    mode: .normal,
+                    opacity: 1.0,
+                    mask: nil
+                )
+            }
+        }
+
+        return result
+    }
+
+    /// Composite AI layers onto the current result in stack order (bottom to top).
+    private func applyAILayers(
+        _ layers: [AILayer],
+        to baseImage: CIImage,
+        assetFingerprint: String
+    ) -> CIImage {
+        var result = baseImage
+
+        for layer in aiLayerCompositingOrder(layers) where layer.isVisible && layer.opacity > 0 {
+            guard let layerImage = loadAILayerImage(
+                layer,
+                assetFingerprint: assetFingerprint,
+                targetExtent: result.extent
+            ) else {
+                continue
+            }
+
+            result = blendImages(
+                background: result,
+                foreground: layerImage,
+                mode: blendMode(for: layer.blendMode),
+                opacity: layer.opacity,
+                mask: nil
+            )
+        }
+
+        return result
+    }
+
+    /// Determine deterministic compositing order.
+    /// Contract: AILayerStack index 0 is top-most, so compositing runs bottom -> top.
+    /// For defensive determinism, tie-break with creation time, then UUID.
+    private func aiLayerCompositingOrder(_ layers: [AILayer]) -> [AILayer] {
+        layers.enumerated()
+            .sorted { lhs, rhs in
+                // Primary: explicit stack order (higher index is lower in the stack).
+                if lhs.offset != rhs.offset {
+                    return lhs.offset > rhs.offset
+                }
+                // Defensive tie-breakers for non-canonical/merged input.
+                if lhs.element.createdAt != rhs.element.createdAt {
+                    return lhs.element.createdAt < rhs.element.createdAt
+                }
+                return lhs.element.id.uuidString < rhs.element.id.uuidString
+            }
+            .map(\.element)
+    }
+
+    private func loadAILayerImage(
+        _ layer: AILayer,
+        assetFingerprint: String,
+        targetExtent: CGRect
+    ) -> CIImage? {
+        loadAICacheImage(
+            relativePath: layer.generatedImagePath,
+            assetFingerprint: assetFingerprint,
+            targetExtent: targetExtent
+        )
+    }
+
+    private func loadAICacheImage(
+        relativePath: String,
+        assetFingerprint: String,
+        targetExtent: CGRect
+    ) -> CIImage? {
+        guard !relativePath.isEmpty else { return nil }
+        let fileURL = aiCacheFileURL(for: relativePath, assetFingerprint: assetFingerprint)
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            return nil
+        }
+
+        let sourceImage: CIImage?
+        if let ciImage = CIImage(contentsOf: fileURL) {
+            sourceImage = ciImage
+        } else if let nsImage = NSImage(contentsOf: fileURL),
+                  let tiffData = nsImage.tiffRepresentation {
+            sourceImage = CIImage(data: tiffData)
+        } else {
+            sourceImage = nil
+        }
+
+        guard let sourceImage else {
+            return nil
+        }
+
+        return prepareAICompositeImage(sourceImage, targetExtent: targetExtent)
+    }
+
+    private func aiCacheFileURL(for relativePath: String, assetFingerprint: String) -> URL {
+        if relativePath.hasPrefix("/") {
+            return URL(fileURLWithPath: relativePath)
+        }
+        return CacheManager.shared.aiCacheDirectory(for: assetFingerprint)
+            .appendingPathComponent(relativePath)
+    }
+
+    private func prepareAICompositeImage(_ sourceImage: CIImage, targetExtent: CGRect) -> CIImage? {
+        var preparedImage = sourceImage
+        let sourceExtent = preparedImage.extent
+        guard sourceExtent.width > 0, sourceExtent.height > 0 else {
+            return nil
+        }
+
+        let needsResize = abs(sourceExtent.width - targetExtent.width) > 0.5
+            || abs(sourceExtent.height - targetExtent.height) > 0.5
+            || abs(sourceExtent.origin.x - targetExtent.origin.x) > 0.5
+            || abs(sourceExtent.origin.y - targetExtent.origin.y) > 0.5
+
+        if needsResize {
+            let transformToOrigin = CGAffineTransform(
+                translationX: -sourceExtent.origin.x,
+                y: -sourceExtent.origin.y
+            )
+            let scaleTransform = CGAffineTransform(
+                scaleX: targetExtent.width / sourceExtent.width,
+                y: targetExtent.height / sourceExtent.height
+            )
+            let transformToTarget = CGAffineTransform(
+                translationX: targetExtent.origin.x,
+                y: targetExtent.origin.y
+            )
+            preparedImage = preparedImage.transformed(
+                by: transformToOrigin.concatenating(scaleTransform).concatenating(transformToTarget)
+            )
+        }
+
+        return preparedImage.cropped(to: targetExtent)
+    }
+
+    private func blendMode(for mode: AIBlendMode) -> BlendMode {
+        switch mode {
+        case .normal:
+            return .normal
+        case .multiply:
+            return .multiply
+        case .screen:
+            return .screen
+        case .overlay:
+            return .overlay
+        case .softLight:
+            return .softLight
+        case .hardLight:
+            return .hardLight
+        }
     }
     
     // MARK: - Local Node Rendering

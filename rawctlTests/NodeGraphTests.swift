@@ -78,11 +78,12 @@ final class NodeGraphTests: XCTestCase {
         let tmpDir = FileManager.default.temporaryDirectory
         let fakePhotoURL = tmpDir.appendingPathComponent("svc_roundtrip_test.ARW")
         FileManager.default.createFile(atPath: fakePhotoURL.path, contents: Data("fake".utf8))
-        let sidecarURL = fakePhotoURL.deletingLastPathComponent()
-            .appendingPathComponent(fakePhotoURL.lastPathComponent + ".rawctl.json")
+        let sidecarURL = FileSystemService.sidecarURL(for: fakePhotoURL)
+        let legacySidecarURL = FileSystemService.legacySidecarURL(for: fakePhotoURL)
         defer {
             try? FileManager.default.removeItem(at: fakePhotoURL)
             try? FileManager.default.removeItem(at: sidecarURL)
+            try? FileManager.default.removeItem(at: legacySidecarURL)
         }
 
         var recipe = EditRecipe()
@@ -231,13 +232,18 @@ final class WireRenderingTests: XCTestCase {
         nodeRecipe.exposure = 0.5
         var node = ColorNode(name: "TestNode", type: .serial, adjustments: nodeRecipe)
         node.mask = NodeMask(type: .radial(centerX: 0.5, centerY: 0.5, radius: 0.3))
+        let renderContext = RenderContext(
+            assetId: asset.id,
+            recipe: recipe,
+            localNodes: [node]
+        )
 
         await ImagePipeline.shared.clearCache()
         let result = await ImagePipeline.shared.renderPreview(
             for: asset,
-            recipe: recipe,
+            context: renderContext,
             maxSize: 64,
-            localNodes: [node]
+            fastMode: false
         )
 
         XCTAssertNotNil(result, "renderPreview with localNodes should return a non-nil NSImage")
@@ -872,12 +878,17 @@ final class LocalAdjustmentIntegrationTests: XCTestCase {
         XCTAssertEqual(r, 0.3, accuracy: 0.01)
 
         // --- Step 6 & 7: Render via ImagePipeline with the loaded localNodes ---
+        let renderContext = RenderContext(
+            assetId: asset.id,
+            recipe: loaded.recipe,
+            localNodes: loaded.localNodes ?? []
+        )
         await ImagePipeline.shared.clearCache()
         let result = await ImagePipeline.shared.renderPreview(
             for: asset,
-            recipe: loaded.recipe,
+            context: renderContext,
             maxSize: 64,
-            localNodes: loaded.localNodes ?? []
+            fastMode: false
         )
 
         XCTAssertNotNil(result, "renderPreview with loaded localNodes should return a non-nil NSImage")
@@ -1762,13 +1773,22 @@ final class LocalNodeRenderBlendTests: XCTestCase {
         var partial = full
         partial.opacity = 0.2
 
-        guard let baseline = await ImagePipeline.shared.renderForExport(for: asset, recipe: EditRecipe()) else {
+        guard let baseline = await ImagePipeline.shared.renderForExport(
+            for: asset,
+            context: RenderContext(assetId: asset.id, recipe: EditRecipe())
+        ) else {
             throw TestError.imageRenderFailed
         }
-        guard let fullOutput = await ImagePipeline.shared.renderForExport(for: asset, recipe: EditRecipe(), localNodes: [full]) else {
+        guard let fullOutput = await ImagePipeline.shared.renderForExport(
+            for: asset,
+            context: RenderContext(assetId: asset.id, recipe: EditRecipe(), localNodes: [full])
+        ) else {
             throw TestError.imageRenderFailed
         }
-        guard let partialOutput = await ImagePipeline.shared.renderForExport(for: asset, recipe: EditRecipe(), localNodes: [partial]) else {
+        guard let partialOutput = await ImagePipeline.shared.renderForExport(
+            for: asset,
+            context: RenderContext(assetId: asset.id, recipe: EditRecipe(), localNodes: [partial])
+        ) else {
             throw TestError.imageRenderFailed
         }
 
@@ -1797,10 +1817,16 @@ final class LocalNodeRenderBlendTests: XCTestCase {
         var multiply = normal
         multiply.blendMode = .multiply
 
-        guard let normalOutput = await ImagePipeline.shared.renderForExport(for: asset, recipe: EditRecipe(), localNodes: [normal]) else {
+        guard let normalOutput = await ImagePipeline.shared.renderForExport(
+            for: asset,
+            context: RenderContext(assetId: asset.id, recipe: EditRecipe(), localNodes: [normal])
+        ) else {
             throw TestError.imageRenderFailed
         }
-        guard let multiplyOutput = await ImagePipeline.shared.renderForExport(for: asset, recipe: EditRecipe(), localNodes: [multiply]) else {
+        guard let multiplyOutput = await ImagePipeline.shared.renderForExport(
+            for: asset,
+            context: RenderContext(assetId: asset.id, recipe: EditRecipe(), localNodes: [multiply])
+        ) else {
             throw TestError.imageRenderFailed
         }
 
@@ -1954,13 +1980,15 @@ final class BrushMaskFallbackTests: XCTestCase {
         node.mask = NodeMask(type: .brush(data: Data("invalid".utf8)))
         node.adjustments.exposure = 2.0
 
-        guard let baseline = await ImagePipeline.shared.renderForExport(for: asset, recipe: EditRecipe()) else {
+        guard let baseline = await ImagePipeline.shared.renderForExport(
+            for: asset,
+            context: RenderContext(assetId: asset.id, recipe: EditRecipe())
+        ) else {
             throw TestError.imageRenderFailed
         }
         guard let withInvalidBrush = await ImagePipeline.shared.renderForExport(
             for: asset,
-            recipe: EditRecipe(),
-            localNodes: [node]
+            context: RenderContext(assetId: asset.id, recipe: EditRecipe(), localNodes: [node])
         ) else {
             throw TestError.imageRenderFailed
         }

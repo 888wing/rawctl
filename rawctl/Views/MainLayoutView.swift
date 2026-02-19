@@ -9,6 +9,7 @@ import SwiftUI
 
 /// Main 3-column layout for the application
 struct MainLayoutView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var appState = AppState()
     @State private var showExportDialog = false
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
@@ -196,6 +197,22 @@ struct MainLayoutView: View {
                             .accessibilityIdentifier("e2e.sidecar.load.us")
                             .accessibilityLabel("sidecarLoadUs")
                             .accessibilityValue("\(appState.e2eSidecarLoadUs)")
+                        Text("sidecarWriteQueued")
+                            .accessibilityIdentifier("e2e.sidecar.write.queued")
+                            .accessibilityLabel("sidecarWriteQueued")
+                            .accessibilityValue("\(appState.e2eSidecarWriteQueued)")
+                        Text("sidecarWriteSkippedNoOp")
+                            .accessibilityIdentifier("e2e.sidecar.write.skipped.noop")
+                            .accessibilityLabel("sidecarWriteSkippedNoOp")
+                            .accessibilityValue("\(appState.e2eSidecarWriteSkippedNoOp)")
+                        Text("sidecarWriteFlushed")
+                            .accessibilityIdentifier("e2e.sidecar.write.flushed")
+                            .accessibilityLabel("sidecarWriteFlushed")
+                            .accessibilityValue("\(appState.e2eSidecarWriteFlushed)")
+                        Text("sidecarWriteWritten")
+                            .accessibilityIdentifier("e2e.sidecar.write.written")
+                            .accessibilityLabel("sidecarWriteWritten")
+                            .accessibilityValue("\(appState.e2eSidecarWriteWritten)")
                         Text("thumbnailPreloadState")
                             .accessibilityIdentifier("e2e.thumbnail.preload.state")
                             .accessibilityLabel("thumbnailPreloadState")
@@ -255,6 +272,11 @@ struct MainLayoutView: View {
                             Task { await appState.runE2ELocalExportConsistencyCheck() }
                         }
                         .fixedSize()
+                        E2EAppKitButton(title: "sidecarMetricsReset", identifier: "e2e.action.sidecar.metrics.reset") {
+                            e2eLastCommand = "sidecarMetricsReset"
+                            Task { await appState.resetE2ESidecarWriteMetrics() }
+                        }
+                        .fixedSize()
                     }
                 }
                 .font(.system(size: 8, design: .monospaced))
@@ -290,8 +312,19 @@ struct MainLayoutView: View {
             resetAdjustments()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+            // Best-effort final flush on termination.
+            // ScenePhase (.inactive/.background) is still the primary lifecycle hook.
+            Task {
+                await appState.flushPendingRecipeSaveAndWait()
+            }
             // Auto-save current project state on app termination
             saveProjectStateSync()
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            guard newPhase == .inactive || newPhase == .background else { return }
+            Task {
+                await appState.flushPendingRecipeSaveAndWait()
+            }
         }
     }
 

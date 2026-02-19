@@ -249,6 +249,7 @@ struct WorkspaceView: View {
         }
         .toastHUD(appState: appState)
         .onChange(of: appState.viewMode) { _, newMode in
+            appState.flushPendingRecipeSave()
             if newMode == .single {
                 _ = appState.switchToSingleViewIfPossible()
             } else if appState.transformMode {
@@ -321,11 +322,11 @@ struct WorkspaceView: View {
         exportSettings.exportSelection = .current
 
         Task {
+            let renderContext = appState.makeRenderContext(for: asset)
             await ExportService.shared.startExport(
                 assets: [asset],
-                recipes: appState.recipes,
-                settings: exportSettings,
-                localNodesByURL: [asset.url: appState.localNodes[asset.url] ?? []]
+                renderContextsByAssetID: [asset.id: renderContext],
+                settings: exportSettings
             )
 
             await MainActor.run {

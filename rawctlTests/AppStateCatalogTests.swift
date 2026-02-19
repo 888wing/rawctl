@@ -54,4 +54,41 @@ struct AppStateCatalogTests {
         #expect(appState.smartFilteredAssets.count == 1)
         #expect(appState.smartFilteredAssets.first?.id == asset1.id)
     }
+
+    @Test func appStateRecentImportsFilterIncludesOnlyRecentAssets() async throws {
+        let appState = AppState()
+        let now = Date()
+        let oldDate = Calendar.current.date(byAdding: .day, value: -20, to: now) ?? .distantPast
+
+        let recent = PhotoAsset(
+            url: URL(fileURLWithPath: "/tmp/recent.jpg"),
+            fileSize: 100,
+            creationDate: now,
+            modificationDate: now,
+            fingerprint: "recent"
+        )
+        let old = PhotoAsset(
+            url: URL(fileURLWithPath: "/tmp/old.jpg"),
+            fileSize: 100,
+            creationDate: oldDate,
+            modificationDate: oldDate,
+            fingerprint: "old"
+        )
+
+        appState.assets = [recent, old]
+        appState.applyRecentImportsFilter(days: 7)
+
+        #expect(appState.isRecentImportsMode == true)
+        #expect(appState.filteredAssets.count == 1)
+        #expect(appState.filteredAssets.first?.id == recent.id)
+    }
+
+    @Test func showAllPhotosInLibraryClearsRecentImportsMode() async throws {
+        let appState = AppState()
+        appState.applyRecentImportsFilter(days: 7)
+        #expect(appState.isRecentImportsMode == true)
+
+        appState.showAllPhotosInLibrary()
+        #expect(appState.isRecentImportsMode == false)
+    }
 }

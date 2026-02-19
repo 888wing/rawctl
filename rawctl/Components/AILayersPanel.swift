@@ -93,6 +93,7 @@ struct AILayersPanel: View {
                           let draggedUUID = UUID(uuidString: draggedId),
                           draggedUUID != layer.id else { return false }
                     layerStack.moveLayer(from: draggedUUID, to: layer.id)
+                    appState.saveCurrentRecipeDebounced()
                     return true
                 }
             }
@@ -225,6 +226,7 @@ struct AILayersPanel: View {
                         assetFingerprint: asset.fingerprint,
                         layer: flattenedLayer
                     )
+                    appState.saveCurrentRecipeDebounced()
                     appState.showHUD("Flattened \(visibleLayers.count) layers")
                 }
             }
@@ -311,6 +313,7 @@ struct AILayersPanel: View {
             assetFingerprint: fingerprint
         )
         layerStack.removeLayer(id: layer.id)
+        appState.saveCurrentRecipeDebounced()
     }
 
     private func toggleVisibility(_ layer: AILayer) {
@@ -327,6 +330,7 @@ struct AILayersPanel: View {
                 action: .visibilityChanged
             )
         }
+        appState.saveCurrentRecipeDebounced()
     }
 
     private func setOpacity(layer: AILayer, opacity: Double) {
@@ -343,6 +347,7 @@ struct AILayersPanel: View {
                 action: .opacityChanged
             )
         }
+        appState.saveCurrentRecipeDebounced()
     }
 
     private func setBlendMode(layer: AILayer, blendMode: AIBlendMode) {
@@ -359,6 +364,7 @@ struct AILayersPanel: View {
                 action: .blendModeChanged
             )
         }
+        appState.saveCurrentRecipeDebounced()
     }
 
     private func downloadLayer(_ layer: AILayer) {

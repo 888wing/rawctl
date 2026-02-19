@@ -215,8 +215,9 @@ struct FilterBar: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .fixedSize(horizontal: true, vertical: false)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .clipped()
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
     }
     

@@ -19,9 +19,25 @@ enum ThumbnailError: Error {
 actor ThumbnailService {
     static let shared = ThumbnailService()
 
+    struct EvictionStats: Equatable {
+        var entries: Int
+        var estimatedBytes: Int64
+    }
+
+    struct CacheTelemetry: Equatable {
+        var entryCount: Int
+        var estimatedMemoryBytes: Int64
+        var memoryHits: Int
+        var diskHits: Int
+        var misses: Int
+        var evictedEntries: Int
+        var evictedBytes: Int64
+    }
+
     private let cacheDirectory: URL
     private let thumbnailSize: CGFloat = 300
     private var memoryCache: [String: NSImage] = [:]
+    private var memoryCacheOrder: [String] = []
     private var inFlightLoads: [String: Task<NSImage?, Never>] = [:]
     private let maxMemoryCacheSize = 200
     nonisolated private static let diskIOQueue = DispatchQueue(
@@ -36,6 +52,11 @@ actor ThumbnailService {
     private let concurrentLoadLimit = 6
     private var activeLoads = 0
     private var pendingLoads: [CheckedContinuation<Void, Never>] = []
+    private var memoryHitCount = 0
+    private var diskHitCount = 0
+    private var missCount = 0
+    private var evictedEntryCount = 0
+    private var evictedByteCount: Int64 = 0
 
     init() {
         // Set up cache directory
@@ -79,6 +100,8 @@ actor ThumbnailService {
 
         // Check memory cache first (instant, no slot needed)
         if let cached = memoryCache[cacheKey] {
+            memoryHitCount += 1
+            touchMemoryCacheKey(cacheKey)
             PerformanceSignposts.event("thumbnailCacheHitMemory", id: signpostId)
             return cached
         }
@@ -87,6 +110,7 @@ actor ThumbnailService {
         let cacheFile = cacheDirectory.appendingPathComponent("\(cacheKey).jpg")
         if FileManager.default.fileExists(atPath: cacheFile.path),
            let image = NSImage(contentsOf: cacheFile) {
+            diskHitCount += 1
             await cacheInMemory(image, for: cacheKey)
             PerformanceSignposts.event("thumbnailCacheHitDisk", id: signpostId)
             return image
@@ -96,6 +120,8 @@ actor ThumbnailService {
             PerformanceSignposts.event("thumbnailJoinInFlight", id: signpostId)
             return await inFlight.value
         }
+
+        missCount += 1
 
         let generationTask = Task<NSImage?, Never> { [asset, size, effectiveTimeout] in
             let taskSignpostId = PerformanceSignposts.signposter.makeSignpostID()
@@ -201,15 +227,51 @@ actor ThumbnailService {
     }
     
     private func cacheInMemory(_ image: NSImage, for key: String) async {
-        // Simple LRU-ish eviction
-        if memoryCache.count >= maxMemoryCacheSize {
-            // Remove oldest entries (simple approach)
-            let keysToRemove = Array(memoryCache.keys.prefix(maxMemoryCacheSize / 4))
-            for key in keysToRemove {
-                memoryCache.removeValue(forKey: key)
-            }
+        if memoryCache[key] != nil {
+            memoryCache[key] = image
+            touchMemoryCacheKey(key)
+            return
+        }
+
+        while memoryCache.count >= maxMemoryCacheSize {
+            _ = removeOldestMemoryEntry()
         }
         memoryCache[key] = image
+        touchMemoryCacheKey(key)
+    }
+
+    private func touchMemoryCacheKey(_ key: String) {
+        if let existingIndex = memoryCacheOrder.firstIndex(of: key) {
+            memoryCacheOrder.remove(at: existingIndex)
+        }
+        memoryCacheOrder.append(key)
+    }
+
+    @discardableResult
+    private func removeOldestMemoryEntry() -> EvictionStats {
+        guard let oldest = memoryCacheOrder.first else {
+            return EvictionStats(entries: 0, estimatedBytes: 0)
+        }
+        memoryCacheOrder.removeFirst()
+        guard let image = memoryCache.removeValue(forKey: oldest) else {
+            return EvictionStats(entries: 0, estimatedBytes: 0)
+        }
+        let bytes = estimatedBytes(for: image)
+        evictedEntryCount += 1
+        evictedByteCount += bytes
+        return EvictionStats(entries: 1, estimatedBytes: bytes)
+    }
+
+    private func estimatedBytes(for image: NSImage) -> Int64 {
+        if let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+            return Int64(cgImage.bytesPerRow * cgImage.height)
+        }
+        if let rep = image.representations.compactMap({ $0 as? NSBitmapImageRep }).first {
+            return Int64(rep.bytesPerRow * rep.pixelsHigh)
+        }
+        let width = max(1, Int(image.size.width.rounded()))
+        let height = max(1, Int(image.size.height.rounded()))
+        return Int64(width * height * 4)
     }
     
     nonisolated private static func enqueueDiskWrite(_ image: NSImage, at url: URL) {
@@ -226,8 +288,66 @@ actor ThumbnailService {
     /// Clear all caches
     func clearCache() async {
         memoryCache.removeAll()
+        memoryCacheOrder.removeAll()
+        memoryHitCount = 0
+        diskHitCount = 0
+        missCount = 0
+        evictedEntryCount = 0
+        evictedByteCount = 0
         try? FileManager.default.removeItem(at: cacheDirectory)
         try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+    }
+
+    /// Evict oldest in-memory thumbnails.
+    func evictMemoryEntries(count: Int) -> EvictionStats {
+        guard count > 0 else {
+            return EvictionStats(entries: 0, estimatedBytes: 0)
+        }
+
+        var removed = 0
+        var removedBytes: Int64 = 0
+        let target = min(count, memoryCache.count)
+        while removed < target {
+            let stats = removeOldestMemoryEntry()
+            if stats.entries == 0 {
+                break
+            }
+            removed += stats.entries
+            removedBytes += stats.estimatedBytes
+        }
+        return EvictionStats(entries: removed, estimatedBytes: removedBytes)
+    }
+
+    /// Clear in-memory thumbnails but keep disk cache intact.
+    func clearInMemoryCache() -> EvictionStats {
+        let removedBytes = Int64(
+            memoryCache
+                .values
+                .reduce(0) { $0 + Int(estimatedBytes(for: $1)) }
+        )
+        let removedEntries = memoryCache.count
+        memoryCache.removeAll()
+        memoryCacheOrder.removeAll()
+        evictedEntryCount += removedEntries
+        evictedByteCount += removedBytes
+        return EvictionStats(entries: removedEntries, estimatedBytes: removedBytes)
+    }
+
+    func cacheTelemetry() -> CacheTelemetry {
+        let estimatedMemoryBytes = Int64(
+            memoryCache
+                .values
+                .reduce(0) { $0 + Int(estimatedBytes(for: $1)) }
+        )
+        return CacheTelemetry(
+            entryCount: memoryCache.count,
+            estimatedMemoryBytes: estimatedMemoryBytes,
+            memoryHits: memoryHitCount,
+            diskHits: diskHitCount,
+            misses: missCount,
+            evictedEntries: evictedEntryCount,
+            evictedBytes: evictedByteCount
+        )
     }
     
     /// Check if thumbnail is cached (memory or disk)

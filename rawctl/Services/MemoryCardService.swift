@@ -134,18 +134,21 @@ final class MemoryCardService {
             appState.loadingMessage = "Exporting \(assets.count) photos..."
             
             // Export all photos
-            var recipes: [UUID: EditRecipe] = [:]
-            var localNodesByURL: [URL: [ColorNode]] = [:]
+            var renderContextsByAssetID: [UUID: RenderContext] = [:]
             for asset in assets {
-                // Try v6 sidecar first (recipe + local nodes)
-                if let loaded = try? await SidecarService.shared.load(for: asset.url) {
-                    recipes[asset.id] = loaded.recipe
-                    localNodesByURL[asset.url] = loaded.localNodes ?? []
-                } else if let (recipe, _) = await SidecarService.shared.loadRecipeAndSnapshots(for: asset.url) {
-                    // Fallback for older sidecars
-                    recipes[asset.id] = recipe
+                if let loaded = await SidecarService.shared.loadRenderState(for: asset.url) {
+                    renderContextsByAssetID[asset.id] = RenderContext(
+                        assetId: asset.id,
+                        recipe: loaded.recipe,
+                        localNodes: loaded.localNodes,
+                        aiLayers: loaded.aiLayers,
+                        aiEdits: loaded.aiEdits
+                    )
                 } else {
-                    recipes[asset.id] = EditRecipe()
+                    renderContextsByAssetID[asset.id] = RenderContext(
+                        assetId: asset.id,
+                        recipe: EditRecipe()
+                    )
                 }
             }
             
@@ -159,9 +162,8 @@ final class MemoryCardService {
             
             await ExportService.shared.startExport(
                 assets: assets,
-                recipes: recipes,
-                settings: settings,
-                localNodesByURL: localNodesByURL
+                renderContextsByAssetID: renderContextsByAssetID,
+                settings: settings
             )
             
             appState.isLoading = false
@@ -206,6 +208,10 @@ final class MemoryCardService {
             
             appState.assets = assets
             appState.recipes = [:]
+            appState.snapshots = [:]
+            appState.localNodes = [:]
+            appState.aiLayerStacks = [:]
+            appState.aiEditsByURL = [:]
             appState.isLoading = false
 
             // Select first photo immediately for responsive UI

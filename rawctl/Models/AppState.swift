@@ -70,8 +70,14 @@ final class AppState: ObservableObject {
     private var recipeLoadTask: Task<Void, Never>?
     private var thumbnailPreloadTask: Task<Void, Never>?
     private var thumbnailAutoHideTask: Task<Void, Never>?
+    private var sidecarWriteMetricsTask: Task<Void, Never>?
     private var pendingRecipeSaveTask: Task<Void, Never>?
+    private var pendingRecipeSavePayloads: [UUID: RecipeSavePayload] = [:]
     private let thumbnailWarmupDelayNs: UInt64 = 120_000_000
+    private let e2eSidecarMetricsPollIntervalNs: UInt64 = 300_000_000
+    private lazy var selectionCoordinator = SelectionCoordinator(appState: self)
+    private lazy var editStateCoordinator = EditStateCoordinator(appState: self)
+    private lazy var librarySyncCoordinator = LibrarySyncCoordinator(appState: self)
     
     // MARK: - Default Folder
     
@@ -99,6 +105,17 @@ final class AppState: ObservableObject {
     init() {
         // Load saved default folder path
         self.defaultFolderPath = UserDefaults.standard.string(forKey: "defaultFolderPath") ?? ""
+
+        if ProcessInfo.processInfo.environment["RAWCTL_E2E_STATUS"] == "1" {
+            sidecarWriteMetricsTask = Task { [weak self] in
+                guard let self else { return }
+                await SidecarService.shared.resetWriteMetrics()
+                while !Task.isCancelled {
+                    await self.refreshSidecarWriteMetrics()
+                    try? await Task.sleep(nanoseconds: self.e2eSidecarMetricsPollIntervalNs)
+                }
+            }
+        }
     }
 
     func cancelBackgroundAssetLoading(resetThumbnailProgress: Bool = false) {
@@ -123,7 +140,10 @@ final class AppState: ObservableObject {
         let expectedFolderPath = expectedFolder?.standardizedFileURL.path
         cancelBackgroundAssetLoading(resetThumbnailProgress: false)
         recipeLoadTask = Task {
-            await loadAllRecipes(expectedFolderPath: expectedFolderPath)
+            await primeSelectedAssetSidecar(expectedFolderPath: expectedFolderPath)
+            guard !Task.isCancelled else { return }
+            guard isAssetLoadContextValid(expectedFolderPath: expectedFolderPath) else { return }
+            await loadAllRecipes(expectedFolderPath: expectedFolderPath, excludingAssetId: selectedAssetId)
             guard !Task.isCancelled else { return }
             guard isAssetLoadContextValid(expectedFolderPath: expectedFolderPath) else { return }
             // Let first-selection UI settle before thumbnail fan-out to reduce contention.
@@ -139,14 +159,46 @@ final class AppState: ObservableObject {
         return selectedFolder?.standardizedFileURL.path == expectedFolderPath
     }
 
+    private func primeSelectedAssetSidecar(expectedFolderPath: String?) async {
+        guard isAssetLoadContextValid(expectedFolderPath: expectedFolderPath) else { return }
+        guard let selected = selectedAsset else { return }
+        guard recipes[selected.id] == nil || localNodes[selected.url] == nil || aiEditsByURL[selected.url] == nil || aiLayerStacks[selected.id] == nil else { return }
+
+        if let state = await SidecarService.shared.loadRenderState(for: selected.url) {
+            guard !Task.isCancelled else { return }
+            guard isAssetLoadContextValid(expectedFolderPath: expectedFolderPath) else { return }
+            guard selectedAssetId == selected.id else { return }
+            recipes[selected.id] = state.recipe
+            snapshots[selected.id] = state.snapshots
+            localNodes[selected.url] = state.localNodes
+            aiEditsByURL[selected.url] = state.aiEdits
+            setAILayers(state.aiLayers, for: selected.id)
+        }
+    }
+
     private func resetE2EPhaseMetrics() {
         e2eScanPhaseMs = 0
         e2eSidecarLoadState = "idle"
         e2eSidecarLoadedCount = 0
         e2eSidecarLoadMs = 0
         e2eSidecarLoadUs = 0
+        e2eSidecarWriteQueued = 0
+        e2eSidecarWriteSkippedNoOp = 0
+        e2eSidecarWriteFlushed = 0
+        e2eSidecarWriteWritten = 0
         e2eThumbnailPreloadState = "idle"
         e2eThumbnailPreloadMs = 0
+        e2eLocalExportMatch = "idle"
+        e2eLocalPreviewDiff = ""
+        e2eLocalPreviewHash = ""
+        e2eLocalExportHash = ""
+
+        if ProcessInfo.processInfo.environment["RAWCTL_E2E_STATUS"] == "1" {
+            Task { [weak self] in
+                guard let self else { return }
+                await self.resetE2ESidecarWriteMetrics()
+            }
+        }
     }
     
     // MARK: - Selection & View
@@ -172,8 +224,16 @@ final class AppState: ObservableObject {
     @Published var e2eSidecarLoadedCount: Int = 0
     @Published var e2eSidecarLoadMs: Int = 0
     @Published var e2eSidecarLoadUs: Int = 0
+    @Published var e2eSidecarWriteQueued: Int = 0
+    @Published var e2eSidecarWriteSkippedNoOp: Int = 0
+    @Published var e2eSidecarWriteFlushed: Int = 0
+    @Published var e2eSidecarWriteWritten: Int = 0
     @Published var e2eThumbnailPreloadState: String = "idle"
     @Published var e2eThumbnailPreloadMs: Int = 0
+    @Published var e2eLocalExportMatch: String = "idle"   // "1" | "0" | "idle" | "error:*"
+    @Published var e2eLocalPreviewDiff: String = ""
+    @Published var e2eLocalPreviewHash: String = ""
+    @Published var e2eLocalExportHash: String = ""
 
     // MARK: - Catalog & Project Mode
 
@@ -213,6 +273,10 @@ final class AppState: ObservableObject {
         // Clear existing assets before loading
         assets = []
         recipes = [:]
+        snapshots = [:]
+        localNodes = [:]
+        aiLayerStacks = [:]
+        aiEditsByURL = [:]
 
         // Load all source folders
         if !project.sourceFolders.isEmpty {
@@ -260,24 +324,20 @@ final class AppState: ObservableObject {
 
     /// Clear project selection (return to library view)
     func clearProjectSelection() {
-        // Only clear project and smart collection selection
-        // Keep assets and recipes if we're just switching views
-        selectedProject = nil
-        activeSmartCollection = nil
-        // Note: Don't clear assets/recipes here - that should only happen
-        // when opening a new folder or project
+        librarySyncCoordinator.clearProjectSelection()
     }
 
     /// Apply a smart collection filter
     func applySmartCollection(_ collection: SmartCollection?) {
-        activeSmartCollection = collection
-        // Clear other filters when using smart collection
-        if collection != nil {
-            filterRating = 0
-            filterColor = nil
-            filterFlag = nil
-            filterTag = ""
-        }
+        librarySyncCoordinator.applySmartCollection(collection)
+    }
+
+    func applyRecentImportsFilter(days: Int = 7) {
+        librarySyncCoordinator.applyRecentImportsFilter(days: days)
+    }
+
+    func showAllPhotosInLibrary() {
+        librarySyncCoordinator.showAllPhotosInLibrary()
     }
 
     // Comparison and Zoom State
@@ -297,45 +357,22 @@ final class AppState: ObservableObject {
     
     /// Toggle selection for multi-select (Cmd+click)
     func toggleSelection(_ assetId: UUID) {
-        if selectedAssetIds.contains(assetId) {
-            selectedAssetIds.remove(assetId)
-            // Update primary selection to another selected item
-            selectedAssetId = selectedAssetIds.first
-        } else {
-            selectedAssetIds.insert(assetId)
-            selectedAssetId = assetId
-        }
+        selectionCoordinator.toggleSelection(assetId)
     }
     
     /// Extend selection to asset (Shift+click)
     func extendSelection(to assetId: UUID) {
-        guard let currentId = selectedAssetId,
-              let currentIndex = filteredAssets.firstIndex(where: { $0.id == currentId }),
-              let targetIndex = filteredAssets.firstIndex(where: { $0.id == assetId }) else {
-            // No current selection, just select this one
-            selectedAssetId = assetId
-            selectedAssetIds = [assetId]
-            return
-        }
-        
-        let start = min(currentIndex, targetIndex)
-        let end = max(currentIndex, targetIndex)
-        
-        for i in start...end {
-            selectedAssetIds.insert(filteredAssets[i].id)
-        }
-        selectedAssetId = assetId
+        selectionCoordinator.extendSelection(to: assetId)
     }
     
     /// Clear multi-selection
     func clearMultiSelection() {
-        selectedAssetIds.removeAll()
+        selectionCoordinator.clearMultiSelection()
     }
     
     /// Select all filtered assets
     func selectAll() {
-        selectedAssetIds = Set(filteredAssets.map { $0.id })
-        selectedAssetId = filteredAssets.first?.id
+        selectionCoordinator.selectAll()
     }
     
     /// Get selected assets
@@ -384,6 +421,9 @@ final class AppState: ObservableObject {
 
     /// AI layer stacks dictionary keyed by asset ID
     @Published var aiLayerStacks: [UUID: AILayerStack] = [:]
+
+    /// AI edit history keyed by photo asset URL.
+    @Published var aiEditsByURL: [URL: [AIEdit]] = [:]
 
     /// Get or create AI layer stack for an asset
     func aiLayerStack(for assetId: UUID) -> AILayerStack {
@@ -444,32 +484,59 @@ final class AppState: ObservableObject {
         return localNodes[url] ?? []
     }
 
+    /// AI edits for the currently selected photo.
+    var currentAIEdits: [AIEdit] {
+        guard let url = selectedAsset?.url else { return [] }
+        return aiEditsByURL[url] ?? []
+    }
+
+    /// Unified render context builder shared by preview/export call sites.
+    func makeRenderContext(
+        for asset: PhotoAsset,
+        recipe: EditRecipe? = nil,
+        localNodes: [ColorNode]? = nil
+    ) -> RenderContext {
+        RenderContext(
+            assetId: asset.id,
+            recipe: recipe ?? recipes[asset.id] ?? EditRecipe(),
+            localNodes: localNodes ?? self.localNodes[asset.url] ?? [],
+            aiLayers: aiLayerStacks[asset.id]?.layers ?? [],
+            aiEdits: aiEditsByURL[asset.url] ?? []
+        )
+    }
+
+    /// Update in-memory AI edits for an asset so preview/export contexts refresh immediately.
+    func setAIEdits(_ edits: [AIEdit], for assetURL: URL) {
+        aiEditsByURL[assetURL] = edits
+    }
+
+    /// Update in-memory AI layers for an asset while preserving observable stack identity.
+    func setAILayers(_ layers: [AILayer], for assetId: UUID) {
+        if layers.isEmpty {
+            aiLayerStacks.removeValue(forKey: assetId)
+            return
+        }
+
+        if let existing = aiLayerStacks[assetId] {
+            existing.layers = layers
+        } else {
+            aiLayerStacks[assetId] = AILayerStack(documentId: assetId, layers: layers)
+        }
+    }
+
     /// Add a new local adjustment node for the current photo
     func addLocalNode(_ node: ColorNode) {
-        guard let url = selectedAsset?.url else { return }
-        var nodes = localNodes[url] ?? []
-        nodes.append(node)
-        localNodes[url] = nodes
-        saveCurrentRecipeDebounced()
+        editStateCoordinator.addLocalNode(node)
     }
 
     /// Remove a local node by id for the current photo
     func removeLocalNode(id: UUID) {
-        guard let url = selectedAsset?.url else { return }
-        localNodes[url]?.removeAll { $0.id == id }
-        if editingMaskId == id {
-            editingMaskId = nil
-            showMaskOverlay = false
-        }
-        saveCurrentRecipeDebounced()
+        editStateCoordinator.removeLocalNode(id: id)
     }
 
     /// Update a local node's adjustments or mask
     func updateLocalNode(_ node: ColorNode) {
-        guard let url = selectedAsset?.url else { return }
-        guard let index = localNodes[url]?.firstIndex(where: { $0.id == node.id }) else { return }
-        localNodes[url]?[index] = node
-        saveCurrentRecipeDebounced()
+        editStateCoordinator.updateLocalNode(node)
     }
 
     // MARK: - Memory Card & Auto Export
@@ -486,7 +553,14 @@ final class AppState: ObservableObject {
         var color: ColorLabel? = nil
         var flag: Flag? = nil
         var tag: String = ""
+        var recentImportsEnabled: Bool = false
+        var recentImportsDays: Int = 0
     }
+
+    @Published var isRecentImportsMode: Bool = false {
+        didSet { invalidateFilterCache() }
+    }
+    var recentImportsWindowDays: Int = 7
     
     @Published var filterRating: Int = 0 {
         didSet { invalidateFilterCache() }
@@ -561,7 +635,9 @@ final class AppState: ObservableObject {
             rating: filterRating,
             color: filterColor,
             flag: filterFlag,
-            tag: filterTag
+            tag: filterTag,
+            recentImportsEnabled: isRecentImportsMode,
+            recentImportsDays: recentImportsWindowDays
         )
         
         if let cached = cachedFilteredAssets,
@@ -610,13 +686,29 @@ final class AppState: ObservableObject {
         }
 
         let sorted = sortAssets(filteredByControls)
+        let libraryScopedAssets: [PhotoAsset]
+        if isRecentImportsMode {
+            let cutoff = Calendar.current.date(
+                byAdding: .day,
+                value: -recentImportsWindowDays,
+                to: Date()
+            ) ?? .distantPast
+            libraryScopedAssets = sorted.filter { asset in
+                guard let captureDate = asset.metadata?.dateTime ?? asset.creationDate ?? asset.modificationDate else {
+                    return false
+                }
+                return captureDate >= cutoff
+            }
+        } else {
+            libraryScopedAssets = sorted
+        }
 
         // Apply active Smart Collection on top of control-based filters and sorting.
         if let collection = activeSmartCollection {
-            return collection.filter(assets: sorted, recipes: recipes)
+            return collection.filter(assets: libraryScopedAssets, recipes: recipes)
         }
 
-        return sorted
+        return libraryScopedAssets
     }
     
     /// Sort assets according to current criteria and order
@@ -794,36 +886,22 @@ final class AppState: ObservableObject {
     /// Ensure there's a primary selected asset when entering single-view workflows.
     @discardableResult
     func ensurePrimarySelection() -> Bool {
-        if selectedAssetId != nil {
-            return true
-        }
-
-        if let first = filteredAssets.first ?? assets.first {
-            select(first, switchToSingleView: false)
-            return true
-        }
-
-        return false
+        selectionCoordinator.ensurePrimarySelection()
     }
 
     /// Switch to single view and auto-select the first available photo when needed.
     @discardableResult
     func switchToSingleViewIfPossible(showFeedback: Bool = true) -> Bool {
-        guard ensurePrimarySelection() else {
-            viewMode = .grid
-            if showFeedback {
-                showHUD("No photo selected")
-            }
-            return false
-        }
-
-        viewMode = .single
-        return true
+        selectionCoordinator.switchToSingleViewIfPossible(showFeedback: showFeedback)
     }
     
     // MARK: - Actions
     
-    func select(_ asset: PhotoAsset, switchToSingleView: Bool = true) {
+    func select(
+        _ asset: PhotoAsset,
+        switchToSingleView: Bool = true,
+        loadSidecarImmediately: Bool = true
+    ) {
         let isSwitchingAsset = selectedAssetId != asset.id
         // Save and flush current recipe before switching.
         flushPendingRecipeSave()
@@ -836,27 +914,25 @@ final class AppState: ObservableObject {
 
         selectedAssetId = asset.id
 
-        // Load recipe from sidecar if not already in memory (may have been prefetched)
-        if recipes[asset.id] == nil {
-            Task {
-                if let (recipe, snaps) = await SidecarService.shared.loadRecipeAndSnapshots(for: asset.url) {
-                    await MainActor.run {
-                        // Only update if still not set (avoid race condition with prefetch)
-                        if self.recipes[asset.id] == nil {
-                            self.recipes[asset.id] = recipe
-                            self.snapshots[asset.id] = snaps
+        if loadSidecarImmediately {
+            // Load recipe from sidecar if not already in memory (may have been prefetched).
+            if recipes[asset.id] == nil || aiEditsByURL[asset.url] == nil || localNodes[asset.url] == nil || aiLayerStacks[asset.id] == nil {
+                Task { [weak self] in
+                    guard let self else { return }
+                    if let state = await SidecarService.shared.loadRenderState(for: asset.url) {
+                        await MainActor.run {
+                            // Only update if this asset is still selected.
+                            guard self.selectedAssetId == asset.id else { return }
+                            if self.recipes[asset.id] == nil {
+                                self.recipes[asset.id] = state.recipe
+                                self.snapshots[asset.id] = state.snapshots
+                            }
+                            self.localNodes[asset.url] = state.localNodes
+                            self.aiEditsByURL[asset.url] = state.aiEdits
+                            self.setAILayers(state.aiLayers, for: asset.id)
                             self.objectWillChange.send()
                         }
                     }
-                }
-            }
-        }
-
-        // Load localNodes for this photo (always refresh from sidecar on selection)
-        Task {
-            if let loaded = try? await SidecarService.shared.load(for: asset.url) {
-                await MainActor.run {
-                    self.localNodes[asset.url] = loaded.localNodes ?? []
                 }
             }
         }
@@ -879,6 +955,7 @@ final class AppState: ObservableObject {
         let recipe: EditRecipe
         let snapshots: [RecipeSnapshot]
         let nodes: [ColorNode]?
+        let aiLayers: [AILayer]?
     }
 
     private func currentRecipeSavePayload() -> RecipeSavePayload? {
@@ -887,22 +964,24 @@ final class AppState: ObservableObject {
             asset: asset,
             recipe: recipes[asset.id] ?? EditRecipe(),
             snapshots: snapshots[asset.id] ?? [],
-            nodes: localNodes[asset.url]
+            nodes: localNodes[asset.url],
+            aiLayers: aiLayerStacks[asset.id]?.layers
         )
     }
 
     private func persistRecipe(_ payload: RecipeSavePayload) async {
-        // Use save(recipe:localNodes:for:) so localNodes are persisted alongside the recipe.
+        // Use save(recipe:localNodes:aiLayers:for:) so localNodes and AI layers persist with recipe.
         // This method preserves existing sidecar fields (snapshots, AI edits) by reading
         // the current sidecar before writing. Falls back to the debounced path for snapshots.
         do {
             try await SidecarService.shared.save(
                 recipe: payload.recipe,
                 localNodes: payload.nodes,
+                aiLayers: payload.aiLayers,
                 for: payload.asset.url
             )
         } catch {
-            print("[AppState] save(recipe:localNodes:) failed: \(error) — localNodes will NOT be persisted in fallback path.")
+            print("[AppState] save(recipe:localNodes:aiLayers:) failed: \(error) — local nodes/AI layers will NOT be persisted in fallback path.")
             await SidecarService.shared.saveRecipe(payload.recipe, snapshots: payload.snapshots, for: payload.asset.url)
         }
     }
@@ -911,6 +990,7 @@ final class AppState: ObservableObject {
         pendingRecipeSaveTask?.cancel()
         pendingRecipeSaveTask = nil
         guard let payload = currentRecipeSavePayload() else { return }
+        pendingRecipeSavePayloads[payload.asset.id] = nil
         Task {
             await persistRecipe(payload)
         }
@@ -919,20 +999,46 @@ final class AppState: ObservableObject {
     func saveCurrentRecipeDebounced() {
         pendingRecipeSaveTask?.cancel()
         guard let payload = currentRecipeSavePayload() else { return }
+        pendingRecipeSavePayloads[payload.asset.id] = payload
         pendingRecipeSaveTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 300_000_000)
             guard !Task.isCancelled else { return }
-            await self?.persistRecipe(payload)
-            await MainActor.run {
-                self?.pendingRecipeSaveTask = nil
+            self?.flushPendingRecipeSave()
+        }
+    }
+
+    private func consumePendingRecipeSavePayloads() -> [RecipeSavePayload] {
+        pendingRecipeSaveTask?.cancel()
+        pendingRecipeSaveTask = nil
+
+        var payloads = pendingRecipeSavePayloads
+        pendingRecipeSavePayloads.removeAll()
+
+        // Ensure current in-memory state is also flushed even if it wasn't queued.
+        if let current = currentRecipeSavePayload() {
+            payloads[current.asset.id] = current
+        }
+
+        return Array(payloads.values)
+    }
+
+    func flushPendingRecipeSave() {
+        let payloads = consumePendingRecipeSavePayloads()
+        guard !payloads.isEmpty else { return }
+        Task {
+            for payload in payloads {
+                await persistRecipe(payload)
             }
         }
     }
 
-    func flushPendingRecipeSave() {
-        pendingRecipeSaveTask?.cancel()
-        pendingRecipeSaveTask = nil
-        saveCurrentRecipe()
+    /// Flush pending recipe writes and await completion (lifecycle-safe path).
+    func flushPendingRecipeSaveAndWait() async {
+        let payloads = consumePendingRecipeSavePayloads()
+        for payload in payloads {
+            await persistRecipe(payload)
+        }
+        await SidecarService.shared.flushPendingDebouncedSaves()
     }
     
     // MARK: - Undo/Redo Actions
@@ -1031,17 +1137,11 @@ final class AppState: ObservableObject {
     }
     
     func clearSelection() {
-        flushPendingRecipeSave()
-        selectedAssetId = nil
-        editingMaskId = nil
-        showMaskOverlay = false
-        viewMode = .grid
-        comparisonMode = .none
-        isZoomed = false
+        selectionCoordinator.clearSelection()
     }
     
     /// Load all recipes from sidecars for current folder (parallel with concurrency limit)
-    func loadAllRecipes(expectedFolderPath: String? = nil) async {
+    func loadAllRecipes(expectedFolderPath: String? = nil, excludingAssetId: UUID? = nil) async {
         guard isAssetLoadContextValid(expectedFolderPath: expectedFolderPath) else { return }
         let clock = ContinuousClock()
         let phaseStart = clock.now
@@ -1065,24 +1165,25 @@ final class AppState: ObservableObject {
             }
         }
 
-        let assetsCopy = assets  // Capture for background processing
-        guard !assetsCopy.isEmpty else {
+        let assetsCopy = assets.filter { $0.id != excludingAssetId }  // Capture for background processing
+        let plannedAssets = tunedSidecarLoadAssets(assetsCopy, preferredAssetId: selectedAssetId)
+        guard !plannedAssets.isEmpty else {
             loadingMessage = ""
             return
         }
 
-        let totalCount = assetsCopy.count
+        let totalCount = plannedAssets.count
         var loadedCount = 0
         
         // Update loading message
         loadingMessage = "Loading edits..."
         
         // Parallel loading with concurrency limit
-        await withTaskGroup(of: (UUID, EditRecipe?, [RecipeSnapshot]).self) { group in
+        await withTaskGroup(of: (UUID, URL, SidecarService.RenderState?).self) { group in
             var pending = 0
-            let maxConcurrent = assetsCopy.count > 200 ? 6 : 8
+            let maxConcurrent = Self.sidecarLoadConcurrency(forAssetCount: plannedAssets.count)
             
-            for asset in assetsCopy {
+            for asset in plannedAssets {
                 if Task.isCancelled || !isAssetLoadContextValid(expectedFolderPath: expectedFolderPath) {
                     shouldAbort = true
                     group.cancelAll()
@@ -1098,8 +1199,15 @@ final class AppState: ObservableObject {
                             break
                         }
 
-                        if let recipe = result.1 {
-                            recipes[result.0] = recipe
+                        if let state = result.2 {
+                            recipes[result.0] = state.recipe
+                            localNodes[result.1] = state.localNodes
+                            aiEditsByURL[result.1] = state.aiEdits
+                            setAILayers(state.aiLayers, for: result.0)
+                        } else {
+                            localNodes[result.1] = []
+                            aiEditsByURL[result.1] = []
+                            setAILayers([], for: result.0)
                         }
                         loadedCount += 1
                         e2eSidecarLoadedCount = loadedCount
@@ -1108,12 +1216,10 @@ final class AppState: ObservableObject {
                 }
                 
                 group.addTask { [url = asset.url, id = asset.id] in
-                    guard !Task.isCancelled else { return (id, nil, []) }
-                    if let (recipe, snapshots) = await SidecarService.shared.loadRecipeAndSnapshots(for: url) {
-                        guard !Task.isCancelled else { return (id, nil, []) }
-                        return (id, recipe, snapshots)
-                    }
-                    return (id, nil, [])
+                    guard !Task.isCancelled else { return (id, url, nil) }
+                    let state = await SidecarService.shared.loadRenderState(for: url)
+                    guard !Task.isCancelled else { return (id, url, nil) }
+                    return (id, url, state)
                 }
                 pending += 1
             }
@@ -1127,14 +1233,22 @@ final class AppState: ObservableObject {
                         break
                     }
 
-                    if let recipe = result.1 {
-                        recipes[result.0] = recipe
+                    if let state = result.2 {
+                        recipes[result.0] = state.recipe
+                        localNodes[result.1] = state.localNodes
+                        aiEditsByURL[result.1] = state.aiEdits
+                        setAILayers(state.aiLayers, for: result.0)
+                    } else {
+                        localNodes[result.1] = []
+                        aiEditsByURL[result.1] = []
+                        setAILayers([], for: result.0)
                     }
                     loadedCount += 1
                     e2eSidecarLoadedCount = loadedCount
                     
-                    // Update progress periodically (every 50 items)
-                    if loadedCount % 50 == 0 {
+                    // Update progress periodically with a larger step for big folders.
+                    let progressStep = max(10, totalCount / 20)
+                    if loadedCount % progressStep == 0 {
                         loadingMessage = "Loading edits... \(loadedCount)/\(totalCount)"
                     }
                 }
@@ -1161,11 +1275,14 @@ final class AppState: ObservableObject {
             for index in indicesToPrefetch {
                 guard let asset = await MainActor.run(body: { self.assets[safe: index] }) else { continue }
                 let recipe = await MainActor.run(body: { self.recipes[asset.id] ?? EditRecipe() })
+                let renderContext = await MainActor.run {
+                    self.makeRenderContext(for: asset, recipe: recipe)
+                }
 
                 // Prefetch at low resolution for fast loading
                 _ = await ImagePipeline.shared.renderPreview(
                     for: asset,
-                    recipe: recipe,
+                    context: renderContext,
                     maxSize: 800
                 )
             }
@@ -1177,16 +1294,19 @@ final class AppState: ObservableObject {
     func prefetchForSingleView(_ asset: PhotoAsset) {
         // Only load recipe from sidecar if not already in memory
         // (Image rendering is handled by ImagePipeline cache in SingleView)
-        guard recipes[asset.id] == nil else { return }
+        guard recipes[asset.id] == nil || aiEditsByURL[asset.url] == nil || localNodes[asset.url] == nil || aiLayerStacks[asset.id] == nil else { return }
 
         Task {
-            if let (recipe, snaps) = await SidecarService.shared.loadRecipeAndSnapshots(for: asset.url) {
+            if let state = await SidecarService.shared.loadRenderState(for: asset.url) {
                 await MainActor.run {
                     // Only set if still nil (avoid race conditions)
                     if self.recipes[asset.id] == nil {
-                        self.recipes[asset.id] = recipe
-                        self.snapshots[asset.id] = snaps
+                        self.recipes[asset.id] = state.recipe
+                        self.snapshots[asset.id] = state.snapshots
                     }
+                    self.localNodes[asset.url] = state.localNodes
+                    self.aiEditsByURL[asset.url] = state.aiEdits
+                    self.setAILayers(state.aiLayers, for: asset.id)
                 }
             }
         }
@@ -1221,6 +1341,10 @@ final class AppState: ObservableObject {
             return
         }
 
+        // Lifecycle hardening: ensure debounced recipe/sidecar writes are fully persisted
+        // before we switch folder context and cancel background loaders.
+        await flushPendingRecipeSaveAndWait()
+
         cancelBackgroundAssetLoading(resetThumbnailProgress: true)
         resetE2EPhaseMetrics()
         selectedFolder = url
@@ -1235,10 +1359,14 @@ final class AppState: ObservableObject {
             didFinishScanSignpost = true
             assets = scannedAssets
             recipes = [:]
+            snapshots = [:]
+            localNodes = [:]
+            aiLayerStacks = [:]
+            aiEditsByURL = [:]
 
             // Select the first asset immediately so view switching/shortcuts work while edits load.
             if let first = scannedAssets.first {
-                select(first, switchToSingleView: false)
+                select(first, switchToSingleView: false, loadSidecarImmediately: false)
                 e2eFirstSelectionLatencyMs = durationMilliseconds(start.duration(to: clock.now))
             } else {
                 e2eFirstSelectionLatencyMs = 0
@@ -1301,6 +1429,154 @@ final class AppState: ObservableObject {
         try? await Task.sleep(nanoseconds: 450_000_000)
     }
 
+    /// E2E helper: create/update one local radial node and enter local edit mode.
+    func runE2ELocalAdjustmentSetup() {
+        guard ProcessInfo.processInfo.environment["RAWCTL_E2E_STATUS"] == "1" else { return }
+        guard ensurePrimarySelection(), let asset = selectedAsset else { return }
+
+        var nodes = localNodes[asset.url] ?? []
+        if nodes.isEmpty {
+            var node = ColorNode(name: "E2E Local", type: .serial)
+            node.mask = NodeMask(type: .radial(centerX: 0.5, centerY: 0.5, radius: 0.35))
+            node.adjustments.exposure = 0.9
+            node.adjustments.contrast = 12
+            nodes.append(node)
+        } else {
+            nodes[0].adjustments.exposure = 0.9
+            nodes[0].adjustments.contrast = 12
+            if nodes[0].mask == nil {
+                nodes[0].mask = NodeMask(type: .radial(centerX: 0.5, centerY: 0.5, radius: 0.35))
+            }
+        }
+
+        localNodes[asset.url] = nodes
+        if let first = nodes.first {
+            editingMaskId = first.id
+            showMaskOverlay = true
+        }
+        e2eLocalExportMatch = "idle"
+        e2eLocalPreviewDiff = ""
+        e2eLocalPreviewHash = ""
+        e2eLocalExportHash = ""
+        saveCurrentRecipeDebounced()
+    }
+
+    /// E2E helper: verify preview and export render paths produce equivalent local-node output.
+    func runE2ELocalExportConsistencyCheck() async {
+        guard ProcessInfo.processInfo.environment["RAWCTL_E2E_STATUS"] == "1" else { return }
+        guard let asset = selectedAsset else {
+            e2eLocalExportMatch = "error:no-selection"
+            return
+        }
+
+        let recipe = recipes[asset.id] ?? EditRecipe()
+        let nodes = localNodes[asset.url] ?? []
+        let renderContext = makeRenderContext(
+            for: asset,
+            recipe: recipe,
+            localNodes: nodes
+        )
+        e2eLocalExportMatch = "running"
+
+        guard let preview = await ImagePipeline.shared.renderPreview(
+            for: asset,
+            context: renderContext,
+            maxSize: 1200,
+            fastMode: false
+        ),
+        let previewCG = cgImage(from: preview),
+        let exportCG = await ImagePipeline.shared.renderForExport(
+            for: asset,
+            context: renderContext,
+            maxSize: 1200
+        ) else {
+            e2eLocalExportMatch = "error:render"
+            return
+        }
+
+        let diff = meanAbsoluteDifference(previewCG, exportCG)
+        e2eLocalPreviewDiff = String(format: "%.5f", diff)
+        e2eLocalPreviewHash = perceptualHash(of: previewCG)
+        e2eLocalExportHash = perceptualHash(of: exportCG)
+        e2eLocalExportMatch = diff < 0.018 ? "1" : "0"
+    }
+
+    func refreshSidecarWriteMetrics() async {
+        let metrics = await SidecarService.shared.currentWriteMetrics()
+        e2eSidecarWriteQueued = metrics.queued
+        e2eSidecarWriteSkippedNoOp = metrics.skippedNoOp
+        e2eSidecarWriteFlushed = metrics.flushed
+        e2eSidecarWriteWritten = metrics.written
+    }
+
+    func resetE2ESidecarWriteMetrics() async {
+        await SidecarService.shared.resetWriteMetrics()
+        await refreshSidecarWriteMetrics()
+    }
+
+    private func cgImage(from image: NSImage) -> CGImage? {
+        if let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+            return cg
+        }
+        guard let data = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: data) else {
+            return nil
+        }
+        return rep.cgImage
+    }
+
+    private func meanAbsoluteDifference(_ lhs: CGImage, _ rhs: CGImage) -> Double {
+        let repA = NSBitmapImageRep(cgImage: lhs)
+        let repB = NSBitmapImageRep(cgImage: rhs)
+        let width = min(repA.pixelsWide, repB.pixelsWide)
+        let height = min(repA.pixelsHigh, repB.pixelsHigh)
+        let step = max(1, min(width, height) / 64)
+
+        var total = 0.0
+        var count = 0
+        for y in stride(from: 0, to: height, by: step) {
+            for x in stride(from: 0, to: width, by: step) {
+                guard let ca = repA.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                      let cb = repB.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else {
+                    continue
+                }
+                total += abs(Double(ca.redComponent - cb.redComponent))
+                total += abs(Double(ca.greenComponent - cb.greenComponent))
+                total += abs(Double(ca.blueComponent - cb.blueComponent))
+                count += 3
+            }
+        }
+        return count > 0 ? total / Double(count) : 0
+    }
+
+    private func perceptualHash(of image: CGImage) -> String {
+        let rep = NSBitmapImageRep(cgImage: image)
+        let sample = 8
+        var values: [Double] = []
+        values.reserveCapacity(sample * sample)
+
+        for j in 0..<sample {
+            for i in 0..<sample {
+                let x = min(rep.pixelsWide - 1, Int(Double(i) / Double(sample - 1) * Double(max(1, rep.pixelsWide - 1))))
+                let y = min(rep.pixelsHigh - 1, Int(Double(j) / Double(sample - 1) * Double(max(1, rep.pixelsHigh - 1))))
+                if let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) {
+                    let luma = 0.2126 * Double(c.redComponent) + 0.7152 * Double(c.greenComponent) + 0.0722 * Double(c.blueComponent)
+                    values.append(luma)
+                } else {
+                    values.append(0)
+                }
+            }
+        }
+
+        let average = values.reduce(0, +) / Double(max(1, values.count))
+        var bits = ""
+        bits.reserveCapacity(values.count)
+        for value in values {
+            bits.append(value >= average ? "1" : "0")
+        }
+        return bits
+    }
+
     private func durationMilliseconds(_ duration: Duration) -> Int {
         let components = duration.components
         let secondsMs = components.seconds * 1_000
@@ -1313,6 +1589,190 @@ final class AppState: ObservableObject {
         let secondsUs = components.seconds * 1_000_000
         let attoUs = components.attoseconds / 1_000_000_000_000
         return Int(secondsUs + attoUs)
+    }
+
+    static func sidecarLoadConcurrency(forAssetCount assetCount: Int) -> Int {
+        switch assetCount {
+        case ..<180:
+            return 8
+        case ..<700:
+            return 6
+        case ..<2_400:
+            return 4
+        default:
+            return 3
+        }
+    }
+
+    static func thumbnailPreloadConcurrency(forAssetCount assetCount: Int) -> Int {
+        switch assetCount {
+        case ..<220:
+            return 6
+        case ..<900:
+            return 5
+        case ..<2_800:
+            return 4
+        default:
+            return 3
+        }
+    }
+
+    static func sidecarPriorityWindowSize(forAssetCount assetCount: Int) -> Int {
+        switch assetCount {
+        case ..<320:
+            return assetCount
+        case ..<1_200:
+            return 420
+        case ..<3_200:
+            return 280
+        default:
+            return 180
+        }
+    }
+
+    static func thumbnailPreloadWindowSize(forAssetCount assetCount: Int) -> Int {
+        switch assetCount {
+        case ..<320:
+            return assetCount
+        case ..<1_200:
+            return 360
+        case ..<3_200:
+            return 240
+        default:
+            return 160
+        }
+    }
+
+    static func prioritizedAssetOrder(
+        for assets: [PhotoAsset],
+        preferredAssetId: UUID?,
+        prioritizeWindowSize: Int,
+        includeRemainder: Bool
+    ) -> [PhotoAsset] {
+        guard !assets.isEmpty else { return [] }
+
+        let maxIndex = assets.count - 1
+        let centerIndex = preferredAssetId.flatMap { id in
+            assets.firstIndex(where: { $0.id == id })
+        } ?? 0
+
+        let clampedWindow = max(1, min(prioritizeWindowSize, assets.count))
+        var lowerBound = max(0, centerIndex - clampedWindow / 2)
+        var upperBound = min(maxIndex, centerIndex + clampedWindow / 2)
+        while upperBound - lowerBound + 1 < clampedWindow {
+            if lowerBound > 0 {
+                lowerBound -= 1
+            } else if upperBound < maxIndex {
+                upperBound += 1
+            } else {
+                break
+            }
+        }
+
+        let priorityIndices = centeredIndices(
+            around: centerIndex,
+            lowerBound: lowerBound,
+            upperBound: upperBound,
+            limit: clampedWindow
+        )
+
+        guard includeRemainder else {
+            return priorityIndices.map { assets[$0] }
+        }
+
+        var orderedIndices = priorityIndices
+        let used = Set(priorityIndices)
+        for index in 0...maxIndex where !used.contains(index) {
+            orderedIndices.append(index)
+        }
+        return orderedIndices.map { assets[$0] }
+    }
+
+    private static func centeredIndices(
+        around centerIndex: Int,
+        lowerBound: Int,
+        upperBound: Int,
+        limit: Int
+    ) -> [Int] {
+        guard limit > 0, lowerBound <= upperBound else { return [] }
+
+        var indices: [Int] = []
+        indices.reserveCapacity(limit)
+
+        if centerIndex >= lowerBound && centerIndex <= upperBound {
+            indices.append(centerIndex)
+        } else {
+            indices.append(lowerBound)
+        }
+
+        var distance = 1
+        while indices.count < limit {
+            let left = centerIndex - distance
+            let right = centerIndex + distance
+            var added = false
+
+            if left >= lowerBound {
+                indices.append(left)
+                added = true
+                if indices.count >= limit { break }
+            }
+            if right <= upperBound {
+                indices.append(right)
+                added = true
+                if indices.count >= limit { break }
+            }
+            if !added { break }
+            distance += 1
+        }
+
+        return indices
+    }
+
+    private func tunedSidecarLoadAssets(_ sourceAssets: [PhotoAsset], preferredAssetId: UUID?) -> [PhotoAsset] {
+        guard !sourceAssets.isEmpty else { return [] }
+        let windowSize = Self.sidecarPriorityWindowSize(forAssetCount: sourceAssets.count)
+        return Self.prioritizedAssetOrder(
+            for: sourceAssets,
+            preferredAssetId: preferredAssetId,
+            prioritizeWindowSize: windowSize,
+            includeRemainder: true
+        )
+    }
+
+    private func tunedThumbnailPreloadAssets(_ sourceAssets: [PhotoAsset], preferredAssetId: UUID?) -> [PhotoAsset] {
+        guard !sourceAssets.isEmpty else { return [] }
+        let windowSize = Self.thumbnailPreloadWindowSize(forAssetCount: sourceAssets.count)
+        return Self.prioritizedAssetOrder(
+            for: sourceAssets,
+            preferredAssetId: preferredAssetId,
+            prioritizeWindowSize: windowSize,
+            includeRemainder: false
+        )
+    }
+
+    private func removeAssetState(for removedAssets: [PhotoAsset]) {
+        for asset in removedAssets {
+            recipes.removeValue(forKey: asset.id)
+            snapshots.removeValue(forKey: asset.id)
+            aiLayerStacks.removeValue(forKey: asset.id)
+            localNodes.removeValue(forKey: asset.url)
+            aiEditsByURL.removeValue(forKey: asset.url)
+        }
+    }
+
+    private func pruneDetachedAssetState() {
+        let liveAssetIds = Set(assets.map(\.id))
+        recipes = recipes.filter { liveAssetIds.contains($0.key) }
+        snapshots = snapshots.filter { liveAssetIds.contains($0.key) }
+        aiLayerStacks = aiLayerStacks.filter { liveAssetIds.contains($0.key) }
+
+        let liveAssetURLs = Set(assets.map(\.url))
+        localNodes = localNodes.filter { liveAssetURLs.contains($0.key) }
+        aiEditsByURL = aiEditsByURL.filter { liveAssetURLs.contains($0.key) }
+
+        if let selectedAssetId, !liveAssetIds.contains(selectedAssetId) {
+            self.selectedAssetId = assets.first?.id
+        }
     }
     
     /// Refresh current folder using incremental scanning (much faster than full rescan)
@@ -1332,20 +1792,17 @@ final class AppState: ObservableObject {
                 cachedState: cachedState
             )
             
-            // Remove deleted assets and their recipes
-            let removedSet = Set(result.removed)
-            assets.removeAll { removedSet.contains($0.fingerprint) }
-            for fingerprint in result.removed {
-                if let asset = assets.first(where: { $0.fingerprint == fingerprint }) {
-                    recipes.removeValue(forKey: asset.id)
-                }
-            }
+            // Remove deleted/changed assets and their state before merging additions.
+            removeAssetState(for: result.removed)
+            let removedAssetIds = Set(result.removed.map(\.id))
+            assets.removeAll { removedAssetIds.contains($0.id) }
             
             // Add new assets
             assets.append(contentsOf: result.added)
             
             // Sort
             assets.sort { $0.filename.localizedStandardCompare($1.filename) == .orderedAscending }
+            pruneDetachedAssetState()
             
             // Load recipes only for new assets
             if !result.added.isEmpty {
@@ -1371,19 +1828,25 @@ final class AppState: ObservableObject {
     
     /// Load recipes for specific assets only
     private func loadRecipes(for assetsToLoad: [PhotoAsset]) async {
-        await withTaskGroup(of: (UUID, EditRecipe?).self) { group in
+        await withTaskGroup(of: (UUID, URL, SidecarService.RenderState?).self) { group in
             for asset in assetsToLoad {
                 group.addTask { [url = asset.url, id = asset.id] in
-                    if let (recipe, _) = await SidecarService.shared.loadRecipeAndSnapshots(for: url) {
-                        return (id, recipe)
-                    }
-                    return (id, nil)
+                    let state = await SidecarService.shared.loadRenderState(for: url)
+                    return (id, url, state)
                 }
             }
             
             for await result in group {
-                if let recipe = result.1 {
-                    recipes[result.0] = recipe
+                if let state = result.2 {
+                    recipes[result.0] = state.recipe
+                    snapshots[result.0] = state.snapshots
+                    localNodes[result.1] = state.localNodes
+                    aiEditsByURL[result.1] = state.aiEdits
+                    setAILayers(state.aiLayers, for: result.0)
+                } else {
+                    localNodes[result.1] = []
+                    aiEditsByURL[result.1] = []
+                    setAILayers([], for: result.0)
                 }
             }
         }
@@ -1399,14 +1862,15 @@ final class AppState: ObservableObject {
         guard isAssetLoadContextValid(expectedFolderPath: expectedFolderPath) else { return }
 
         let assetsCopy = assets
-        guard !assetsCopy.isEmpty else {
+        let preloadAssets = tunedThumbnailPreloadAssets(assetsCopy, preferredAssetId: selectedAssetId)
+        guard !preloadAssets.isEmpty else {
             thumbnailLoadingProgress = .idle
             e2eThumbnailPreloadState = "idle"
             e2eThumbnailPreloadMs = 0
             return
         }
         
-        thumbnailLoadingProgress = .loading(loaded: 0, total: assetsCopy.count)
+        thumbnailLoadingProgress = .loading(loaded: 0, total: preloadAssets.count)
         e2eThumbnailPreloadState = "running"
         e2eThumbnailPreloadMs = 0
         
@@ -1427,7 +1891,7 @@ final class AppState: ObservableObject {
             }
 
             var loaded = 0
-            let maxConcurrent = assetsCopy.count > 240 ? 5 : 6
+            let maxConcurrent = Self.thumbnailPreloadConcurrency(forAssetCount: preloadAssets.count)
             let progressStep = max(1, maxConcurrent)
             let preloadSize: CGFloat = 320  // Matches default grid request (160 * 2) to maximize cache reuse.
 
@@ -1436,8 +1900,8 @@ final class AppState: ObservableObject {
                 var inFlight = 0
 
                 func enqueueNext() {
-                    guard nextIndex < assetsCopy.count else { return }
-                    let asset = assetsCopy[nextIndex]
+                    guard nextIndex < preloadAssets.count else { return }
+                    let asset = preloadAssets[nextIndex]
                     nextIndex += 1
                     inFlight += 1
                     group.addTask {
@@ -1446,7 +1910,7 @@ final class AppState: ObservableObject {
                     }
                 }
 
-                let initial = min(maxConcurrent, assetsCopy.count)
+                let initial = min(maxConcurrent, preloadAssets.count)
                 for _ in 0..<initial {
                     enqueueNext()
                 }
@@ -1462,8 +1926,8 @@ final class AppState: ObservableObject {
                     }
 
                     loaded += 1
-                    if loaded == assetsCopy.count || loaded % progressStep == 0 {
-                        self.thumbnailLoadingProgress = .loading(loaded: loaded, total: assetsCopy.count)
+                    if loaded == preloadAssets.count || loaded % progressStep == 0 {
+                        self.thumbnailLoadingProgress = .loading(loaded: loaded, total: preloadAssets.count)
                     }
 
                     enqueueNext()

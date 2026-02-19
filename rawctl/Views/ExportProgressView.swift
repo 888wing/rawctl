@@ -101,6 +101,8 @@ actor ExportQueueManager {
         let assets: [PhotoAsset]
         let recipes: [UUID: EditRecipe]
         let localNodes: [URL: [ColorNode]]
+        let aiLayersByAssetID: [UUID: [AILayer]]
+        let aiEditsByURL: [URL: [AIEdit]]
         let preset: ExportPreset
         let destination: URL
         let organization: ExportOrganizationMode
@@ -122,6 +124,8 @@ actor ExportQueueManager {
         assets: [PhotoAsset],
         recipes: [UUID: EditRecipe],
         localNodes: [URL: [ColorNode]] = [:],
+        aiLayersByAssetID: [UUID: [AILayer]] = [:],
+        aiEditsByURL: [URL: [AIEdit]] = [:],
         preset: ExportPreset,
         destination: URL,
         organization: ExportOrganizationMode
@@ -130,6 +134,8 @@ actor ExportQueueManager {
             assets: assets,
             recipes: recipes,
             localNodes: localNodes,
+            aiLayersByAssetID: aiLayersByAssetID,
+            aiEditsByURL: aiEditsByURL,
             preset: preset,
             destination: destination,
             organization: organization
@@ -186,26 +192,28 @@ actor ExportQueueManager {
                 withIntermediateDirectories: true
             )
 
-            // Render and export
-            let maxSizeValue = CGFloat(item.preset.maxSize ?? 4000)
+            // Render and export using export pipeline (not preview path).
+            let maxSizeValue = item.preset.maxSize.map(CGFloat.init)
             let nodeList = item.localNodes[asset.url] ?? []
-            if let image = await ImagePipeline.shared.renderPreview(
-                for: asset,
+            let aiLayers = item.aiLayersByAssetID[asset.id] ?? []
+            let aiEdits = item.aiEditsByURL[asset.url] ?? []
+            let renderContext = RenderContext(
+                assetId: asset.id,
                 recipe: recipe,
+                localNodes: nodeList,
+                aiLayers: aiLayers,
+                aiEdits: aiEdits
+            )
+            if let image = await ImagePipeline.shared.renderForExport(
+                for: asset,
+                context: renderContext,
                 maxSize: maxSizeValue,
-                localNodes: nodeList
+                useRecipeResize: false
             ) {
                 let outputName = asset.url.deletingPathExtension().lastPathComponent + ".jpg"
                 let outputURL = targetFolder.appendingPathComponent(outputName)
 
-                if let tiffData = image.tiffRepresentation,
-                   let bitmap = NSBitmapImageRep(data: tiffData),
-                   let jpegData = bitmap.representation(
-                       using: NSBitmapImageRep.FileType.jpeg,
-                       properties: [NSBitmapImageRep.PropertyKey.compressionFactor: Double(item.preset.quality) / 100.0]
-                   ) {
-                    try jpegData.write(to: outputURL)
-                }
+                try ExportUtilities.writeJPEG(image, to: outputURL, quality: item.preset.quality)
             }
         }
     }

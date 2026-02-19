@@ -247,15 +247,17 @@ struct ExportDialog: View {
             assetsToExport = appState.assets
         }
         
-        // Use per-photo recipes from AppState
-        let recipes = appState.recipes
-        
+        let renderContextsByAssetID = Dictionary(
+            uniqueKeysWithValues: assetsToExport.map { asset in
+                (asset.id, appState.makeRenderContext(for: asset))
+            }
+        )
+
         Task {
             await ExportService.shared.startExport(
                 assets: assetsToExport,
-                recipes: recipes,
-                settings: settings,
-                localNodesByURL: appState.localNodes
+                renderContextsByAssetID: renderContextsByAssetID,
+                settings: settings
             )
             
             await MainActor.run {

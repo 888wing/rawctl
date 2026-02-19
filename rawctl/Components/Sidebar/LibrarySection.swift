@@ -20,19 +20,21 @@ struct LibrarySection: View {
                     icon: "photo.on.rectangle",
                     title: "All Photos",
                     count: appState.catalog?.totalPhotos ?? appState.assets.count,
-                    isSelected: !appState.isProjectMode && appState.activeSmartCollection == nil
+                    isSelected: !appState.isProjectMode && appState.activeSmartCollection == nil && !appState.isRecentImportsMode
                 ) {
-                    appState.clearProjectSelection()
+                    appState.showAllPhotosInLibrary()
                 }
 
                 // Recent Imports
-                LibraryRow(
-                    icon: "clock.arrow.circlepath",
-                    title: "Recent Imports",
-                    count: recentImportsCount,
-                    isSelected: false
-                ) {
-                    // TODO: Show recent imports
+                if AppFeatures.recentImportsEntryPointEnabled {
+                    LibraryRow(
+                        icon: "clock.arrow.circlepath",
+                        title: "Recent Imports",
+                        count: recentImportsCount,
+                        isSelected: appState.isRecentImportsMode
+                    ) {
+                        appState.applyRecentImportsFilter(days: 7)
+                    }
                 }
 
                 // Quick Collection (starred/favorited)
@@ -52,12 +54,13 @@ struct LibrarySection: View {
     }
 
     private var recentImportsCount: Int {
-        // Photos imported in last 7 days
-        guard let catalog = appState.catalog else { return 0 }
-        let weekAgo = Date().addingTimeInterval(-7 * 24 * 60 * 60)
-        return catalog.projects
-            .filter { $0.createdAt > weekAgo }
-            .reduce(0) { $0 + $1.totalPhotos }
+        let weekAgo = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? .distantPast
+        return appState.assets.filter { asset in
+            guard let date = asset.metadata?.dateTime ?? asset.creationDate ?? asset.modificationDate else {
+                return false
+            }
+            return date >= weekAgo
+        }.count
     }
 
     private var quickCollectionCount: Int {

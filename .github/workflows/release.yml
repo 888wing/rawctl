@@ -3,122 +3,167 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 jobs:
   build:
     name: Build and Release
     runs-on: macos-14
-    
+    env:
+      VERSION: ${{ github.ref_name }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        
-      - name: Install creating-dmg
+
+      - name: Normalize version
+        run: |
+          VERSION_STRIPPED="${VERSION#v}"
+          echo "VERSION=${VERSION_STRIPPED}" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
         run: brew install create-dmg
+
+      - name: Verify capability checklist evidence
+        run: ./scripts/verify-capability-checklist.sh
+
+      - name: Verify release-note claim evidence map
+        run: ./scripts/verify-release-note-evidence.sh
+
+      - name: Validate release prerequisites
+        env:
+          CODE_SIGN_IDENTITY: ${{ secrets.MACOS_CODE_SIGN_IDENTITY }}
+          DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          test -n "${CODE_SIGN_IDENTITY}" || { echo "Missing secret: MACOS_CODE_SIGN_IDENTITY"; exit 1; }
+          test -n "${DEVELOPMENT_TEAM}" || { echo "Missing secret: APPLE_TEAM_ID"; exit 1; }
+          test -x "./bin/sign_update" || { echo "Missing executable: ./bin/sign_update"; exit 1; }
 
       - name: Import signing certificate
         env:
           CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
           CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
-          # Decoding certificate
-          echo $CERTIFICATE_BASE64 | base64 --decode > certificate.p12
-          
-          # Create temporary keychain
+          set -euo pipefail
+          test -n "${CERTIFICATE_BASE64}" || { echo "Missing secret: APPLE_CERTIFICATE_BASE64"; exit 1; }
+          test -n "${CERTIFICATE_PASSWORD}" || { echo "Missing secret: APPLE_CERTIFICATE_PASSWORD"; exit 1; }
+
+          echo "${CERTIFICATE_BASE64}" | base64 --decode > certificate.p12
           security create-keychain -p "" build.keychain
           security set-keychain-settings -lut 21600 build.keychain
           security unlock-keychain -p "" build.keychain
-          
-          # Import certificate to keychain
-          security import certificate.p12 -k build.keychain -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security import certificate.p12 -k build.keychain -P "${CERTIFICATE_PASSWORD}" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
-          
-      - name: Build App
+          security list-keychains -d user -s build.keychain login.keychain
+
+      - name: Build archive
+        env:
+          CODE_SIGN_IDENTITY: ${{ secrets.MACOS_CODE_SIGN_IDENTITY }}
+          DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
         run: |
+          set -euo pipefail
           xcodebuild -project rawctl.xcodeproj \
             -scheme rawctl \
             -configuration Release \
-            -archivePath rawctl.xcarchive \
+            -archivePath latent.xcarchive \
             archive \
-            CODE_SIGN_IDENTITY="Developer ID Application: YOUR_NAME (TEAM_ID)" \
-            DEVELOPMENT_TEAM="TEAM_ID"
+            CODE_SIGN_IDENTITY="${CODE_SIGN_IDENTITY}" \
+            DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM}" \
+            MARKETING_VERSION="${VERSION}"
 
-      - name: Export Archive
+      - name: Export archive
         run: |
+          set -euo pipefail
           xcodebuild -exportArchive \
-            -archivePath rawctl.xcarchive \
+            -archivePath latent.xcarchive \
             -exportOptionsPlist exportOptions.plist \
             -exportPath ./export
 
-      - name: Create DMG
+      - name: Create release DMG
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
+          set -euo pipefail
+          APP_PATH="$(find ./export -maxdepth 1 -name '*.app' | head -n1)"
+          test -n "${APP_PATH}" || { echo "Exported .app not found"; exit 1; }
+          APP_NAME="$(basename "${APP_PATH}")"
+
           create-dmg \
-            --volname "rawctl Installer" \
+            --volname "Latent Installer" \
             --volicon "rawctl/Assets.xcassets/AppIcon.appiconset/icon_512x512.png" \
             --window-pos 200 120 \
             --window-size 800 400 \
             --icon-size 100 \
-            --icon "rawctl.app" 200 190 \
-            --hide-extension "rawctl.app" \
+            --icon "${APP_NAME}" 200 190 \
+            --hide-extension "${APP_NAME}" \
             --app-drop-link 600 185 \
-            "rawctl-$VERSION.dmg" \
-            "./export/rawctl.app"
+            "latent-${VERSION}.dmg" \
+            "${APP_PATH}"
 
-      - name: Notarize DMG
+          mkdir -p releases
+          mv "latent-${VERSION}.dmg" "releases/latent-${VERSION}.dmg"
+          shasum -a 256 "releases/latent-${VERSION}.dmg" > "releases/latent-${VERSION}.dmg.sha256"
+
+      - name: Notarize and staple DMG
         env:
           NOTARIZATION_APPLE_ID: ${{ secrets.NOTARIZATION_APPLE_ID }}
           NOTARIZATION_PASSWORD: ${{ secrets.NOTARIZATION_PASSWORD }}
-          TEAM_ID: ${{ secrets.TEAM_ID }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          xcrun notarytool submit "rawctl-$VERSION.dmg" \
-            --apple-id "$NOTARIZATION_APPLE_ID" \
-            --password "$NOTARIZATION_PASSWORD" \
-            --team-id "$TEAM_ID" \
+          set -euo pipefail
+          test -n "${NOTARIZATION_APPLE_ID}" || { echo "Missing secret: NOTARIZATION_APPLE_ID"; exit 1; }
+          test -n "${NOTARIZATION_PASSWORD}" || { echo "Missing secret: NOTARIZATION_PASSWORD"; exit 1; }
+          test -n "${TEAM_ID}" || { echo "Missing secret: APPLE_TEAM_ID"; exit 1; }
+
+          xcrun notarytool submit "releases/latent-${VERSION}.dmg" \
+            --apple-id "${NOTARIZATION_APPLE_ID}" \
+            --password "${NOTARIZATION_PASSWORD}" \
+            --team-id "${TEAM_ID}" \
             --wait
+          xcrun stapler staple "releases/latent-${VERSION}.dmg"
 
-      - name: Staple Ticket
-        run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          xcrun stapler staple "rawctl-$VERSION.dmg"
-
-      - name: Generate Sparkle Signature
+      - name: Generate Sparkle signature (assertive)
         id: sparkle_sign
-        env:
-          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          # This assumes you have the 'generate_keys' or 'sign_update' tool from Sparkle
-          # Alternatively use a swift script or existing tool
-          # For now, we will placeholder this step or expect the binary to be in repo
-          echo "Processing signature..."
-          # ./bin/sign_update "rawctl-$VERSION.dmg" "$SPARKLE_PRIVATE_KEY" > signature.txt
-          # SIGNATURE=$(cat signature.txt)
-          # echo "signature=$SIGNATURE" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          SIGNATURE="$(./bin/sign_update "releases/latent-${VERSION}.dmg" 2>&1 | sed -n 's/.*sparkle:edSignature=\"\\([^\"]*\\)\".*/\\1/p')"
+          test -n "${SIGNATURE}" || { echo "Failed to generate Sparkle signature"; exit 1; }
+          echo "signature=${SIGNATURE}" >> "$GITHUB_OUTPUT"
 
-      - name: Create GitHub Release
+      - name: Update appcast and validate
+        run: |
+          set -euo pipefail
+          ./scripts/update-appcast.sh "${VERSION}"
+          test -f "releases/appcast.xml" || { echo "appcast.xml was not generated"; exit 1; }
+          grep -q "sparkle:edSignature=" "releases/appcast.xml" || { echo "Missing sparkle signature in appcast"; exit 1; }
+          grep -q "latent-${VERSION}.dmg" "releases/appcast.xml" || { echo "Missing DMG reference in appcast"; exit 1; }
+          grep -q "sparkle:shortVersionString=\"${VERSION}\"" "releases/appcast.xml" || { echo "Missing shortVersionString in appcast"; exit 1; }
+
+      - name: Create GitHub release
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            rawctl-*.dmg
+            releases/latent-${{ env.VERSION }}.dmg
+            releases/latent-${{ env.VERSION }}.dmg.sha256
+            releases/appcast.xml
           generate_release_notes: true
-          
-      - name: Upload to Cloudflare R2
+
+      - name: Upload artifacts to Cloudflare R2
         env:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
         run: |
-          # Use aws-cli (pre-installed on macos-latest runners usually, or install it)
-          # Configure AWS CLI for R2
-          aws configure set aws_access_key_id $R2_ACCESS_KEY_ID
-          aws configure set aws_secret_access_key $R2_SECRET_ACCESS_KEY
+          set -euo pipefail
+          test -n "${R2_ACCOUNT_ID}" || { echo "Missing secret: R2_ACCOUNT_ID"; exit 1; }
+          test -n "${R2_ACCESS_KEY_ID}" || { echo "Missing secret: R2_ACCESS_KEY_ID"; exit 1; }
+          test -n "${R2_SECRET_ACCESS_KEY}" || { echo "Missing secret: R2_SECRET_ACCESS_KEY"; exit 1; }
+          test -n "${R2_BUCKET}" || { echo "Missing secret: R2_BUCKET"; exit 1; }
+
+          aws configure set aws_access_key_id "${R2_ACCESS_KEY_ID}"
+          aws configure set aws_secret_access_key "${R2_SECRET_ACCESS_KEY}"
           aws configure set default.region auto
-          
-          VERSION=${GITHUB_REF#refs/tags/v}
           ENDPOINT_URL="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-          
-          aws s3 cp "rawctl-$VERSION.dmg" "s3://${R2_BUCKET}/" --endpoint-url $ENDPOINT_URL
+
+          aws s3 cp "releases/latent-${VERSION}.dmg" "s3://${R2_BUCKET}/latent-${VERSION}.dmg" --endpoint-url "${ENDPOINT_URL}"
+          aws s3 cp "releases/latent-${VERSION}.dmg" "s3://${R2_BUCKET}/latent-latest.dmg" --endpoint-url "${ENDPOINT_URL}"
+          aws s3 cp "releases/appcast.xml" "s3://${R2_BUCKET}/appcast.xml" --endpoint-url "${ENDPOINT_URL}"

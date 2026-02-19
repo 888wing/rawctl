@@ -350,10 +350,11 @@ struct SurveyModeView: View {
         loadTask = Task {
             isLoading = true
             let recipe = appState.recipes[asset.id] ?? EditRecipe()
+            let renderContext = appState.makeRenderContext(for: asset, recipe: recipe)
 
             if let image = await ImagePipeline.shared.renderPreview(
                 for: asset,
-                recipe: recipe,
+                context: renderContext,
                 maxSize: 1600
             ) {
                 // Check for cancellation before updating UI

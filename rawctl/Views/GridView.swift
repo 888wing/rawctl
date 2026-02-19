@@ -424,6 +424,10 @@ struct GridView: View {
             isMultiSelected: appState.isSelected(asset.id),
             hasEdits: appState.recipes[asset.id]?.hasEdits ?? false,
             recipe: appState.recipes[asset.id] ?? EditRecipe(),
+            renderContext: appState.makeRenderContext(
+                for: asset,
+                recipe: appState.recipes[asset.id] ?? EditRecipe()
+            ),
             onTap: { modifiers in
                 handleTap(asset: asset, modifiers: modifiers)
             },
@@ -648,8 +652,9 @@ struct SelectionBar: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
-                .fixedSize(horizontal: true, vertical: false)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .clipped()
             .background(appState.isSelectionMode ? Color.accentColor.opacity(0.15) : Color.accentColor.opacity(0.1))
         }
     }
@@ -758,6 +763,7 @@ struct GridThumbnail<ContextMenuContent: View>: View {
     var isMultiSelected: Bool = false
     let hasEdits: Bool
     let recipe: EditRecipe
+    let renderContext: RenderContext
     let onTap: (EventModifiers) -> Void
     let onDoubleTap: () -> Void
     var onRatingChange: ((Int) -> Void)? = nil
@@ -979,7 +985,7 @@ struct GridThumbnail<ContextMenuContent: View>: View {
                 // Render with recipe applied (shows actual edits)
                 thumbnail = await ImagePipeline.shared.renderPreview(
                     for: asset,
-                    recipe: recipe,
+                    context: renderContext,
                     maxSize: size * 2,
                     fastMode: true  // Use fast mode for grid performance
                 )

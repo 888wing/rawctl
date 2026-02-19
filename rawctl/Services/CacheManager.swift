@@ -26,6 +26,18 @@ actor CacheManager {
         var previewCount: Int = 0
         var exifCount: Int = 0
         var estimatedMemoryBytes: Int = 0
+        var thumbnailMemoryHits: Int = 0
+        var thumbnailDiskHits: Int = 0
+        var thumbnailMisses: Int = 0
+        var previewHits: Int = 0
+        var previewMisses: Int = 0
+        var evictedBytes: Int64 = 0
+        var evictedEntries: Int = 0
+        var evictionEvents: Int = 0
+        var churnRatio: Double {
+            let denominator = max(1, thumbnailCount + previewCount + evictedEntries)
+            return Double(evictedEntries) / Double(denominator)
+        }
     }
     
     private var stats = CacheStats()
@@ -73,33 +85,62 @@ actor CacheManager {
     }
     
     // MARK: - Cache Eviction
+
+    private func refreshStatsFromServices() async {
+        let thumbnailTelemetry = await ThumbnailService.shared.cacheTelemetry()
+        let previewTelemetry = await ImagePipeline.shared.previewCacheTelemetry()
+
+        stats.thumbnailCount = thumbnailTelemetry.entryCount
+        stats.previewCount = previewTelemetry.entryCount
+        stats.estimatedMemoryBytes = Int(
+            thumbnailTelemetry.estimatedMemoryBytes + previewTelemetry.estimatedMemoryBytes
+        )
+        stats.thumbnailMemoryHits = thumbnailTelemetry.memoryHits
+        stats.thumbnailDiskHits = thumbnailTelemetry.diskHits
+        stats.thumbnailMisses = thumbnailTelemetry.misses
+        stats.previewHits = previewTelemetry.hits
+        stats.previewMisses = previewTelemetry.misses
+        stats.evictedEntries = thumbnailTelemetry.evictedEntries + previewTelemetry.evictedEntries
+        stats.evictedBytes = thumbnailTelemetry.evictedBytes + previewTelemetry.evictedBytes
+    }
     
     /// Evict caches to reduce memory usage
     func evictCaches(targetReduction: Double) async {
-        print("[CacheManager] Evicting \(Int(targetReduction * 100))% of caches")
+        await refreshStatsFromServices()
+        let clampedReduction = min(max(targetReduction, 0), 1)
+        print("[CacheManager] Evicting \(Int(clampedReduction * 100))% of caches")
         
-        // Order of eviction: thumbnails first (easiest to regenerate), then previews
-        let thumbnailsToRemove = Int(Double(stats.thumbnailCount) * targetReduction)
-        let previewsToRemove = Int(Double(stats.previewCount) * targetReduction)
+        // Priority: evict thumbnails more aggressively; keep preview cache warmer unless pressure is high.
+        let thumbnailReduction = clampedReduction
+        let previewReduction = max(0, clampedReduction - 0.25)
+        let thumbnailsToRemove = Int(Double(stats.thumbnailCount) * thumbnailReduction)
+        let previewsToRemove = Int(Double(stats.previewCount) * previewReduction)
         
-        // Notify services to evict
-        await ThumbnailService.shared.evict(count: thumbnailsToRemove)
-        await ImagePipeline.shared.evictPreviews(count: previewsToRemove)
+        let removedThumbnails = await ThumbnailService.shared.evictMemoryEntries(count: thumbnailsToRemove)
+        let removedPreviews = await ImagePipeline.shared.evictPreviewEntries(count: previewsToRemove)
         
-        // Update stats
-        stats.thumbnailCount = max(0, stats.thumbnailCount - thumbnailsToRemove)
-        stats.previewCount = max(0, stats.previewCount - previewsToRemove)
+        let removedEntries = removedThumbnails.entries + removedPreviews.entries
+        let removedBytes = removedThumbnails.estimatedBytes + removedPreviews.estimatedBytes
+        stats.evictionEvents += 1
+        stats.evictedEntries += removedEntries
+        stats.evictedBytes += removedBytes
+
+        await refreshStatsFromServices()
     }
     
     /// Emergency clear all caches
     func emergencyClear() async {
         print("[CacheManager] Emergency clear!")
         
-        await ThumbnailService.shared.clearMemoryCache()
-        await ImagePipeline.shared.clearAllCaches()
+        let removedThumbnails = await ThumbnailService.shared.clearInMemoryCache()
+        let removedPreviews = await ImagePipeline.shared.clearAllPreviewCaches()
         await EXIFService.shared.clearCache()
         
-        stats = CacheStats()
+        stats.evictionEvents += 1
+        stats.evictedEntries += removedThumbnails.entries + removedPreviews.entries
+        stats.evictedBytes += removedThumbnails.estimatedBytes + removedPreviews.estimatedBytes
+        stats.exifCount = 0
+        await refreshStatsFromServices()
     }
     
     // MARK: - Cache Registration
@@ -151,6 +192,12 @@ actor CacheManager {
     
     /// Get current cache statistics
     func getStats() -> CacheStats {
+        return stats
+    }
+
+    /// Refresh and return current cache statistics (includes live hit/miss + eviction telemetry).
+    func currentStats() async -> CacheStats {
+        await refreshStatsFromServices()
         return stats
     }
     
@@ -283,48 +330,5 @@ actor CacheManager {
         try? fileManager.removeItem(at: aiResultPath(assetFingerprint: assetFingerprint, editId: editId))
         try? fileManager.removeItem(at: aiMaskPath(assetFingerprint: assetFingerprint, editId: editId))
         try? fileManager.removeItem(at: aiReferencePath(assetFingerprint: assetFingerprint, editId: editId))
-    }
-}
-
-// MARK: - Service Extensions for Cache Eviction
-
-extension ThumbnailService {
-    /// Evict specified number of cached thumbnails
-    func evict(count: Int) async {
-        // LRU eviction is handled internally
-        // This triggers the eviction
-        await clearOldestEntries(count: count)
-    }
-    
-    /// Clear only memory cache, keep disk cache
-    func clearMemoryCache() async {
-        await clearMemoryCacheInternal()
-    }
-    
-    private func clearOldestEntries(count: Int) async {
-        // Implementation in ThumbnailService
-    }
-    
-    private func clearMemoryCacheInternal() async {
-        // Implementation in ThumbnailService
-    }
-}
-
-extension ImagePipeline {
-    /// Evict preview cache entries
-    func evictPreviews(count: Int) async {
-        // Implemented in ImagePipeline
-    }
-    
-    /// Clear all caches
-    func clearAllCaches() async {
-        // Implemented in ImagePipeline
-    }
-}
-
-extension EXIFService {
-    /// Clear EXIF cache
-    func clearCache() async {
-        // Implemented in EXIFService
     }
 }

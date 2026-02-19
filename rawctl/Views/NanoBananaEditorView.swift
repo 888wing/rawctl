@@ -440,11 +440,16 @@ struct NanoBananaEditorView: View {
     }
     
     private func loadAIEdits() {
+        if let cached = appState.aiEditsByURL[asset.url] {
+            aiEdits = cached
+        }
+
         // Load from sidecar
         Task {
             if let (_, _, edits) = await SidecarService.shared.loadRecipeAndAIEdits(for: asset.url) {
                 await MainActor.run {
                     self.aiEdits = edits
+                    self.appState.setAIEdits(edits, for: asset.url)
                 }
             }
         }
@@ -495,6 +500,7 @@ struct NanoBananaEditorView: View {
                     aiEdits.append(edit)
                     mask.clear()
                     appState.showHUD("AI edit complete!")
+                    saveAIEdits()
                 }
             } catch {
                 await MainActor.run {
@@ -528,8 +534,13 @@ struct NanoBananaEditorView: View {
     }
     
     private func saveAIEdits() {
+        let edits = aiEdits
+        let assetURL = asset.url
         Task {
-            await SidecarService.shared.saveAIEdits(aiEdits, for: asset.url)
+            await MainActor.run {
+                appState.setAIEdits(edits, for: assetURL)
+            }
+            await SidecarService.shared.saveAIEdits(edits, for: assetURL)
         }
     }
 }

@@ -285,6 +285,75 @@ final class RawctlSmokeTests: XCTestCase {
     }
 
     @MainActor
+    func testSmoke_ExternalFolderSidecarLoadCompletes() throws {
+        let folderUnderTest = ProcessInfo.processInfo.environment["RAWCTL_E2E_FOLDER_UNDER_TEST"]
+
+        let app = XCUIApplication()
+        defer { app.terminate() }
+
+        if let folderUnderTest, !folderUnderTest.isEmpty {
+            app.launchEnvironment["RAWCTL_E2E_FOLDER"] = folderUnderTest
+        } else {
+            // Fallback for CI/local runs where external test path is not injected.
+            app.launchEnvironment["RAWCTL_E2E_GENERATE_FIXTURES"] = "1"
+            app.launchEnvironment["RAWCTL_E2E_FIXTURE_COUNT"] = "40"
+        }
+        app.launchEnvironment["RAWCTL_DISABLE_WHATS_NEW"] = "1"
+        app.launchEnvironment["RAWCTL_E2E_STATUS"] = "1"
+        app.launchEnvironment["RAWCTL_E2E_PANEL"] = "1"
+        app.launch()
+
+        XCTAssertTrue(waitForValue(app.descendants(matching: .any)["e2e.assets.count"], matches: "[1-9][0-9]*", timeout: 30))
+        XCTAssertTrue(waitForValue(app.descendants(matching: .any)["e2e.selected.exists"], equals: "1", timeout: 12))
+        XCTAssertTrue(waitForValue(app.descendants(matching: .any)["e2e.sidecar.load.state"], equals: "done", timeout: 60))
+
+        let loadedCount = app.descendants(matching: .any)["e2e.sidecar.loaded.count"]
+        XCTAssertTrue(waitForValue(loadedCount, matches: "[1-9][0-9]*", timeout: 10))
+        XCTAssertNotNil(waitForNumericValue(app.descendants(matching: .any)["e2e.sidecar.load.us"], timeout: 15))
+    }
+
+    @MainActor
+    func testSmoke_ExternalFolderLocalExportConsistency() throws {
+        let folderUnderTest = ProcessInfo.processInfo.environment["RAWCTL_E2E_FOLDER_UNDER_TEST"]
+
+        let app = XCUIApplication()
+        defer { app.terminate() }
+
+        if let folderUnderTest, !folderUnderTest.isEmpty {
+            app.launchEnvironment["RAWCTL_E2E_FOLDER"] = folderUnderTest
+        } else {
+            // Fallback for CI/local runs where external test path is not injected.
+            app.launchEnvironment["RAWCTL_E2E_GENERATE_FIXTURES"] = "1"
+            app.launchEnvironment["RAWCTL_E2E_FIXTURE_COUNT"] = "20"
+        }
+        app.launchEnvironment["RAWCTL_DISABLE_WHATS_NEW"] = "1"
+        app.launchEnvironment["RAWCTL_E2E_STATUS"] = "1"
+        app.launchEnvironment["RAWCTL_E2E_PANEL"] = "1"
+        app.launch()
+
+        XCTAssertTrue(waitForValue(app.descendants(matching: .any)["e2e.assets.count"], matches: "[1-9][0-9]*", timeout: 30))
+        XCTAssertTrue(waitForValue(app.descendants(matching: .any)["e2e.selected.exists"], equals: "1", timeout: 12))
+
+        let toSingle = app.descendants(matching: .any)["e2e.action.single"]
+        XCTAssertTrue(toSingle.waitForExistence(timeout: 10))
+        toSingle.click()
+        XCTAssertTrue(waitForValue(app.descendants(matching: .any)["e2e.view.mode"], equals: "single", timeout: 10))
+
+        let localSetup = app.descendants(matching: .any)["e2e.action.local.setup"]
+        XCTAssertTrue(localSetup.waitForExistence(timeout: 8))
+        localSetup.click()
+
+        let localCheck = app.descendants(matching: .any)["e2e.action.local.check"]
+        XCTAssertTrue(localCheck.waitForExistence(timeout: 8))
+        localCheck.click()
+
+        XCTAssertTrue(waitForValue(app.descendants(matching: .any)["e2e.local.export.match"], equals: "1", timeout: 60))
+        XCTAssertTrue(waitForValue(app.descendants(matching: .any)["e2e.local.preview.diff"], matches: "[0-9]+\\.[0-9]+", timeout: 10))
+        XCTAssertTrue(waitForValue(app.descendants(matching: .any)["e2e.local.preview.hash"], matches: "[01]{32,}", timeout: 10))
+        XCTAssertTrue(waitForValue(app.descendants(matching: .any)["e2e.local.export.hash"], matches: "[01]{32,}", timeout: 10))
+    }
+
+    @MainActor
     func testSmoke_LaunchWithFolderAndSwitchViews() throws {
         let app = XCUIApplication()
         defer { app.terminate() }

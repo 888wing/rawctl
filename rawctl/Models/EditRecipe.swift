@@ -674,12 +674,15 @@ struct RecipeSnapshot: Codable, Equatable, Identifiable {
 
 /// Complete sidecar file structure
 struct SidecarFile: Codable {
-    var schemaVersion: Int = 5 // v5: Added profileId for camera profiles
+    static let currentSchemaVersion = 7
+
+    var schemaVersion: Int = SidecarFile.currentSchemaVersion // v7: Added aiLayers
     var asset: AssetInfo
     var edit: EditRecipe
     var snapshots: [RecipeSnapshot] = []
     var aiEdits: [AIEdit] = []  // AI editing history (v3)
     var localNodes: [ColorNode]?  // v6: local adjustment nodes
+    var aiLayers: [AILayer] = []  // v7: AI compositing layer stack
     var updatedAt: TimeInterval
 
     struct AssetInfo: Codable {
@@ -699,6 +702,7 @@ struct SidecarFile: Codable {
         self.snapshots = []
         self.aiEdits = []
         self.localNodes = nil
+        self.aiLayers = []
         self.updatedAt = Date().timeIntervalSince1970
     }
 
@@ -713,23 +717,27 @@ struct SidecarFile: Codable {
         snapshots = try container.decodeIfPresent([RecipeSnapshot].self, forKey: .snapshots) ?? []
         aiEdits = try container.decodeIfPresent([AIEdit].self, forKey: .aiEdits) ?? []  // v3
         localNodes = try container.decodeIfPresent([ColorNode].self, forKey: .localNodes)  // v6
+        aiLayers = try container.decodeIfPresent([AILayer].self, forKey: .aiLayers) ?? []  // v7
         updatedAt = try container.decode(TimeInterval.self, forKey: .updatedAt)
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
-        let version = localNodes != nil ? 6 : schemaVersion
+        // Always write at least the current schema to migrate legacy files on first save.
+        // Preserve newer future versions if we decode them.
+        let version = max(schemaVersion, SidecarFile.currentSchemaVersion)
         try container.encode(version, forKey: .schemaVersion)
         try container.encode(asset, forKey: .asset)
         try container.encode(edit, forKey: .edit)
         try container.encode(snapshots, forKey: .snapshots)
         try container.encode(aiEdits, forKey: .aiEdits)
         try container.encodeIfPresent(localNodes, forKey: .localNodes)
+        try container.encode(aiLayers, forKey: .aiLayers)
         try container.encode(updatedAt, forKey: .updatedAt)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, asset, edit, snapshots, aiEdits, localNodes, updatedAt
+        case schemaVersion, asset, edit, snapshots, aiEdits, localNodes, aiLayers, updatedAt
     }
 }
 

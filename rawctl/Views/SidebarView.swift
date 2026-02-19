@@ -31,10 +31,12 @@ struct SidebarView: View {
                     // Smart Collections (5 Stars, Picks, Rejects, etc.)
                     SmartCollectionsSection(appState: appState)
 
-                    Divider().padding(.horizontal, 12)
+                    if AppFeatures.devicesEntryPointsEnabled {
+                        Divider().padding(.horizontal, 12)
 
-                    // Connected devices/memory cards
-                    DevicesSection(appState: appState)
+                        // Connected devices/memory cards (feature-flagged)
+                        DevicesSection(appState: appState)
+                    }
 
                     Divider().padding(.horizontal, 12)
 

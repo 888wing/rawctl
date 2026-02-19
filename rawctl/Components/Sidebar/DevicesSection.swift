@@ -12,8 +12,6 @@ struct DevicesSection: View {
     @ObservedObject var appState: AppState
     @State private var isExpanded = true
     @State private var detectedCards: [DetectedCard] = []
-    @State private var showImportSheet = false
-    @State private var selectedCard: DetectedCard?
 
     struct DetectedCard: Identifiable {
         let id = UUID()
@@ -40,15 +38,16 @@ struct DevicesSection: View {
     }
 
     var body: some View {
-        if !detectedCards.isEmpty {
+        if AppFeatures.devicesEntryPointsEnabled && !detectedCards.isEmpty {
             DisclosureGroup("Devices", isExpanded: $isExpanded) {
                 VStack(spacing: 2) {
                     ForEach(detectedCards) { card in
                         DeviceRow(
                             card: card,
                             onImport: {
-                                selectedCard = card
-                                showImportSheet = true
+                                Task {
+                                    await MemoryCardService.shared.openCameraCard(card.url, appState: appState)
+                                }
                             }
                         )
                     }
@@ -57,24 +56,28 @@ struct DevicesSection: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
+            .onAppear {
+                refreshCards()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSWorkspace.didMountNotification)) { _ in
+                refreshCards()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSWorkspace.didUnmountNotification)) { _ in
+                refreshCards()
+            }
         }
     }
 
     private func refreshCards() {
-        // TODO: Integrate with MemoryCardService when available
-        // Task {
-        //     let cards = await MemoryCardService.shared.getDetectedCards()
-        //     await MainActor.run {
-        //         detectedCards = cards.map { url in
-        //             DetectedCard(
-        //                 url: url,
-        //                 name: url.lastPathComponent,
-        //                 photoCount: 0,
-        //                 cardType: detectCardType(url)
-        //             )
-        //         }
-        //     }
-        // }
+        let cardURLs = MemoryCardService.shared.getDetectedCards()
+        detectedCards = cardURLs.map { url in
+            DetectedCard(
+                url: url,
+                name: url.lastPathComponent,
+                photoCount: estimatePhotoCount(in: url),
+                cardType: detectCardType(url)
+            )
+        }
     }
 
     private func detectCardType(_ url: URL) -> DetectedCard.CardType {
@@ -88,6 +91,23 @@ struct DevicesSection: View {
         }
         return .sdCard
     }
+
+    private func estimatePhotoCount(in url: URL) -> Int {
+        guard let enumerator = FileManager.default.enumerator(
+            at: url,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return 0
+        }
+        var count = 0
+        while let item = enumerator.nextObject() as? URL {
+            if PhotoAsset.supportedExtensions.contains(item.pathExtension.lowercased()) {
+                count += 1
+            }
+        }
+        return count
+    }
 }
 
 /// Single device row
@@ -96,7 +116,6 @@ struct DeviceRow: View {
     let onImport: () -> Void
 
     @State private var isHovering = false
-    @State private var photoCount: Int?
 
     var body: some View {
         Button(action: onImport) {
@@ -112,12 +131,12 @@ struct DeviceRow: View {
                         .foregroundColor(.primary)
                         .lineLimit(1)
 
-                    if let count = photoCount {
-                        Text("\(count) photos")
+                    if card.photoCount > 0 {
+                        Text("\(card.photoCount) photos")
                             .font(.system(size: 9))
                             .foregroundColor(.secondary)
                     } else {
-                        Text("Scanning...")
+                        Text("Ready to import")
                             .font(.system(size: 9))
                             .foregroundColor(.secondary)
                     }

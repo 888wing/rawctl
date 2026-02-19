@@ -37,11 +37,17 @@ struct ImagePipelineRegressionTests {
         exposed.exposure = 1.5
 
         await ImagePipeline.shared.clearCache()
-        guard let baselineImage = await ImagePipeline.shared.renderForExport(for: asset, recipe: EditRecipe()) else {
+        guard let baselineImage = await ImagePipeline.shared.renderForExport(
+            for: asset,
+            context: makeContext(asset: asset)
+        ) else {
             throw TestError.imageRenderFailed
         }
         await ImagePipeline.shared.clearCache()
-        guard let exposedImage = await ImagePipeline.shared.renderForExport(for: asset, recipe: exposed) else {
+        guard let exposedImage = await ImagePipeline.shared.renderForExport(
+            for: asset,
+            context: makeContext(asset: asset, recipe: exposed)
+        ) else {
             throw TestError.imageRenderFailed
         }
 
@@ -73,11 +79,17 @@ struct ImagePipelineRegressionTests {
         bottomHalfRecipe.crop = Crop(isEnabled: true, aspect: .free, rect: CropRect(x: 0.0, y: 0.5, w: 1.0, h: 0.5))
 
         await ImagePipeline.shared.clearCache()
-        guard let topCrop = await ImagePipeline.shared.renderForExport(for: asset, recipe: topHalfRecipe) else {
+        guard let topCrop = await ImagePipeline.shared.renderForExport(
+            for: asset,
+            context: makeContext(asset: asset, recipe: topHalfRecipe)
+        ) else {
             throw TestError.imageRenderFailed
         }
         await ImagePipeline.shared.clearCache()
-        guard let bottomCrop = await ImagePipeline.shared.renderForExport(for: asset, recipe: bottomHalfRecipe) else {
+        guard let bottomCrop = await ImagePipeline.shared.renderForExport(
+            for: asset,
+            context: makeContext(asset: asset, recipe: bottomHalfRecipe)
+        ) else {
             throw TestError.imageRenderFailed
         }
 
@@ -113,11 +125,17 @@ struct ImagePipelineRegressionTests {
         rightHalfRecipe.crop = Crop(isEnabled: true, aspect: .free, rect: CropRect(x: 0.5, y: 0.0, w: 0.5, h: 1.0))
 
         await ImagePipeline.shared.clearCache()
-        guard let leftCrop = await ImagePipeline.shared.renderForExport(for: asset, recipe: leftHalfRecipe) else {
+        guard let leftCrop = await ImagePipeline.shared.renderForExport(
+            for: asset,
+            context: makeContext(asset: asset, recipe: leftHalfRecipe)
+        ) else {
             throw TestError.imageRenderFailed
         }
         await ImagePipeline.shared.clearCache()
-        guard let rightCrop = await ImagePipeline.shared.renderForExport(for: asset, recipe: rightHalfRecipe) else {
+        guard let rightCrop = await ImagePipeline.shared.renderForExport(
+            for: asset,
+            context: makeContext(asset: asset, recipe: rightHalfRecipe)
+        ) else {
             throw TestError.imageRenderFailed
         }
 
@@ -167,19 +185,31 @@ struct ImagePipelineRegressionTests {
         heavyRecipe.grain.amount = 40
         heavyRecipe.vignette.amount = -30
 
+        let heavyContext = makeContext(asset: asset, recipe: heavyRecipe)
+
         // Warm-up once to reduce first-run noise in timing.
-        _ = await ImagePipeline.shared.renderPreview(for: asset, recipe: heavyRecipe, maxSize: 1400, fastMode: true)
-        _ = await ImagePipeline.shared.renderPreview(for: asset, recipe: heavyRecipe, maxSize: 1400, fastMode: false)
+        _ = await ImagePipeline.shared.renderPreview(
+            for: asset,
+            context: heavyContext,
+            maxSize: 1400,
+            fastMode: true
+        )
+        _ = await ImagePipeline.shared.renderPreview(
+            for: asset,
+            context: heavyContext,
+            maxSize: 1400,
+            fastMode: false
+        )
 
         var fastDurations: [Double] = []
         var fullDurations: [Double] = []
 
         for _ in 0..<3 {
             await ImagePipeline.shared.clearCache()
-            fastDurations.append(try await renderPreviewSeconds(asset: asset, recipe: heavyRecipe, fastMode: true))
+            fastDurations.append(try await renderPreviewSeconds(asset: asset, renderContext: heavyContext, fastMode: true))
 
             await ImagePipeline.shared.clearCache()
-            fullDurations.append(try await renderPreviewSeconds(asset: asset, recipe: heavyRecipe, fastMode: false))
+            fullDurations.append(try await renderPreviewSeconds(asset: asset, renderContext: heavyContext, fastMode: false))
         }
 
         let fastMedian = median(fastDurations)
@@ -187,6 +217,40 @@ struct ImagePipelineRegressionTests {
         print(String(format: "[ImagePipelineRegressionTests] fast median %.3fs, full median %.3fs", fastMedian, fullMedian))
 
         #expect(fastMedian < fullMedian)
+    }
+
+    @Test func benchmarkRenderStagesReturnsOrderedStageSamples() async throws {
+        let fm = FileManager.default
+        let dir = try makeTempDirectory(prefix: "rawctl-pipeline-stage-benchmark")
+        defer { try? fm.removeItem(at: dir) }
+
+        let imageURL = dir.appendingPathComponent("benchmark-input.png")
+        try writePNG(at: imageURL, width: 320, height: 240) { context, width, height in
+            context.setFillColor(NSColor(calibratedRed: 0.35, green: 0.35, blue: 0.35, alpha: 1.0).cgColor)
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        }
+
+        let asset = PhotoAsset(url: imageURL)
+        var recipe = EditRecipe()
+        recipe.exposure = 0.4
+        recipe.contrast = 12
+
+        var localNode = ColorNode(name: "Benchmark Node", type: .serial)
+        localNode.adjustments.exposure = 0.2
+
+        let context = makeContext(asset: asset, recipe: recipe, localNodes: [localNode])
+        let samples = await ImagePipeline.shared.benchmarkRenderStages(
+            for: asset,
+            context: context,
+            maxSize: 900,
+            fastMode: false
+        )
+
+        #expect(samples != nil)
+        let stageNames = samples?.map(\.stage) ?? []
+        #expect(stageNames.first == "globalRecipe")
+        #expect(stageNames.contains("localNodes"))
+        #expect((samples ?? []).allSatisfy { $0.milliseconds >= 0 })
     }
 
     @Test func grainEffectDoesNotBreakImageAtHighStrength() async throws {
@@ -205,11 +269,17 @@ struct ImagePipelineRegressionTests {
         recipe.grain = Grain(amount: 100, size: 60, roughness: 80)
 
         await ImagePipeline.shared.clearCache()
-        guard let baseline = await ImagePipeline.shared.renderForExport(for: asset, recipe: EditRecipe()) else {
+        guard let baseline = await ImagePipeline.shared.renderForExport(
+            for: asset,
+            context: makeContext(asset: asset)
+        ) else {
             throw TestError.imageRenderFailed
         }
         await ImagePipeline.shared.clearCache()
-        guard let grained = await ImagePipeline.shared.renderForExport(for: asset, recipe: recipe) else {
+        guard let grained = await ImagePipeline.shared.renderForExport(
+            for: asset,
+            context: makeContext(asset: asset, recipe: recipe)
+        ) else {
             throw TestError.imageRenderFailed
         }
 
@@ -221,6 +291,218 @@ struct ImagePipelineRegressionTests {
         #expect(abs(grainedLuma - baselineLuma) < 0.18)
         #expect(meanDiff > 0.005)
         #expect(meanDiff < 0.22)
+    }
+
+    @Test func renderContextPreviewAndExportAreAligned() async throws {
+        let fm = FileManager.default
+        let dir = try makeTempDirectory(prefix: "rawctl-pipeline-render-context")
+        defer { try? fm.removeItem(at: dir) }
+
+        let imageURL = dir.appendingPathComponent("context-baseline.png")
+        try writePNG(at: imageURL, width: 420, height: 280) { context, width, height in
+            context.setFillColor(NSColor.black.cgColor)
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+            context.setFillColor(NSColor(calibratedRed: 0.7, green: 0.35, blue: 0.25, alpha: 1.0).cgColor)
+            context.fill(CGRect(x: 0, y: 0, width: width / 2, height: height))
+            context.setFillColor(NSColor(calibratedRed: 0.2, green: 0.6, blue: 0.8, alpha: 1.0).cgColor)
+            context.fill(CGRect(x: width / 2, y: 0, width: width / 2, height: height))
+        }
+
+        let asset = PhotoAsset(url: imageURL)
+        var recipe = EditRecipe()
+        recipe.exposure = 0.6
+        recipe.contrast = 18
+        recipe.highlights = -20
+
+        var localNode = ColorNode(name: "Context Local", type: .serial)
+        localNode.adjustments.exposure = 0.25
+        localNode.adjustments.shadows = 12
+        let localNodes = [localNode]
+
+        let renderContext = RenderContext(
+            assetId: asset.id,
+            recipe: recipe,
+            localNodes: localNodes
+        )
+
+        await ImagePipeline.shared.clearCache()
+        guard let contextExport = await ImagePipeline.shared.renderForExport(
+            for: asset,
+            context: renderContext
+        ) else {
+            throw TestError.imageRenderFailed
+        }
+
+        await ImagePipeline.shared.clearCache()
+        guard let contextPreviewImage = await ImagePipeline.shared.renderPreview(
+            for: asset,
+            context: renderContext,
+            maxSize: 1000,
+            fastMode: false
+        ),
+        let contextPreview = cgImage(from: contextPreviewImage) else {
+            throw TestError.imageRenderFailed
+        }
+
+        #expect(meanAbsoluteDifference(contextExport, contextPreview) < 0.0001)
+    }
+
+    @Test func aiLayerCompositingAffectsRenderWhenVisible() async throws {
+        let fm = FileManager.default
+        let dir = try makeTempDirectory(prefix: "rawctl-pipeline-ai-layer")
+
+        let imageURL = dir.appendingPathComponent("ai-base.png")
+        try writePNG(at: imageURL, width: 320, height: 240) { context, width, height in
+            context.setFillColor(NSColor(calibratedRed: 0.25, green: 0.25, blue: 0.25, alpha: 1.0).cgColor)
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        }
+
+        let asset = PhotoAsset(url: imageURL)
+        let layerId = UUID()
+        let layerURL = CacheManager.shared.aiResultPath(
+            assetFingerprint: asset.fingerprint,
+            editId: layerId
+        )
+        try writeJPEG(at: layerURL, width: 320, height: 240, quality: 1.0) { context, width, height in
+            context.setFillColor(NSColor(calibratedRed: 0.9, green: 0.2, blue: 0.2, alpha: 1.0).cgColor)
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        }
+
+        defer { try? fm.removeItem(at: dir) }
+
+        let baselineContext = RenderContext(assetId: asset.id, recipe: EditRecipe())
+        var visibleLayer = AILayer(
+            id: layerId,
+            type: .enhance,
+            prompt: "Enhance",
+            originalPrompt: "Enhance",
+            generatedImagePath: layerURL.lastPathComponent,
+            creditsUsed: 1
+        )
+        visibleLayer.opacity = 0.8
+        visibleLayer.blendMode = .normal
+        visibleLayer.isVisible = true
+
+        let visibleContext = RenderContext(
+            assetId: asset.id,
+            recipe: EditRecipe(),
+            aiLayers: [visibleLayer]
+        )
+
+        var hiddenLayer = visibleLayer
+        hiddenLayer.isVisible = false
+        let hiddenContext = RenderContext(
+            assetId: asset.id,
+            recipe: EditRecipe(),
+            aiLayers: [hiddenLayer]
+        )
+
+        await ImagePipeline.shared.clearCache()
+        guard let baseline = await ImagePipeline.shared.renderForExport(
+            for: asset,
+            context: baselineContext
+        ) else {
+            throw TestError.imageRenderFailed
+        }
+
+        await ImagePipeline.shared.clearCache()
+        guard let visible = await ImagePipeline.shared.renderForExport(
+            for: asset,
+            context: visibleContext
+        ) else {
+            throw TestError.imageRenderFailed
+        }
+
+        await ImagePipeline.shared.clearCache()
+        guard let hidden = await ImagePipeline.shared.renderForExport(
+            for: asset,
+            context: hiddenContext
+        ) else {
+            throw TestError.imageRenderFailed
+        }
+
+        let visibleDiff = meanAbsoluteDifference(baseline, visible)
+        let hiddenDiff = meanAbsoluteDifference(baseline, hidden)
+
+        #expect(visibleDiff > 0.02)
+        #expect(hiddenDiff < 0.0001)
+        await CacheManager.shared.deleteAICache(for: asset.fingerprint)
+    }
+
+    @Test func aiEditCompositingAffectsRenderWhenEnabled() async throws {
+        let fm = FileManager.default
+        let dir = try makeTempDirectory(prefix: "rawctl-pipeline-ai-edit")
+
+        let imageURL = dir.appendingPathComponent("ai-edit-base.png")
+        try writePNG(at: imageURL, width: 320, height: 240) { context, width, height in
+            context.setFillColor(NSColor(calibratedRed: 0.22, green: 0.22, blue: 0.22, alpha: 1.0).cgColor)
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        }
+
+        let asset = PhotoAsset(url: imageURL)
+        let editId = UUID()
+        let resultURL = CacheManager.shared.aiResultPath(
+            assetFingerprint: asset.fingerprint,
+            editId: editId
+        )
+        try writeJPEG(at: resultURL, width: 320, height: 240, quality: 1.0) { context, width, height in
+            context.setFillColor(NSColor(calibratedRed: 0.88, green: 0.25, blue: 0.25, alpha: 1.0).cgColor)
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        }
+
+        defer { try? fm.removeItem(at: dir) }
+
+        let baselineContext = RenderContext(assetId: asset.id, recipe: EditRecipe())
+        let enabledEdit = AIEdit(
+            id: editId,
+            operation: .enhance,
+            resultPath: resultURL.lastPathComponent,
+            enabled: true
+        )
+        let enabledContext = RenderContext(
+            assetId: asset.id,
+            recipe: EditRecipe(),
+            aiEdits: [enabledEdit]
+        )
+
+        var disabledEdit = enabledEdit
+        disabledEdit.enabled = false
+        let disabledContext = RenderContext(
+            assetId: asset.id,
+            recipe: EditRecipe(),
+            aiEdits: [disabledEdit]
+        )
+
+        await ImagePipeline.shared.clearCache()
+        guard let baseline = await ImagePipeline.shared.renderForExport(
+            for: asset,
+            context: baselineContext
+        ) else {
+            throw TestError.imageRenderFailed
+        }
+
+        await ImagePipeline.shared.clearCache()
+        guard let enabled = await ImagePipeline.shared.renderForExport(
+            for: asset,
+            context: enabledContext
+        ) else {
+            throw TestError.imageRenderFailed
+        }
+
+        await ImagePipeline.shared.clearCache()
+        guard let disabled = await ImagePipeline.shared.renderForExport(
+            for: asset,
+            context: disabledContext
+        ) else {
+            throw TestError.imageRenderFailed
+        }
+
+        let enabledDiff = meanAbsoluteDifference(baseline, enabled)
+        let disabledDiff = meanAbsoluteDifference(baseline, disabled)
+
+        #expect(enabledDiff > 0.02)
+        #expect(disabledDiff < 0.0001)
+        await CacheManager.shared.deleteAICache(for: asset.fingerprint)
     }
 
     // MARK: - Helpers
@@ -264,6 +546,41 @@ struct ImagePipelineRegressionTests {
         try data.write(to: url, options: .atomic)
     }
 
+    private func writeJPEG(
+        at url: URL,
+        width: Int,
+        height: Int,
+        quality: Double,
+        draw: (_ context: CGContext, _ width: Int, _ height: Int) -> Void
+    ) throws {
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            throw TestError.bitmapContextCreationFailed
+        }
+
+        context.interpolationQuality = .none
+        draw(context, width, height)
+
+        guard let cgImage = context.makeImage() else {
+            throw TestError.imageEncodingFailed
+        }
+        let rep = NSBitmapImageRep(cgImage: cgImage)
+        guard let data = rep.representation(using: .jpeg, properties: [
+            .compressionFactor: quality
+        ]) else {
+            throw TestError.imageEncodingFailed
+        }
+        try data.write(to: url, options: .atomic)
+    }
+
     private func averageLuminance(of image: CGImage) -> Double {
         let rep = NSBitmapImageRep(cgImage: image)
         let width = rep.pixelsWide
@@ -286,10 +603,46 @@ struct ImagePipelineRegressionTests {
         return count > 0 ? sum / Double(count) : 0
     }
 
-    private func renderPreviewSeconds(asset: PhotoAsset, recipe: EditRecipe, fastMode: Bool) async throws -> Double {
+    private func cgImage(from image: NSImage) -> CGImage? {
+        if let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+            return cg
+        }
+        guard let data = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: data) else {
+            return nil
+        }
+        return rep.cgImage
+    }
+
+    private func makeContext(
+        asset: PhotoAsset,
+        recipe: EditRecipe = EditRecipe(),
+        localNodes: [ColorNode] = [],
+        aiLayers: [AILayer] = [],
+        aiEdits: [AIEdit] = []
+    ) -> RenderContext {
+        RenderContext(
+            assetId: asset.id,
+            recipe: recipe,
+            localNodes: localNodes,
+            aiLayers: aiLayers,
+            aiEdits: aiEdits
+        )
+    }
+
+    private func renderPreviewSeconds(
+        asset: PhotoAsset,
+        renderContext: RenderContext,
+        fastMode: Bool
+    ) async throws -> Double {
         let clock = ContinuousClock()
         let start = clock.now
-        let rendered = await ImagePipeline.shared.renderPreview(for: asset, recipe: recipe, maxSize: 1400, fastMode: fastMode)
+        let rendered = await ImagePipeline.shared.renderPreview(
+            for: asset,
+            context: renderContext,
+            maxSize: 1400,
+            fastMode: fastMode
+        )
         let duration = start.duration(to: clock.now)
         #expect(rendered != nil)
         return durationSeconds(duration)

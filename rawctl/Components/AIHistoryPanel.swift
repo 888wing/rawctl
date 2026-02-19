@@ -218,6 +218,7 @@ struct AIHistoryPanel: View {
             history = h
             AILayerHistoryManager.shared.saveHistory(h)
             restoreSnapshot(snapshot)
+            appState.saveCurrentRecipeDebounced()
             appState.showHUD("Undo: \(snapshot.description)")
         }
     }
@@ -228,6 +229,7 @@ struct AIHistoryPanel: View {
             history = h
             AILayerHistoryManager.shared.saveHistory(h)
             restoreSnapshot(snapshot)
+            appState.saveCurrentRecipeDebounced()
             appState.showHUD("Redo: \(snapshot.description)")
         }
     }
@@ -238,6 +240,7 @@ struct AIHistoryPanel: View {
             history = h
             AILayerHistoryManager.shared.saveHistory(h)
             restoreSnapshot(snapshot)
+            appState.saveCurrentRecipeDebounced()
         }
     }
 

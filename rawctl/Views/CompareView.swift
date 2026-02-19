@@ -240,7 +240,16 @@ struct CompareView: View {
         guard let asset = assets[safe: index] else { return nil }
         let recipe = appState.recipes[asset.id] ?? EditRecipe()
         let localNodes = appState.localNodes[asset.url] ?? []
-        return await ImagePipeline.shared.renderPreview(for: asset, recipe: recipe, maxSize: 1200, localNodes: localNodes)
+        let renderContext = appState.makeRenderContext(
+            for: asset,
+            recipe: recipe,
+            localNodes: localNodes
+        )
+        return await ImagePipeline.shared.renderPreview(
+            for: asset,
+            context: renderContext,
+            maxSize: 1200
+        )
     }
 }
 

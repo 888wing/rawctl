@@ -606,6 +606,7 @@ struct AIGenerationPanel: View {
                 // Add layer to asset's layer stack
                 let layerStack = appState.aiLayerStack(for: asset.id)
                 layerStack.addLayer(layer)
+                appState.saveCurrentRecipeDebounced()
 
                 // Record history for layer creation
                 AILayerHistoryManager.shared.recordLayerCreated(
@@ -660,6 +661,7 @@ struct AIGenerationPanel: View {
             await MainActor.run {
                 let layerStack = appState.aiLayerStack(for: asset.id)
                 layerStack.addLayer(layer)
+                appState.saveCurrentRecipeDebounced()
 
                 // Record history for layer creation
                 AILayerHistoryManager.shared.recordLayerCreated(

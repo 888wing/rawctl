@@ -1,0 +1,58 @@
+name: Correctness Gates
+
+on:
+  pull_request:
+  push:
+
+concurrency:
+  group: correctness-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  render-parity:
+    name: render-parity
+    runs-on: macos-14
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve Swift packages
+        run: xcodebuild -project rawctl.xcodeproj -scheme rawctl -resolvePackageDependencies
+
+      - name: Run render parity suite
+        run: |
+          xcodebuild \
+            -project rawctl.xcodeproj \
+            -scheme rawctl \
+            -destination 'platform=macOS' \
+            test \
+            -only-testing:rawctlTests/RenderContextBuilderTests \
+            -only-testing:rawctlTests/LayerCompositingOrderTests \
+            -only-testing:rawctlTests/ImagePipelineRegressionTests/renderContextPreviewAndExportAreAligned \
+            -only-testing:rawctlTests/ImagePipelineRegressionTests/aiLayerCompositingAffectsRenderWhenVisible \
+            -only-testing:rawctlTests/ImagePipelineRegressionTests/aiEditCompositingAffectsRenderWhenEnabled
+
+  sidecar-migration:
+    name: sidecar-migration
+    runs-on: macos-14
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve Swift packages
+        run: xcodebuild -project rawctl.xcodeproj -scheme rawctl -resolvePackageDependencies
+
+      - name: Run sidecar migration suite
+        run: |
+          xcodebuild \
+            -project rawctl.xcodeproj \
+            -scheme rawctl \
+            -destination 'platform=macOS' \
+            test \
+            -only-testing:rawctlTests/SidecarMigrationTests \
+            -only-testing:rawctlTests/FileSystemServiceCacheMigrationTests \
+            -only-testing:rawctlTests/SidecarServiceTests \
+            -only-testing:rawctlTests/AppStateRefreshCleanupTests \
+            -only-testing:rawctlTests/AppStateSidecarFlushTests \
+            -only-testing:rawctlTests/StateCoordinatorTests \
+            -only-testing:rawctlTests/AppStatePreloadTuningTests

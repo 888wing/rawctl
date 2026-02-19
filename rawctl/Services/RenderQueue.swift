@@ -31,8 +31,7 @@ actor RenderQueue {
         let id: UUID = UUID()
         let assetId: UUID
         let asset: PhotoAsset
-        let recipe: EditRecipe
-        let localNodes: [ColorNode]
+        let renderContext: RenderContext
         let priority: Priority
         let maxSize: CGFloat
         let completion: @Sendable (NSImage?) async -> Void
@@ -57,14 +56,35 @@ actor RenderQueue {
         maxSize: CGFloat = 1600,
         completion: @escaping @Sendable (NSImage?) async -> Void
     ) {
+        let renderContext = RenderContext(
+            assetId: asset.id,
+            recipe: recipe,
+            localNodes: localNodes
+        )
+        enqueue(
+            asset: asset,
+            renderContext: renderContext,
+            priority: priority,
+            maxSize: maxSize,
+            completion: completion
+        )
+    }
+
+    /// Enqueue a render job with prebuilt render context.
+    func enqueue(
+        asset: PhotoAsset,
+        renderContext: RenderContext,
+        priority: Priority,
+        maxSize: CGFloat = 1600,
+        completion: @escaping @Sendable (NSImage?) async -> Void
+    ) {
         // Cancel existing jobs for same asset (superseded)
         queue.removeAll { $0.assetId == asset.id }
         
         let job = RenderJob(
             assetId: asset.id,
             asset: asset,
-            recipe: recipe,
-            localNodes: localNodes,
+            renderContext: renderContext,
             priority: priority,
             maxSize: maxSize,
             completion: completion
@@ -103,9 +123,8 @@ actor RenderQueue {
         Task {
             let result = await ImagePipeline.shared.renderPreview(
                 for: job.asset,
-                recipe: job.recipe,
-                maxSize: job.maxSize,
-                localNodes: job.localNodes
+                context: job.renderContext,
+                maxSize: job.maxSize
             )
             
             // Call completion
@@ -128,13 +147,17 @@ actor RenderQueue {
     ) async -> NSImage? {
         // Cancel lower priority jobs for this asset
         cancel(for: asset.id)
-        
+        let renderContext = RenderContext(
+            assetId: asset.id,
+            recipe: recipe,
+            localNodes: localNodes
+        )
+
         // For urgent requests, bypass queue and render directly
         return await ImagePipeline.shared.renderPreview(
             for: asset,
-            recipe: recipe,
-            maxSize: maxSize,
-            localNodes: localNodes
+            context: renderContext,
+            maxSize: maxSize
         )
     }
     

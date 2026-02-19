@@ -115,24 +115,38 @@ actor FileSystemService {
         var folderPath: String
         var lastScanDate: Date
         var assetFingerprints: [String: String]  // filename -> fingerprint
-        
-        static func cacheURL(for folderURL: URL) -> URL {
+
+        private static var currentCacheNamespace: String { "Shacoworkshop.latent" }
+        private static var legacyCacheNamespace: String { "Shacoworkshop.rawctl" }
+
+        private static func cacheDirectoryURL(namespace: String) -> URL {
             let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-            let folderHash = folderURL.path.hash
             return caches
-                .appendingPathComponent("Shacoworkshop.rawctl", isDirectory: true)
+                .appendingPathComponent(namespace, isDirectory: true)
+        }
+
+        static func cacheURL(for folderURL: URL) -> URL {
+            let folderHash = folderURL.path.hash
+            return cacheDirectoryURL(namespace: currentCacheNamespace)
+                .appendingPathComponent("folderstate_\(folderHash).json")
+        }
+
+        static func legacyCacheURL(for folderURL: URL) -> URL {
+            let folderHash = folderURL.path.hash
+            return cacheDirectoryURL(namespace: legacyCacheNamespace)
                 .appendingPathComponent("folderstate_\(folderHash).json")
         }
     }
     
     /// Load cached folder state
     static func loadFolderState(for folderURL: URL) -> FolderState? {
-        let stateURL = FolderState.cacheURL(for: folderURL)
-        guard let data = try? Data(contentsOf: stateURL),
-              let state = try? JSONDecoder().decode(FolderState.self, from: data) else {
-            return nil
+        for stateURL in [FolderState.cacheURL(for: folderURL), FolderState.legacyCacheURL(for: folderURL)] {
+            if let data = try? Data(contentsOf: stateURL),
+               let state = try? JSONDecoder().decode(FolderState.self, from: data) {
+                return state
+            }
         }
-        return state
+        return nil
     }
     
     /// Save folder state to cache
