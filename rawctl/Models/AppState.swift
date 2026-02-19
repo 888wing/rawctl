@@ -11,6 +11,18 @@ import Combine
 /// Main application state
 @MainActor
 final class AppState: ObservableObject {
+    private enum StartupStorageKeys {
+        static let lastOpenedFolder = "latent.lastOpenedFolder"
+        static let legacyLastOpenedFolder = "lastOpenedFolder"
+        static let legacyDefaultFolderPath = "defaultFolderPath"
+    }
+
+    enum StartupFolderChoice: Equatable {
+        case defaultFolder(URL)
+        case lastOpened(URL)
+        case none
+    }
+
     // MARK: - Undo/Redo Storage
     
     struct HistoryStack {
@@ -39,12 +51,15 @@ final class AppState: ObservableObject {
     @Published var history: [UUID: HistoryStack] = [:]
     
     // MARK: - Folder & Assets
+
+    private let userDefaults: UserDefaults
+    private let folderManager: FolderManager
     
     @Published var selectedFolder: URL? {
         didSet {
             // Save to UserDefaults when folder changes
             if let folder = selectedFolder {
-                UserDefaults.standard.set(folder.path, forKey: "lastOpenedFolder")
+                userDefaults.set(folder.path, forKey: StartupStorageKeys.lastOpenedFolder)
             }
         }
     }
@@ -67,6 +82,24 @@ final class AppState: ObservableObject {
     }
     
     @Published var thumbnailLoadingProgress: ThumbnailLoadingProgress = .idle
+
+    // MARK: - AI Culling Progress
+
+    /// Progress state for the background AI culling pass.
+    enum CullingProgress: Equatable {
+        case idle
+        case running(completed: Int, total: Int)
+        case complete(scored: Int)
+
+        var isRunning: Bool {
+            if case .running = self { return true }
+            return false
+        }
+    }
+
+    @Published var cullingProgress: CullingProgress = .idle
+    private var cullingAutoHideTask: Task<Void, Never>?
+
     private var recipeLoadTask: Task<Void, Never>?
     private var thumbnailPreloadTask: Task<Void, Never>?
     private var thumbnailAutoHideTask: Task<Void, Never>?
@@ -79,32 +112,47 @@ final class AppState: ObservableObject {
     private lazy var editStateCoordinator = EditStateCoordinator(appState: self)
     private lazy var librarySyncCoordinator = LibrarySyncCoordinator(appState: self)
     
-    // MARK: - Default Folder
-    
-    /// User-configured default folder path
-    @Published var defaultFolderPath: String {
-        didSet {
-            UserDefaults.standard.set(defaultFolderPath, forKey: "defaultFolderPath")
-        }
-    }
-    
     /// Load last opened or default folder on startup
     func loadStartupFolder() async {
-        // Try user-configured default first
-        if !defaultFolderPath.isEmpty {
-            await openFolderFromPath(defaultFolderPath)
+        let choice = Self.resolveStartupFolderChoice(
+            defaultFolderURL: folderManager.defaultFolderURL,
+            lastOpenedFolderPath: userDefaults.string(forKey: StartupStorageKeys.lastOpenedFolder)
+        )
+
+        switch choice {
+        case .defaultFolder(let url):
+            let didOpenDefault = await openFolder(at: url, registerInFolderHistory: false)
+            if !didOpenDefault,
+               let lastOpened = userDefaults.string(forKey: StartupStorageKeys.lastOpenedFolder) {
+                _ = await openFolderFromPath(lastOpened, registerInFolderHistory: true)
+            }
+        case .lastOpened(let url):
+            _ = await openFolder(at: url, registerInFolderHistory: true)
+        case .none:
             return
         }
-        
-        // Fall back to last opened folder
-        if let lastPath = UserDefaults.standard.string(forKey: "lastOpenedFolder") {
-            await openFolderFromPath(lastPath)
-        }
     }
-    
-    init() {
-        // Load saved default folder path
-        self.defaultFolderPath = UserDefaults.standard.string(forKey: "defaultFolderPath") ?? ""
+
+    static func resolveStartupFolderChoice(
+        defaultFolderURL: URL?,
+        lastOpenedFolderPath: String?
+    ) -> StartupFolderChoice {
+        if let defaultFolderURL {
+            return .defaultFolder(defaultFolderURL)
+        }
+        if let lastOpenedFolderPath, !lastOpenedFolderPath.isEmpty {
+            return .lastOpened(URL(fileURLWithPath: lastOpenedFolderPath))
+        }
+        return .none
+    }
+
+    init(
+        userDefaults: UserDefaults = .standard,
+        folderManager: FolderManager = .shared
+    ) {
+        self.userDefaults = userDefaults
+        self.folderManager = folderManager
+        migrateLegacyStartupKeysIfNeeded()
 
         if ProcessInfo.processInfo.environment["RAWCTL_E2E_STATUS"] == "1" {
             sidecarWriteMetricsTask = Task { [weak self] in
@@ -114,6 +162,22 @@ final class AppState: ObservableObject {
                     await self.refreshSidecarWriteMetrics()
                     try? await Task.sleep(nanoseconds: self.e2eSidecarMetricsPollIntervalNs)
                 }
+            }
+        }
+    }
+
+    private func migrateLegacyStartupKeysIfNeeded() {
+        if userDefaults.string(forKey: StartupStorageKeys.lastOpenedFolder) == nil,
+           let legacyPath = userDefaults.string(forKey: StartupStorageKeys.legacyLastOpenedFolder),
+           !legacyPath.isEmpty {
+            userDefaults.set(legacyPath, forKey: StartupStorageKeys.lastOpenedFolder)
+        }
+
+        if let legacyDefault = userDefaults.string(forKey: StartupStorageKeys.legacyDefaultFolderPath),
+           !legacyDefault.isEmpty {
+            let migrated = folderManager.migrateLegacyDefaultFolder(path: legacyDefault)
+            if migrated {
+                userDefaults.removeObject(forKey: StartupStorageKeys.legacyDefaultFolderPath)
             }
         }
     }
@@ -895,8 +959,53 @@ final class AppState: ObservableObject {
         selectionCoordinator.switchToSingleViewIfPossible(showFeedback: showFeedback)
     }
     
+    // MARK: - AI Culling
+
+    /// Run AI culling on all currently loaded assets.
+    /// Updates each asset's `rating` and `flag` in-place and saves to sidecar.
+    func startAICulling() async {
+        guard !assets.isEmpty, !cullingProgress.isRunning else { return }
+
+        cullingAutoHideTask?.cancel()
+        cullingProgress = .running(completed: 0, total: assets.count * 2)
+
+        let currentAssets = assets
+        let results = await CullingService.shared.score(assets: currentAssets) { [weak self] done, total in
+            Task { @MainActor [weak self] in
+                self?.cullingProgress = .running(completed: done, total: total)
+            }
+        }
+
+        await applyCullingResults(results)
+
+        cullingProgress = .complete(scored: results.count)
+
+        // Auto-hide the completion badge after 4 seconds.
+        cullingAutoHideTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run { self?.cullingProgress = .idle }
+        }
+    }
+
+    private func applyCullingResults(_ results: [UUID: CullingScore]) async {
+        for asset in assets {
+            guard let score = results[asset.id] else { continue }
+            var recipe = recipes[asset.id] ?? EditRecipe()
+            recipe.rating = score.suggestedRating
+            recipe.flag   = score.suggestedFlag
+            recipes[asset.id] = recipe
+            // Persist asynchronously (debounced via SidecarService).
+            await SidecarService.shared.saveRecipe(
+                recipe,
+                snapshots: snapshots[asset.id] ?? [],
+                for: asset.url
+            )
+        }
+    }
+
     // MARK: - Actions
-    
+
     func select(
         _ asset: PhotoAsset,
         switchToSingleView: Bool = true,
@@ -1312,9 +1421,22 @@ final class AppState: ObservableObject {
         }
     }
     
+    @discardableResult
+    func openFolderFromPicker() async -> Bool {
+        guard let url = FileSystemService.selectFolder() else { return false }
+        return await openFolder(at: url, registerInFolderHistory: true)
+    }
+
+    @discardableResult
+    func openFolder(at url: URL, registerInFolderHistory: Bool = true) async -> Bool {
+        await openFolderFromPath(url.path, registerInFolderHistory: registerInFolderHistory)
+    }
+
     /// Open folder from path string
-    func openFolderFromPath(_ path: String) async {
-        let url = URL(fileURLWithPath: path)
+    @discardableResult
+    func openFolderFromPath(_ path: String, registerInFolderHistory: Bool = true) async -> Bool {
+        let expandedPath = (path as NSString).expandingTildeInPath
+        let url = URL(fileURLWithPath: expandedPath).standardizedFileURL
         let clock = ContinuousClock()
         let start = clock.now
         let signpostId = PerformanceSignposts.signposter.makeSignpostID()
@@ -1335,10 +1457,18 @@ final class AppState: ObservableObject {
         
         // Check if path exists and is directory
         var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
               isDirectory.boolValue else {
-            print("[AppState] Invalid path: \(path)")
-            return
+            print("[AppState] Invalid path: \(url.path)")
+            return false
+        }
+
+        if registerInFolderHistory {
+            _ = folderManager.addFolder(url)
+        }
+        guard folderManager.beginAccess(for: url) else {
+            print("[AppState] Cannot access folder: \(url.path)")
+            return false
         }
 
         // Lifecycle hardening: ensure debounced recipe/sidecar writes are fully persisted
@@ -1380,13 +1510,19 @@ final class AppState: ObservableObject {
             let state = FileSystemService.buildFolderState(for: url, assets: scannedAssets)
             FileSystemService.saveFolderState(state, for: url)
 
+            if let source = folderManager.source(for: url) {
+                folderManager.updateFolderState(source.id, isLoaded: true, assetCount: scannedAssets.count)
+            }
+
             // Continue sidecar/thumbnails in cancellable background tasks.
             schedulePostScanBackgroundWork(expectedFolder: url)
+            return true
         } catch {
             e2eScanPhaseMs = 0
             isLoading = false
             loadingMessage = ""
             print("[AppState] Error scanning: \(error)")
+            return false
         }
     }
 
@@ -2041,7 +2177,8 @@ extension AppState {
     }
 
     /// Load project's source folders using bookmarks
-    func loadProjectFolders(_ project: Project) async {
+    func loadProjectFolders(_ project: Project) async -> Bool {
+        var didLoadAny = false
         for url in project.sourceFolders {
             if let bookmarkData = project.getBookmarkData(for: url) {
                 // Try to restore from bookmark
@@ -2058,9 +2195,14 @@ extension AppState {
                         print("Failed to access security-scoped resource for: \(url.path)")
                         continue
                     }
+                    defer {
+                        resolvedURL.stopAccessingSecurityScopedResource()
+                    }
 
                     // Load the folder using existing method
-                    await openFolderFromPath(resolvedURL.path)
+                    if await openFolderFromPath(resolvedURL.path, registerInFolderHistory: false) {
+                        didLoadAny = true
+                    }
 
                     // If bookmark is stale, refresh it
                     if isStale {
@@ -2072,14 +2214,17 @@ extension AppState {
                 }
             } else {
                 // No bookmark, try direct path access (may fail in sandbox)
-                await openFolderFromPath(url.path)
+                if await openFolderFromPath(url.path, registerInFolderHistory: false) {
+                    didLoadAny = true
+                }
             }
         }
+        return didLoadAny
     }
 
     /// Called on app launch to restore last project
-    func restoreLastProject() async {
-        guard let catalog = catalog else { return }
+    func restoreLastProject() async -> Bool {
+        guard let catalog = catalog else { return false }
 
         // Migrate if needed
         if catalog.version < 2 {
@@ -2093,11 +2238,14 @@ extension AppState {
         // Restore last opened project
         guard let lastProjectId = catalog.lastOpenedProjectId,
               let project = catalog.getProject(lastProjectId) else {
-            return
+            return false
         }
 
         // Load project folders
-        await loadProjectFolders(project)
+        let didLoadProjectFolders = await loadProjectFolders(project)
+        guard didLoadProjectFolders else {
+            return false
+        }
 
         // Restore UI state
         restoreStateFromProject(project)
@@ -2112,6 +2260,7 @@ extension AppState {
                 self.restoreLastSelectedPhoto(from: project)
             }
         }
+        return true
     }
 }
 

@@ -218,6 +218,39 @@ struct GridView: View {
                 .padding(.vertical, 8)
                 .background(.ultraThinMaterial)
             }
+
+            // AI Culling progress bar
+            if case .running(let done, let total) = appState.cullingProgress {
+                VStack(spacing: 4) {
+                    ProgressView(value: Double(done), total: Double(total))
+                        .progressViewStyle(.linear)
+                        .tint(Color.yellow)
+                    HStack {
+                        Label("AI Culling…", systemImage: "sparkles")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Text("\(min(done, total))/\(total)")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(.ultraThinMaterial)
+            } else if case .complete(let scored) = appState.cullingProgress {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                        .font(.caption)
+                    Text("AI Culled \(scored) photos — review ratings and flags")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+                .background(.ultraThinMaterial)
+            }
             
             // Filter bar
             FilterBar(appState: appState)
@@ -247,7 +280,29 @@ struct GridView: View {
                     .frame(width: 40)
                 
                 Spacer()
-                
+
+                // AI Cull button
+                Group {
+                    if appState.cullingProgress.isRunning {
+                        ProgressView()
+                            .scaleEffect(0.6)
+                            .frame(width: 20, height: 16)
+                    } else {
+                        Button {
+                            Task { await appState.startAICulling() }
+                        } label: {
+                            Label("AI Cull", systemImage: "sparkles")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(appState.assets.isEmpty)
+                        .help("Score all photos for sharpness, composition, and duplicates")
+                    }
+                }
+
+                Divider()
+                    .frame(height: 12)
+
                 Text("\(appState.assets.count) photos")
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -591,35 +646,8 @@ struct GridView: View {
     // MARK: - Actions
 
     private func openFolder() {
-        guard let url = FileSystemService.selectFolder() else { return }
-
-        appState.selectedFolder = url
-        appState.isLoading = true
-        appState.loadingMessage = "Scanning folder…"
-
         Task {
-            do {
-                let assets = try await FileSystemService.scanFolder(url)
-                await MainActor.run {
-                    appState.assets = assets
-                    appState.isLoading = false
-                    appState.recipes = [:]
-                }
-                // Select first photo immediately for responsive UI
-                await MainActor.run {
-                    if let first = appState.assets.first {
-                        appState.select(first, switchToSingleView: false)
-                    }
-                }
-                // Load recipes in background (non-blocking)
-                Task {
-                    await appState.loadAllRecipes()
-                }
-            } catch {
-                await MainActor.run {
-                    appState.isLoading = false
-                }
-            }
+            _ = await appState.openFolderFromPicker()
         }
     }
 }
