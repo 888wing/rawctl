@@ -12,7 +12,7 @@
 	<true/>
 	<key>keychain-access-groups</key>
 	<array>
-		<string>$(AppIdentifierPrefix)Shacoworkshop.rawctl</string>
+		<string>$(AppIdentifierPrefix)Shacoworkshop.latent</string>
 	</array>
 </dict>
 </plist>
