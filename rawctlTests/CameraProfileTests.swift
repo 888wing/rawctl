@@ -54,14 +54,14 @@ struct CameraProfileTests {
 
     @Test func neutralProfileIsDefault() async throws {
         let neutral = BuiltInProfile.neutral.profile
-        #expect(neutral.name == "rawctl Neutral")
+        #expect(neutral.name == "Latent Neutral")
         #expect(neutral.colorMatrix == .identity)
     }
 
     @Test func profileLookupWorks() async throws {
         let vivid = BuiltInProfile.profile(for: "rawctl.vivid")
         #expect(vivid != nil)
-        #expect(vivid?.name == "rawctl Vivid")
+        #expect(vivid?.name == "Latent Vivid")
 
         let original = BuiltInProfile.profile(for: "rawctl.original")
         #expect(original != nil)
