@@ -165,7 +165,38 @@ struct InspectorView: View {
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
-                        
+
+                        Spacer()
+                    }
+
+                    // Smart Sync button
+                    HStack {
+                        Group {
+                            if appState.smartSyncState.isRunning {
+                                HStack(spacing: 6) {
+                                    ProgressView().scaleEffect(0.6).frame(width: 16, height: 16)
+                                    if case .indexing(let done, let total) = appState.smartSyncState {
+                                        Text("Indexing \(min(done, total))/\(total)…")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                            } else if case .complete(let n) = appState.smartSyncState, n == 0 {
+                                Label("No similar scenes found", systemImage: "sparkles.slash")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            } else {
+                                Button {
+                                    Task { await appState.startSmartSync() }
+                                } label: {
+                                    Label("Smart Sync…", systemImage: "sparkles.rectangle.stack")
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .disabled(appState.selectedAsset == nil)
+                                .help("Find visually similar scenes and sync this photo's edit settings")
+                            }
+                        }
                         Spacer()
                     }
                 }
@@ -915,6 +946,9 @@ struct InspectorView: View {
         }
         .sheet(isPresented: $appState.showAccountSheet) {
             AccountSheet()
+        }
+        .sheet(isPresented: $appState.showSmartSyncSheet) {
+            SmartSyncSheet(appState: appState)
         }
         .overlay {
             if showNanoBananaProgress {

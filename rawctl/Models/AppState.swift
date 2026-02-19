@@ -100,6 +100,36 @@ final class AppState: ObservableObject {
     @Published var cullingProgress: CullingProgress = .idle
     private var cullingAutoHideTask: Task<Void, Never>?
 
+    // MARK: - Smart Sync Progress
+
+    /// Progress state for the background Smart Sync pass.
+    enum SmartSyncState: Equatable {
+        case idle
+        case indexing(completed: Int, total: Int)
+        case complete(synced: Int)
+
+        var isRunning: Bool {
+            if case .indexing = self { return true }
+            return false
+        }
+
+        static func == (lhs: SmartSyncState, rhs: SmartSyncState) -> Bool {
+            switch (lhs, rhs) {
+            case (.idle, .idle): return true
+            case (.indexing(let a, let b), .indexing(let c, let d)): return a == c && b == d
+            case (.complete(let a), .complete(let b)): return a == b
+            default: return false
+            }
+        }
+    }
+
+    @Published var smartSyncState: SmartSyncState = .idle
+    /// Pending match results awaiting user confirmation.
+    @Published var smartSyncMatches: [SmartSyncMatch] = []
+    /// Whether the Smart Sync confirmation sheet is presented.
+    @Published var showSmartSyncSheet: Bool = false
+    private var smartSyncAutoHideTask: Task<Void, Never>?
+
     private var recipeLoadTask: Task<Void, Never>?
     private var thumbnailPreloadTask: Task<Void, Never>?
     private var thumbnailAutoHideTask: Task<Void, Never>?
@@ -1001,6 +1031,75 @@ final class AppState: ObservableObject {
                 snapshots: snapshots[asset.id] ?? [],
                 for: asset.url
             )
+        }
+    }
+
+    // MARK: - Smart Sync
+
+    /// Find visually similar scenes and stage adapted recipes for user confirmation.
+    ///
+    /// Populates `smartSyncMatches` and sets `showSmartSyncSheet = true`.
+    /// No recipes are saved until the user confirms in the sheet.
+    func startSmartSync() async {
+        guard let source = selectedAsset else { return }
+        guard !smartSyncState.isRunning else { return }
+
+        smartSyncAutoHideTask?.cancel()
+        let total = assets.count
+        smartSyncState = .indexing(completed: 0, total: total)
+
+        let currentAssets = assets
+        let sourceRecipe  = recipes[source.id] ?? EditRecipe()
+
+        let matches = await SmartSyncService.shared.findAndAdapt(
+            source: source,
+            sourceRecipe: sourceRecipe,
+            candidates: currentAssets,
+            onProgress: { [weak self] done, total in
+                Task { @MainActor [weak self] in
+                    self?.smartSyncState = .indexing(completed: done, total: total)
+                }
+            }
+        )
+
+        smartSyncMatches  = matches
+        showSmartSyncSheet = !matches.isEmpty
+
+        if matches.isEmpty {
+            smartSyncState = .complete(synced: 0)
+            scheduleSmartSyncAutoHide()
+        } else {
+            smartSyncState = .idle   // Sheet is now showing; reset progress bar.
+        }
+    }
+
+    /// Apply confirmed Smart Sync matches — write adapted recipes and save sidecars.
+    ///
+    /// Call this from the confirmation sheet's "Apply" button.
+    func applySmartSync(selections: [SmartSyncMatch]) async {
+        showSmartSyncSheet = false
+        for match in selections {
+            var recipe = match.adaptedRecipe
+            recipes[match.id] = recipe
+            if let asset = assets.first(where: { $0.id == match.id }) {
+                await SidecarService.shared.saveRecipe(
+                    recipe,
+                    snapshots: snapshots[match.id] ?? [],
+                    for: asset.url
+                )
+            }
+        }
+        smartSyncMatches = []
+        smartSyncState   = .complete(synced: selections.count)
+        scheduleSmartSyncAutoHide()
+    }
+
+    private func scheduleSmartSyncAutoHide() {
+        smartSyncAutoHideTask?.cancel()
+        smartSyncAutoHideTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run { self?.smartSyncState = .idle }
         }
     }
 
