@@ -2,9 +2,9 @@
 set -e
 
 # Configuration
-APP_NAME="rawctl"
+APP_NAME="latent"
 VERSION="${1:-1.0.0}"
-BUNDLE_ID="com.888wing.rawctl"
+BUNDLE_ID="Shacoworkshop.latent"
 TEAM_ID="YOUR_TEAM_ID"  # Replace with your Apple Developer Team ID
 ARCHIVE_PATH="build/${APP_NAME}.xcarchive"
 EXPORT_PATH="build/export"

@@ -11,8 +11,8 @@ set -e
 # Configuration
 # ═══════════════════════════════════════════════════════════════════════════════
 
-APP_NAME="rawctl"
-BUNDLE_ID="Shacoworkshop.rawctl"
+APP_NAME="latent"
+BUNDLE_ID="Shacoworkshop.latent"
 TEAM_ID="DTR8DL89SD"
 DEVELOPER_ID="Developer ID Application: Siu Fai Chui (${TEAM_ID})"
 
@@ -26,11 +26,11 @@ RELEASE_DIR="${PROJECT_ROOT}/releases"
 BIN_DIR="${PROJECT_ROOT}/bin"
 
 # Remote server (customize for your setup)
-REMOTE_HOST="releases.rawctl.com"
+REMOTE_HOST="releases.latent-app.com"
 REMOTE_PATH="/var/www/releases"
 
 # Appcast URL
-APPCAST_URL="https://releases.rawctl.com"
+APPCAST_URL="https://releases.latent-app.com"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Parse Arguments
@@ -332,14 +332,14 @@ cat > "${RELEASE_DIR}/appcast.xml" << EOF
 <?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
     <channel>
-        <title>rawctl Updates</title>
+        <title>Latent Updates</title>
         <link>${APPCAST_URL}/appcast.xml</link>
         <description>Most recent changes with links to updates.</description>
         <language>en</language>
         <item>
             <title>Version ${VERSION}</title>
             <description><![CDATA[
-                <h2>rawctl ${VERSION}</h2>
+                <h2>Latent ${VERSION}</h2>
                 <p>See the release notes for details.</p>
             ]]></description>
             <pubDate>${PUB_DATE}</pubDate>
@@ -378,7 +378,7 @@ if [ "$SKIP_UPLOAD" = true ]; then
 else
     print_step "Step 8: Uploading to Cloudflare R2"
 
-    R2_BUCKET="rawctl-releases"
+    R2_BUCKET="latent-releases"
 
     # Check for wrangler
     if ! command -v wrangler &> /dev/null; then
@@ -403,14 +403,14 @@ else
 
         # Upload as latest
         print_info "Creating latest symlink..."
-        wrangler r2 object put "${R2_BUCKET}/rawctl-latest.dmg" \
+        wrangler r2 object put "${R2_BUCKET}/latent-latest.dmg" \
             --file="${RELEASE_DIR}/${DMG_NAME}" \
             --content-type="application/octet-stream" \
             --remote
 
         print_success "Uploaded to Cloudflare R2"
         print_info "DMG URL: ${APPCAST_URL}/${DMG_NAME}"
-        print_info "Latest:  ${APPCAST_URL}/rawctl-latest.dmg"
+        print_info "Latest:  ${APPCAST_URL}/latent-latest.dmg"
     fi
 fi
 
@@ -439,14 +439,14 @@ else
             # Create release with DMG
             gh release create "v${VERSION}" \
                 "${RELEASE_DIR}/${DMG_NAME}" \
-                --title "rawctl ${VERSION}" \
-                --notes "## rawctl ${VERSION}
+                --title "Latent ${VERSION}" \
+                --notes "## Latent ${VERSION}
 
-See [Release Notes](https://rawctl.com/#release-notes) for details.
+See [Release Notes](https://latent-app.com/#release-notes) for details.
 
 ### Downloads
 - **DMG**: [rawctl-${VERSION}.dmg](${APPCAST_URL}/${DMG_NAME})
-- **Latest**: [rawctl-latest.dmg](${APPCAST_URL}/rawctl-latest.dmg)
+- **Latest**: [latent-latest.dmg](${APPCAST_URL}/latent-latest.dmg)
 
 ### Checksums
 \`\`\`
@@ -486,10 +486,10 @@ echo "Next steps:"
 echo "  1. Update ReleaseNotes.swift with new version (if not done)"
 echo "  2. Update landing/src/sections/ReleaseNotes.tsx"
 echo "  3. Deploy landing page: cd landing && npm run build"
-echo "  4. Test update in app: rawctl → Check for Updates"
+echo "  4. Test update in app: Latent → Check for Updates"
 echo ""
 echo "URLs:"
 echo "  Appcast:  ${APPCAST_URL}/appcast.xml"
 echo "  DMG:      ${APPCAST_URL}/${DMG_NAME}"
-echo "  GitHub:   https://github.com/nicholaschuayunzhi/rawctl/releases/tag/v${VERSION}"
+echo "  GitHub:   https://github.com/888wing/rawctl/releases/tag/v${VERSION}"
 echo ""
