@@ -1,4 +1,4 @@
-# rawctl
+# Latent
 
 A native macOS RAW photo editor built with SwiftUI and Core Image, featuring true RAW processing with non-destructive editing.
 
@@ -78,7 +78,7 @@ Full changelog: [CHANGELOG.md](CHANGELOG.md)
 ### Installation
 
 ```bash
-git clone https://github.com/yourname/rawctl.git
+git clone https://github.com/888wing/rawctl.git
 cd rawctl/rawctl
 open rawctl.xcodeproj
 # Press ⌘R to build and run
@@ -119,7 +119,7 @@ rawctl/
 
 ## 💾 Sidecar Format
 
-Edits are stored in `{filename}.rawctl.json`:
+Edits are stored in `{filename}.latent.json`:
 
 ```json
 {
