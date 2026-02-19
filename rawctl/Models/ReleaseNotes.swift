@@ -88,9 +88,9 @@ struct ReleaseHistory {
             sections: [
                 ReleaseSection(title: "Camera Profiles", items: [
                     "4-stage pipeline: RAW Decode → Camera Profile → User Adjustments → Display Transform",
-                    "rawctl Neutral: Identity matrix with filmic neutral tone curve",
-                    "rawctl Vivid: Enhanced saturation/contrast with vivid tone curve",
-                    "rawctl Portrait: Skin-optimized matrix with soft tone curve",
+                    "Latent Neutral: Identity matrix with filmic neutral tone curve",
+                    "Latent Vivid: Enhanced saturation/contrast with vivid tone curve",
+                    "Latent Portrait: Skin-optimized matrix with soft tone curve",
                     "ProfilePicker UI in Light panel for quick switching",
                     "Filmic tone curves with natural highlight roll-off"
                 ]),

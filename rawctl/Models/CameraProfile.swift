@@ -54,9 +54,9 @@ enum BuiltInProfile: String, CaseIterable, Identifiable {
     var displayName: String {
         switch self {
         case .original: return "Original"
-        case .neutral: return "rawctl Neutral"
-        case .vivid: return "rawctl Vivid"
-        case .portrait: return "rawctl Portrait"
+        case .neutral: return "Latent Neutral"
+        case .vivid: return "Latent Vivid"
+        case .portrait: return "Latent Portrait"
         case .landscape: return "rawctl Landscape"
         case .cinematic: return "rawctl Cinematic"
         case .monochrome: return "rawctl B&W"
@@ -92,7 +92,7 @@ enum BuiltInProfile: String, CaseIterable, Identifiable {
         case .neutral:
             return CameraProfile(
                 id: rawValue,
-                name: "rawctl Neutral",
+                name: "Latent Neutral",
                 manufacturer: "rawctl",
                 colorMatrix: .identity,
                 baseToneCurve: .filmicNeutral,
@@ -102,7 +102,7 @@ enum BuiltInProfile: String, CaseIterable, Identifiable {
         case .vivid:
             return CameraProfile(
                 id: rawValue,
-                name: "rawctl Vivid",
+                name: "Latent Vivid",
                 manufacturer: "rawctl",
                 colorMatrix: .identity,
                 baseToneCurve: .filmicVivid,
@@ -112,7 +112,7 @@ enum BuiltInProfile: String, CaseIterable, Identifiable {
         case .portrait:
             return CameraProfile(
                 id: rawValue,
-                name: "rawctl Portrait",
+                name: "Latent Portrait",
                 manufacturer: "rawctl",
                 colorMatrix: .skinToneOptimized,
                 baseToneCurve: .filmicSoft,
