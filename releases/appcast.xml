@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Latent Updates</title>
+    <link>https://releases.latent-app.com/appcast.xml</link>
+    <description>Most recent changes with links to updates.</description>
+    <language>en</language>
+    <item>
+      <title>Version 1.4.0</title>
+      <description><![CDATA[
+        <h2>Latent 1.4.0</h2>
+        <p>See release notes: <a href="https://latent-app.com/#release-notes">latent-app.com/#release-notes</a></p>
+      ]]></description>
+      <pubDate>Thu, 19 Feb 2026 06:54:27 +0000</pubDate>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <enclosure
+        url="https://releases.latent-app.com/latent-1.4.0.dmg"
+        sparkle:version="5"
+        sparkle:shortVersionString="1.4.0"
+        sparkle:edSignature="PHpJM5VSORiColih20ry3dTnI9l2dmA6njUmUeTobt/J9YztghaZb5Z7M8XLKIQM0tWZ/Lf9+ZZEa4CO7ixhAw=="
+        length="12879286"
+        type="application/octet-stream"/>
+    </item>
+  </channel>
+</rss>
