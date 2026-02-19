@@ -1,9 +1,18 @@
 # Changelog
 
-All notable changes to rawctl will be documented in this file.
+All notable changes to Latent will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Changed
+- App renamed from rawctl to **Latent**
+- Sidecar format: `.rawctl.json` files silently migrated to `.latent.json` on first open
+- Camera profiles renamed: rawctl Neutral/Vivid/Portrait → Latent Neutral/Vivid/Portrait
+- Domain updated to latent-app.com (Sparkle, API, links)
+- Bundle identifier updated to `Shacoworkshop.latent`
 
 ## [1.4.0] - 2026-01-14
 
@@ -222,9 +231,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Camera Profiles (Color Foundation v1.2)
 - **4-stage color pipeline**: RAW Decode → Camera Profile → User Adjustments → Display Transform
 - **3 built-in camera profiles**:
-  - **rawctl Neutral**: Identity matrix with filmic neutral tone curve - faithful color reproduction
-  - **rawctl Vivid**: Enhanced saturation/contrast with vivid tone curve - punchy colors
-  - **rawctl Portrait**: Skin-optimized matrix with soft tone curve - flattering skin tones
+  - **Latent Neutral**: Identity matrix with filmic neutral tone curve - faithful color reproduction
+  - **Latent Vivid**: Enhanced saturation/contrast with vivid tone curve - punchy colors
+  - **Latent Portrait**: Skin-optimized matrix with soft tone curve - flattering skin tones
 - **ProfilePicker UI** in Light panel for quick profile switching
 - **Filmic tone curves**: 6-point curves for natural highlight roll-off
 - **Highlight shoulder**: Soft clipping to prevent blown highlights
@@ -289,13 +298,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - All download buttons now use centralized config URL
 
 #### Data Collection API (Cloudflare Workers + R2)
-- **API endpoints** at `api.rawctl.app`:
+- **API endpoints** at `api.latent-app.com`:
   - `POST /api/subscribe`: Newsletter email collection
   - `POST /api/feature-request`: Feature voting submission
   - `POST /api/feedback`: Bug reports, suggestions, praise
   - `GET /api/stats`: Aggregate statistics
   - `GET /api/export/*`: Data export (emails, features, feedback)
-- **R2 storage**: All data persisted in Cloudflare R2 bucket (`rawctl-data`)
+- **R2 storage**: All data persisted in Cloudflare R2 bucket (`latent-data`)
 - **Scheduled digest**: Cron-triggered daily summary via Resend email API
 - **Notification options documented**:
   - Email digest via Resend (recommended)
@@ -341,7 +350,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SidecarService.pendingSaves`: Pending data for flush on quit
 - `SidecarService.flushAllPendingSaves()`: Immediate save of all pending data
 - `SidecarService.saveRecipeOnly()`: Safe API preserving existing snapshots
-- `rawctlApp.scenePhase`: Monitors app lifecycle for `.inactive` flush trigger
+- `LatentApp.scenePhase`: Monitors app lifecycle for `.inactive` flush trigger
 
 #### Project & Catalog
 - `SavedFilterState`: Codable filter state separate from UI-only FilterState
@@ -494,7 +503,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Comparison with Lightroom
 
-| Feature | rawctl | Lightroom |
+| Feature | Latent | Lightroom |
 |---------|--------|-----------|
 | **Price** | Free | $10/month |
 | **Catalog** | Folder-based | Proprietary |

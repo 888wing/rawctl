@@ -1,6 +1,6 @@
-# Contributing to rawctl
+# Contributing to Latent
 
-Thank you for your interest in contributing to rawctl! This document provides guidelines and information for contributors.
+Thank you for your interest in contributing to Latent! This document provides guidelines and information for contributors.
 
 ## Development Setup
 
@@ -14,7 +14,7 @@ Thank you for your interest in contributing to rawctl! This document provides gu
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourname/rawctl.git
+git clone https://github.com/888wing/rawctl.git
 cd rawctl/rawctl
 
 # Open in Xcode
@@ -82,7 +82,7 @@ All edits are stored in sidecar JSON files, never modifying the original:
 
 ```
 photo.ARW           # Original (never modified)
-photo.ARW.rawctl.json  # Edit recipe (JSON)
+photo.ARW.latent.json  # Edit recipe (JSON)
 ```
 
 ### State Management
