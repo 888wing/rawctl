@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - App renamed from rawctl to **Latent**
+
+## [1.5.0] - 2026-02-20
+
+### Added
+
+#### AI Photo Culling (Phase 1 — Free Tier)
+- **CullingService** (`Services/CullingService.swift`): Apple Vision-powered photo scoring (sharpness via Laplacian, saliency via `VNGenerateAttentionBasedSaliencyImageRequest`, duplicate detection via `VNGenerateImageFeaturePrintRequest`); zero marginal cost, ANE-accelerated
+- **GridView**: "AI Cull" toolbar button + `ProgressView` overlay; progress reported via `AppState.cullingProgress`
+- **AppState.cullingProgress**: `Double?` progress state for culling UI; nil when idle
+- Culling results written to `EditRecipe.rating` and `EditRecipe.flag` via `SidecarService`
+
+#### Scene-Aware Smart Sync (Phase 2 — Pro)
+- **SmartSyncService** (`Services/SmartSyncService.swift`): `VNGenerateImageFeaturePrintRequest` scene-similarity indexing + `RecipeAdapter` for EV-based exposure normalisation; clamped to ±3 EV
+- **FeaturePrintIndex**: in-memory cache of `VNFeaturePrintObservation` keyed by photo URL; supports `invalidate(for:)` on edit change
+- **SingleView**: "Smart Sync" button in inspector; confirmation sheet listing matched photos before applying adapted recipes
+
+#### AI Masking via Mobile-SAM (Phase 3 — Pro)
+- **SAMService** (`Services/SAMService.swift`): Core ML actor wrapping Mobile-SAM; graceful nil return when model absent; `SAMModelStatus` enum (`.notInstalled`, `.downloading(progress:)`, `.ready`, `.error`)
+- **SingleView**: tap-to-mask entry point; SAM output stored as `ColorNode` with `.brush(data:)` mask; composited by existing `ImagePipeline.renderLocalNodes`
+- **AppFeatures**: `aiCullingEnabled` (always `true`), `smartSyncEnabled` and `aiMaskingEnabled` (Pro-gated via `AccountService.shared.isProUser`); `LATENT_PRO_OVERRIDE` env var for QA
+
+#### Pro Subscription Gating
+- **AccountService.isProUser**: checks `creditsBalance.subscription.plan` for "pro", "premium", or "yearly" substrings (case-insensitive); returns `false` when unauthenticated or balance nil
+
+### Technical
+- **Test suite** (`rawctlTests/`): 31 new tests across 3 new files
+  - `SAMServiceTests`: SAMModelStatus Equatable + isReady contract; SAMService graceful nil when model absent
+  - `AppFeaturesProGatingTests`: tier gating lockstep verification; isProUser false in unauthenticated environment
+  - `AccountServiceIsProUserTests`: all plan-name variants, case-insensitivity, nil/unauthenticated guards
 - Sidecar format: `.rawctl.json` files silently migrated to `.latent.json` on first open
 - Camera profiles renamed: rawctl Neutral/Vivid/Portrait → Latent Neutral/Vivid/Portrait
 - Domain updated to latent-app.com (Sparkle, API, links)
