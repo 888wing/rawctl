@@ -6,7 +6,6 @@
 //
 
 import Foundation
-import AppKit
 
 /// Represents a saved folder source
 struct FolderSource: Identifiable, Codable {
@@ -17,10 +16,10 @@ struct FolderSource: Identifiable, Codable {
     var isLoaded: Bool          // Currently loaded in app
     var assetCount: Int
     var lastOpened: Date?
-    
+
     // Security-scoped bookmark data for persisting sandbox permissions
     var bookmarkData: Data?
-    
+
     init(url: URL, name: String? = nil) {
         self.id = UUID()
         self.url = url
@@ -31,11 +30,11 @@ struct FolderSource: Identifiable, Codable {
         self.lastOpened = nil
         self.bookmarkData = nil
     }
-    
+
     enum CodingKeys: String, CodingKey {
         case id, name, isDefault, isLoaded, assetCount, lastOpened, bookmarkData
     }
-    
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
@@ -45,7 +44,7 @@ struct FolderSource: Identifiable, Codable {
         assetCount = try container.decodeIfPresent(Int.self, forKey: .assetCount) ?? 0
         lastOpened = try container.decodeIfPresent(Date.self, forKey: .lastOpened)
         bookmarkData = try container.decodeIfPresent(Data.self, forKey: .bookmarkData)
-        
+
         // Restore URL from bookmark
         if let bookmark = bookmarkData {
             var isStale = false
@@ -55,15 +54,15 @@ struct FolderSource: Identifiable, Codable {
                 relativeTo: nil,
                 bookmarkDataIsStale: &isStale
             ) {
-                url = resolvedURL
+                url = resolvedURL.standardizedFileURL
             } else {
-                url = URL(fileURLWithPath: "/") // Fallback
+                url = URL(fileURLWithPath: "/")
             }
         } else {
             url = URL(fileURLWithPath: "/")
         }
     }
-    
+
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
@@ -77,96 +76,123 @@ struct FolderSource: Identifiable, Codable {
 }
 
 /// Manager for multiple folder sources with persistence
-class FolderManager: ObservableObject {
+@MainActor
+final class FolderManager: ObservableObject {
     static let shared = FolderManager()
-    
-    @Published var sources: [FolderSource] = []
-    @Published var recentFolders: [URL] = []
-    
-    private let userDefaultsKey = "rawctl.folderSources"
-    private let recentFoldersKey = "rawctl.recentFolders"
-    private let maxRecentFolders = 10
-    
-    init() {
+
+    @Published private(set) var sources: [FolderSource] = []
+    @Published private(set) var recentFolders: [URL] = []
+
+    private let userDefaults: UserDefaults
+    private let sourcesKey: String
+    private let recentFoldersKey: String
+    private let legacySourcesKeys: [String]
+    private let legacyRecentFoldersKeys: [String]
+    private let maxRecentFolders: Int
+    private var activeScopedURL: URL?
+
+    init(
+        userDefaults: UserDefaults = .standard,
+        namespace: String = "latent",
+        legacyNamespaces: [String] = ["rawctl"],
+        maxRecentFolders: Int = 10
+    ) {
+        self.userDefaults = userDefaults
+        self.sourcesKey = "\(namespace).folderSources"
+        self.recentFoldersKey = "\(namespace).recentFolders"
+        self.legacySourcesKeys = legacyNamespaces.map { "\($0).folderSources" }
+        self.legacyRecentFoldersKeys = legacyNamespaces.map { "\($0).recentFolders" }
+        self.maxRecentFolders = max(1, maxRecentFolders)
         loadFromUserDefaults()
     }
-    
+
+    var defaultFolderURL: URL? {
+        sources.first(where: { $0.isDefault })?.url
+    }
+
     // MARK: - Folder Management
-    
-    /// Add a new folder source
+
+    /// Add (or upsert) a folder source and update recent list
+    @discardableResult
     func addFolder(_ url: URL) -> FolderSource? {
-        // Check if already exists
-        if sources.contains(where: { $0.url == url }) {
-            return sources.first { $0.url == url }
+        let normalizedURL = url.standardizedFileURL
+        if let index = sources.firstIndex(where: { samePath($0.url, normalizedURL) }) {
+            addToRecent(normalizedURL)
+            return sources[index]
         }
-        
-        // Create security-scoped bookmark
-        guard let bookmark = createBookmark(for: url) else {
-            print("[FolderManager] Failed to create bookmark for \(url.path)")
-            return nil
-        }
-        
-        var source = FolderSource(url: url)
-        source.bookmarkData = bookmark
-        
+
+        var source = FolderSource(url: normalizedURL)
+        source.bookmarkData = createBookmark(for: normalizedURL)
+
         // If no default, make this the default
         if sources.isEmpty || !sources.contains(where: { $0.isDefault }) {
             source.isDefault = true
         }
-        
+
         sources.append(source)
         saveToUserDefaults()
-        
-        addToRecent(url)
-        
+        addToRecent(normalizedURL)
+
         return source
     }
-    
+
     /// Remove a folder source
     func removeFolder(_ id: UUID) {
+        guard let removed = sources.first(where: { $0.id == id }) else { return }
         sources.removeAll { $0.id == id }
+
+        if let activeScopedURL, samePath(activeScopedURL, removed.url) {
+            endAccess()
+        }
+
+        if !sources.isEmpty && !sources.contains(where: { $0.isDefault }) {
+            sources[0].isDefault = true
+        }
+
         saveToUserDefaults()
     }
-    
+
     /// Set a folder as the default startup folder
     func setAsDefault(_ id: UUID) {
-        for i in sources.indices {
-            sources[i].isDefault = (sources[i].id == id)
+        for index in sources.indices {
+            sources[index].isDefault = (sources[index].id == id)
         }
         saveToUserDefaults()
     }
-    
+
     /// Update folder's loaded state and asset count
     func updateFolderState(_ id: UUID, isLoaded: Bool, assetCount: Int? = nil) {
-        if let index = sources.firstIndex(where: { $0.id == id }) {
-            sources[index].isLoaded = isLoaded
-            if isLoaded {
-                sources[index].lastOpened = Date()
-            }
-            if let count = assetCount {
-                sources[index].assetCount = count
-            }
-            saveToUserDefaults()
+        guard let index = sources.firstIndex(where: { $0.id == id }) else { return }
+        sources[index].isLoaded = isLoaded
+        if isLoaded {
+            sources[index].lastOpened = Date()
         }
+        if let assetCount {
+            sources[index].assetCount = assetCount
+        }
+        saveToUserDefaults()
     }
-    
+
+    func source(for url: URL) -> FolderSource? {
+        let normalizedURL = url.standardizedFileURL
+        return sources.first { samePath($0.url, normalizedURL) }
+    }
+
     /// Get the default folder to open on startup
     func getDefaultFolder() -> FolderSource? {
-        if let defaultSource = sources.first(where: { $0.isDefault }) {
-            // Start security-scoped access
-            if startAccessingFolder(defaultSource) {
-                return defaultSource
-            }
-        }
-        return nil
+        guard let defaultSource = sources.first(where: { $0.isDefault }) else { return nil }
+        guard beginAccess(for: defaultSource) else { return nil }
+        return source(for: defaultSource.url) ?? defaultSource
     }
-    
-    /// Start accessing a security-scoped folder
-    func startAccessingFolder(_ source: FolderSource) -> Bool {
-        guard let bookmark = source.bookmarkData else { return false }
-        
+
+    /// Begin scoped access for a saved folder source.
+    func beginAccess(for source: FolderSource) -> Bool {
+        guard let bookmark = source.bookmarkData else {
+            return true
+        }
+
         var isStale = false
-        guard let url = try? URL(
+        guard let resolvedURL = try? URL(
             resolvingBookmarkData: bookmark,
             options: .withSecurityScope,
             relativeTo: nil,
@@ -174,79 +200,189 @@ class FolderManager: ObservableObject {
         ) else {
             return false
         }
-        
-        if isStale {
-            // Need to recreate bookmark
-            if let newBookmark = createBookmark(for: url) {
-                if let index = sources.firstIndex(where: { $0.id == source.id }) {
-                    sources[index].bookmarkData = newBookmark
-                    saveToUserDefaults()
-                }
+
+        if isStale, let refreshed = createBookmark(for: resolvedURL) {
+            if let index = sources.firstIndex(where: { $0.id == source.id }) {
+                sources[index].bookmarkData = refreshed
+                sources[index].url = resolvedURL.standardizedFileURL
+                saveToUserDefaults()
             }
         }
-        
-        return url.startAccessingSecurityScopedResource()
+
+        let normalizedResolvedURL = resolvedURL.standardizedFileURL
+        if let activeScopedURL, !samePath(activeScopedURL, normalizedResolvedURL) {
+            activeScopedURL.stopAccessingSecurityScopedResource()
+            self.activeScopedURL = nil
+        }
+
+        if let activeScopedURL, samePath(activeScopedURL, normalizedResolvedURL) {
+            return true
+        }
+
+        guard normalizedResolvedURL.startAccessingSecurityScopedResource() else {
+            return false
+        }
+        activeScopedURL = normalizedResolvedURL
+        return true
     }
-    
-    /// Stop accessing a security-scoped folder
+
+    /// Begin access for an arbitrary URL. Uses saved bookmark if available.
+    func beginAccess(for url: URL) -> Bool {
+        let normalizedURL = url.standardizedFileURL
+        if let source = source(for: normalizedURL) {
+            return beginAccess(for: source)
+        }
+
+        if let activeScopedURL, !samePath(activeScopedURL, normalizedURL) {
+            activeScopedURL.stopAccessingSecurityScopedResource()
+            self.activeScopedURL = nil
+        }
+        return true
+    }
+
+    /// Backward-compatible API
+    func startAccessingFolder(_ source: FolderSource) -> Bool {
+        beginAccess(for: source)
+    }
+
+    /// Stop accessing current security-scoped folder
     func stopAccessingFolder(_ source: FolderSource) {
-        source.url.stopAccessingSecurityScopedResource()
+        guard let activeScopedURL else { return }
+        if samePath(activeScopedURL, source.url) {
+            endAccess()
+        }
     }
-    
+
+    func endAccess() {
+        activeScopedURL?.stopAccessingSecurityScopedResource()
+        activeScopedURL = nil
+    }
+
     // MARK: - Recent Folders
-    
+
     /// Add a folder to recent list
     func addToRecent(_ url: URL) {
-        recentFolders.removeAll { $0 == url }
-        recentFolders.insert(url, at: 0)
+        let normalizedURL = url.standardizedFileURL
+        recentFolders.removeAll { samePath($0, normalizedURL) }
+        recentFolders.insert(normalizedURL, at: 0)
         if recentFolders.count > maxRecentFolders {
             recentFolders = Array(recentFolders.prefix(maxRecentFolders))
         }
         saveRecentFolders()
     }
-    
+
+    func clearRecentFolders() {
+        recentFolders = []
+        saveRecentFolders()
+    }
+
+    /// One-time migration from AppState's old default folder key.
+    @discardableResult
+    func migrateLegacyDefaultFolder(path: String) -> Bool {
+        let expandedPath = (path as NSString).expandingTildeInPath
+        let url = URL(fileURLWithPath: expandedPath).standardizedFileURL
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            return false
+        }
+
+        if let existing = source(for: url) {
+            setAsDefault(existing.id)
+            return true
+        }
+
+        if let newSource = addFolder(url) {
+            setAsDefault(newSource.id)
+            return true
+        }
+        return false
+    }
+
     // MARK: - Persistence
-    
+
     private func createBookmark(for url: URL) -> Data? {
         do {
-            let bookmark = try url.bookmarkData(
+            return try url.bookmarkData(
                 options: .withSecurityScope,
                 includingResourceValuesForKeys: nil,
                 relativeTo: nil
             )
-            return bookmark
         } catch {
             print("[FolderManager] Bookmark creation error: \(error)")
             return nil
         }
     }
-    
+
     func saveToUserDefaults() {
         do {
             let data = try JSONEncoder().encode(sources)
-            UserDefaults.standard.set(data, forKey: userDefaultsKey)
+            userDefaults.set(data, forKey: sourcesKey)
         } catch {
             print("[FolderManager] Save error: \(error)")
         }
     }
-    
+
     private func loadFromUserDefaults() {
-        if let data = UserDefaults.standard.data(forKey: userDefaultsKey) {
+        migrateLegacyStorageIfNeeded()
+
+        if let data = userDefaults.data(forKey: sourcesKey) {
             do {
                 sources = try JSONDecoder().decode([FolderSource].self, from: data)
             } catch {
                 print("[FolderManager] Load error: \(error)")
             }
         }
-        
-        // Load recent folders
-        if let recentData = UserDefaults.standard.array(forKey: recentFoldersKey) as? [String] {
-            recentFolders = recentData.compactMap { URL(fileURLWithPath: $0) }
+
+        if let recentData = userDefaults.array(forKey: recentFoldersKey) as? [String] {
+            recentFolders = recentData.map { URL(fileURLWithPath: $0).standardizedFileURL }
+        }
+
+        normalizeLoadedSources()
+    }
+
+    private func normalizeLoadedSources() {
+        var seenPaths: Set<String> = []
+        sources = sources.filter { source in
+            let path = source.url.standardizedFileURL.path
+            guard !path.isEmpty else { return false }
+            if seenPaths.contains(path) {
+                return false
+            }
+            seenPaths.insert(path)
+            return true
+        }
+
+        if !sources.isEmpty && !sources.contains(where: { $0.isDefault }) {
+            sources[0].isDefault = true
         }
     }
-    
+
     private func saveRecentFolders() {
-        let paths = recentFolders.map { $0.path }
-        UserDefaults.standard.set(paths, forKey: recentFoldersKey)
+        let paths = recentFolders.map { $0.standardizedFileURL.path }
+        userDefaults.set(paths, forKey: recentFoldersKey)
+    }
+
+    private func migrateLegacyStorageIfNeeded() {
+        if userDefaults.data(forKey: sourcesKey) == nil {
+            for legacyKey in legacySourcesKeys {
+                if let data = userDefaults.data(forKey: legacyKey) {
+                    userDefaults.set(data, forKey: sourcesKey)
+                    break
+                }
+            }
+        }
+
+        if userDefaults.array(forKey: recentFoldersKey) == nil {
+            for legacyKey in legacyRecentFoldersKeys {
+                if let paths = userDefaults.array(forKey: legacyKey) as? [String] {
+                    userDefaults.set(paths, forKey: recentFoldersKey)
+                    break
+                }
+            }
+        }
+    }
+
+    private func samePath(_ lhs: URL, _ rhs: URL) -> Bool {
+        lhs.standardizedFileURL.path == rhs.standardizedFileURL.path
     }
 }
