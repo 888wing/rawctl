@@ -1,0 +1,17 @@
+name = "questionless"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# D1 Database
+[[d1_databases]]
+binding = "DB"
+database_name = "questionless-db"
+database_id = "00e81ce2-2f78-4692-85a6-d9d1581c07ad"
+
+# R2 Storage for static question data
+[[r2_buckets]]
+binding = "QUESTIONS_BUCKET"
+bucket_name = "questionless-questions"
+
+[vars]
+ENVIRONMENT = "development"
