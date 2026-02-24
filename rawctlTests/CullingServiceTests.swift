@@ -132,34 +132,16 @@ struct CullingServiceTests {
 
     // MARK: - Helpers
 
-    /// Instantiate a CullingScore by calling the internal score-computation logic
-    /// via the service. Since computeFinalScore is private we derive scores by crafting
-    /// synthetic results directly from the struct.
     private func makeCullingScore(
         sharpness: Double,
         saliency: Double,
         isDuplicate: Bool
     ) -> CullingScore {
-        let combined = sharpness * 0.6 + saliency * 0.4
-        let groupId: UUID? = isDuplicate ? UUID() : nil
-        let isRep = !isDuplicate
-        let (rating, flag): (Int, Flag)
-        switch (isDuplicate, combined) {
-        case (true, _):    (rating, flag) = (0, .reject)
-        case (_, ..<0.20): (rating, flag) = (0, .reject)
-        case (_, ..<0.40): (rating, flag) = (1, .none)
-        case (_, ..<0.55): (rating, flag) = (2, .none)
-        case (_, ..<0.70): (rating, flag) = (3, .none)
-        case (_, ..<0.85): (rating, flag) = (4, .pick)
-        default:           (rating, flag) = (5, .pick)
-        }
-        return CullingScore(
+        CullingService.shared.computeFinalScore(
             sharpness: sharpness,
             saliency: saliency,
-            duplicateGroupId: groupId,
-            isGroupRepresentative: isRep,
-            suggestedRating: rating,
-            suggestedFlag: flag
+            groupId: isDuplicate ? UUID() : nil,
+            isRepresentative: !isDuplicate
         )
     }
 
@@ -169,25 +151,11 @@ struct CullingServiceTests {
         groupId: UUID?,
         isRepresentative: Bool
     ) -> CullingScore {
-        let combined = sharpness * 0.6 + saliency * 0.4
-        let isDuplicateNonRep = groupId != nil && !isRepresentative
-        let (rating, flag): (Int, Flag)
-        switch (isDuplicateNonRep, combined) {
-        case (true, _):    (rating, flag) = (0, .reject)
-        case (_, ..<0.20): (rating, flag) = (0, .reject)
-        case (_, ..<0.40): (rating, flag) = (1, .none)
-        case (_, ..<0.55): (rating, flag) = (2, .none)
-        case (_, ..<0.70): (rating, flag) = (3, .none)
-        case (_, ..<0.85): (rating, flag) = (4, .pick)
-        default:           (rating, flag) = (5, .pick)
-        }
-        return CullingScore(
+        CullingService.shared.computeFinalScore(
             sharpness: sharpness,
             saliency: saliency,
-            duplicateGroupId: groupId,
-            isGroupRepresentative: isRepresentative,
-            suggestedRating: rating,
-            suggestedFlag: flag
+            groupId: groupId,
+            isRepresentative: isRepresentative
         )
     }
 
