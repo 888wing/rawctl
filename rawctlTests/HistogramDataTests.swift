@@ -7,7 +7,7 @@
 
 import AppKit
 import Testing
-@testable import rawctl
+@testable import Latent
 
 struct HistogramDataTests {
 

@@ -12,7 +12,7 @@
 import Foundation
 import Testing
 import CoreGraphics
-@testable import rawctl
+@testable import Latent
 
 // MARK: - SAMModelStatus
 

@@ -7,7 +7,7 @@
 
 import Foundation
 import Testing
-@testable import rawctl
+@testable import Latent
 
 struct SidecarServiceTests {
     @Test func saveRecipe_preservesAIEditsAndAILayers() async throws {

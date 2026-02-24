@@ -3,25 +3,22 @@
 //  rawctlTests
 //
 //  Tests that verify the tier-gating contract in AppFeatures:
-//   - AI Culling is always free (no Pro check).
-//   - Smart Sync and AI Masking gate behind isProUser.
-//   - smartSyncEnabled, aiMaskingEnabled, and isProUser are internally consistent.
+//   - AI Culling, Smart Sync, AI Masking, and Batch Processing gate behind isProUser.
+//   - all Pro flags and isProUser are internally consistent.
 //
 
 import Foundation
 import Testing
-@testable import rawctl
+@testable import Latent
 
 struct AppFeaturesProGatingTests {
 
-    // MARK: - Free tier
-
-    /// AI Culling must never require a Pro subscription.
-    @Test func aiCullingIsAlwaysEnabled() {
-        #expect(AppFeatures.aiCullingEnabled == true)
-    }
-
     // MARK: - Pro tier consistency
+
+    /// aiCullingEnabled must equal isProUser — no tighter, no looser.
+    @Test @MainActor func aiCullingEnabledMatchesIsProUser() {
+        #expect(AppFeatures.aiCullingEnabled == AppFeatures.isProUser)
+    }
 
     /// smartSyncEnabled must equal isProUser — no tighter, no looser.
     @Test @MainActor func smartSyncEnabledMatchesIsProUser() {
@@ -33,9 +30,16 @@ struct AppFeaturesProGatingTests {
         #expect(AppFeatures.aiMaskingEnabled == AppFeatures.isProUser)
     }
 
-    /// Both Pro features must be in lockstep — if one gates, both gate.
+    /// batchProcessingEnabled must equal isProUser — no tighter, no looser.
+    @Test @MainActor func batchProcessingEnabledMatchesIsProUser() {
+        #expect(AppFeatures.batchProcessingEnabled == AppFeatures.isProUser)
+    }
+
+    /// All Pro features must be in lockstep.
     @Test @MainActor func proFeaturesAreInLockstep() {
+        #expect(AppFeatures.aiCullingEnabled == AppFeatures.smartSyncEnabled)
         #expect(AppFeatures.smartSyncEnabled == AppFeatures.aiMaskingEnabled)
+        #expect(AppFeatures.aiMaskingEnabled == AppFeatures.batchProcessingEnabled)
     }
 
     // MARK: - Unauthenticated / default environment
@@ -63,8 +67,10 @@ struct AppFeaturesProGatingTests {
         guard !hasOverride else { return }
 
         if !AccountService.shared.isAuthenticated {
+            #expect(AppFeatures.aiCullingEnabled == false)
             #expect(AppFeatures.smartSyncEnabled == false)
             #expect(AppFeatures.aiMaskingEnabled == false)
+            #expect(AppFeatures.batchProcessingEnabled == false)
         }
     }
 }

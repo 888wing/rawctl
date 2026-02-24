@@ -13,7 +13,7 @@
 
 import Foundation
 import Testing
-@testable import rawctl
+@testable import Latent
 
 @MainActor
 struct AccountServiceIsProUserTests {

@@ -8,7 +8,7 @@
 import AppKit
 import Foundation
 import Testing
-@testable import rawctl
+@testable import Latent
 
 struct LayerCompositingOrderTests {
 

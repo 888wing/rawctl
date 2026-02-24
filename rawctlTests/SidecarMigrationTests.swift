@@ -7,7 +7,7 @@
 
 import Foundation
 import Testing
-@testable import rawctl
+@testable import Latent
 
 struct SidecarMigrationTests {
     @Test func legacySchemaWithoutVersionDecodesWithDefaults() throws {

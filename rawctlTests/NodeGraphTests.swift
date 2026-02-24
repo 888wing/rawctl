@@ -7,7 +7,7 @@
 
 import XCTest
 import SwiftUI
-@testable import rawctl
+@testable import Latent
 
 final class NodeGraphTests: XCTestCase {
 

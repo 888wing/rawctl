@@ -10,7 +10,7 @@ import Testing
 import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
-@testable import rawctl
+@testable import Latent
 
 struct CullingServiceTests {
 
