@@ -10,38 +10,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - App renamed from rawctl to **Latent**
 
-## [1.5.0] - 2026-02-20
+## [1.5.0] - 2026-02-24
 
 ### Added
 
-#### AI Photo Culling (Phase 1 — Free Tier)
-- **CullingService** (`Services/CullingService.swift`): Apple Vision-powered photo scoring (sharpness via Laplacian, saliency via `VNGenerateAttentionBasedSaliencyImageRequest`, duplicate detection via `VNGenerateImageFeaturePrintRequest`); zero marginal cost, ANE-accelerated
-- **GridView**: "AI Cull" toolbar button + `ProgressView` overlay; progress reported via `AppState.cullingProgress`
-- **AppState.cullingProgress**: `Double?` progress state for culling UI; nil when idle
-- Culling results written to `EditRecipe.rating` and `EditRecipe.flag` via `SidecarService`
+#### AI Photo Culling (Pro)
+- **CullingService** (`Services/CullingService.swift`): Apple Vision-powered photo scoring — sharpness via Laplacian variance, saliency via `VNGenerateAttentionBasedSaliencyImageRequest`, duplicate detection via `VNGenerateImageFeaturePrintRequest`; ANE-accelerated, zero marginal cost
+- **Group-aware duplicate detection**: Union-Find with two-pass path compression identifies burst groups; keeps highest-scoring photo in each group, rejects the rest
+- **Pre-cull undo snapshot**: `AppState.lastPreCullSnapshot` captures all ratings/flags before culling runs; one-tap undo restores entire library state
+- **GridView**: "AI Cull" toolbar button + `ProgressView` overlay; progress via `AppState.cullingProgress`
 
-#### Scene-Aware Smart Sync (Phase 2 — Pro)
-- **SmartSyncService** (`Services/SmartSyncService.swift`): `VNGenerateImageFeaturePrintRequest` scene-similarity indexing + `RecipeAdapter` for EV-based exposure normalisation; clamped to ±3 EV
-- **FeaturePrintIndex**: in-memory cache of `VNFeaturePrintObservation` keyed by photo URL; supports `invalidate(for:)` on edit change
+#### Scene-Aware Smart Sync (Pro)
+- **SmartSyncService** (`Services/SmartSyncService.swift`): `VNGenerateImageFeaturePrintRequest` scene-similarity indexing + `RecipeAdapter` for EV-normalised exposure transfer; clamped to ±3 EV
+- **FeaturePrintIndex**: in-memory cache of `VNFeaturePrintObservation` keyed by photo URL; invalidates on edit change
 - **SingleView**: "Smart Sync" button in inspector; confirmation sheet listing matched photos before applying adapted recipes
 
-#### AI Masking via Mobile-SAM (Phase 3 — Pro)
-- **SAMService** (`Services/SAMService.swift`): Core ML actor wrapping Mobile-SAM; graceful nil return when model absent; `SAMModelStatus` enum (`.notInstalled`, `.downloading(progress:)`, `.ready`, `.error`)
-- **SingleView**: tap-to-mask entry point; SAM output stored as `ColorNode` with `.brush(data:)` mask; composited by existing `ImagePipeline.renderLocalNodes`
-- **AppFeatures**: `aiCullingEnabled` (always `true`), `smartSyncEnabled` and `aiMaskingEnabled` (Pro-gated via `AccountService.shared.isProUser`); `LATENT_PRO_OVERRIDE` env var for QA
+#### AI Masking via Mobile-SAM (Pro)
+- **SAMService** (`Services/SAMService.swift`): Core ML actor wrapping Mobile-SAM; graceful nil when model absent; `SAMModelStatus` enum (`.notInstalled`, `.downloading(progress:)`, `.ready`, `.error`)
+- **AIGenerationPanel**: Pro gate on region masking mode — shows crown badge + upgrade prompt when not subscribed; mode picker restricted to `[.fullImage]` for free users
 
 #### Pro Subscription Gating
-- **AccountService.isProUser**: checks `creditsBalance.subscription.plan` for "pro", "premium", or "yearly" substrings (case-insensitive); returns `false` when unauthenticated or balance nil
+- **AppFeatures**: All AI features (Culling, Smart Sync, Masking, Batch Processing) are Pro-only; `LATENT_PRO_OVERRIDE=1` env var for QA
+- **AccountService.isProUser**: checks `creditsBalance.subscription.plan` for "pro", "premium", or "yearly" substrings (case-insensitive); returns `false` when unauthenticated
+
+#### Account & Entitlement Reliability
+- **Checkout sync window**: 180-second polling loop starts automatically when browser checkout opens (subscription or credits); keeps Pro/credits state aligned after web payment
+- **Entitlement refresh throttle**: 8-second minimum between `/user/credits` calls prevents redundant API traffic on app focus
+- **Fallback plans**: `applyFallbackPlansIfNeeded()` ensures pricing UI is never blank when `/checkout/plans` is unreachable
+
+### Fixed
+- **NodeGraphTests**: Updated `schemaVersion` assertion from v6 → v7 (schema bumped when `aiLayers` was added in v1.4.x)
 
 ### Technical
 - **Test suite** (`rawctlTests/`): 31 new tests across 3 new files
-  - `SAMServiceTests`: SAMModelStatus Equatable + isReady contract; SAMService graceful nil when model absent
-  - `AppFeaturesProGatingTests`: tier gating lockstep verification; isProUser false in unauthenticated environment
-  - `AccountServiceIsProUserTests`: all plan-name variants, case-insensitivity, nil/unauthenticated guards
+  - `SAMServiceTests`: SAMModelStatus Equatable + isReady; graceful nil when model absent
+  - `AppFeaturesProGatingTests`: tier gating lockstep; isProUser false when unauthenticated
+  - `AccountServiceIsProUserTests`: plan-name variants, case-insensitivity, nil guards
+- **Sidecar schema v7**: `aiLayers` field added (backward compatible; v5/v6 sidecars load without it)
 - Sidecar format: `.rawctl.json` files silently migrated to `.latent.json` on first open
 - Camera profiles renamed: rawctl Neutral/Vivid/Portrait → Latent Neutral/Vivid/Portrait
 - Domain updated to latent-app.com (Sparkle, API, links)
 - Bundle identifier updated to `Shacoworkshop.latent`
+- Old release scripts and bin tools removed (superseded by `/rawctl-release` skill)
 
 ## [1.4.0] - 2026-01-14
 

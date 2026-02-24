@@ -30,7 +30,7 @@ struct PlansView: View {
                 
                 Spacer()
                 
-                Text("Get Credits")
+                Text("Plans & Credits")
                     .font(.system(size: 13, weight: .semibold))
                 
                 Spacer()
@@ -46,7 +46,7 @@ struct PlansView: View {
             // Tab picker
             Picker("", selection: $selectedTab) {
                 Text("Plans").tag(0)
-                Text("Credit Packs").tag(1)
+                Text("AI Credits").tag(1)
             }
             .pickerStyle(.segmented)
             .padding()
@@ -93,7 +93,7 @@ struct PlansView: View {
     
     private var creditsPacksView: some View {
         VStack(spacing: 12) {
-            Text("Credits never expire")
+            Text("Optional top-up for Nano Banana generation")
                 .font(.system(size: 12))
                 .foregroundColor(.secondary)
                 .padding(.bottom, 8)
@@ -113,7 +113,7 @@ struct PlansView: View {
     // MARK: - Actions
     
     private func selectPlan(_ plan: PlanInfo) async {
-        guard plan.name != "free" else { return }
+        guard plan.name.lowercased() != "free" else { return }
         
         isLoading = true
         defer { isLoading = false }
@@ -152,7 +152,7 @@ struct PlanCard: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
-                        Text(plan.name.capitalized)
+                        Text(planDisplayName)
                             .font(.system(size: 14, weight: .semibold))
                         
                         if isCurrentPlan {
@@ -165,7 +165,7 @@ struct PlanCard: View {
                                 .cornerRadius(4)
                         }
                         
-                        if plan.name == "pro" {
+                        if isPopularPlan {
                             Text("Popular")
                                 .font(.system(size: 9, weight: .medium))
                                 .foregroundColor(.orange)
@@ -175,19 +175,15 @@ struct PlanCard: View {
                                 .cornerRadius(4)
                         }
                     }
-                    
-                    Text("\(plan.credits) credits/month")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
                 }
                 
                 Spacer()
                 
                 VStack(alignment: .trailing, spacing: 2) {
                     if plan.price > 0 {
-                        Text(plan.priceFormatted)
+                        Text(priceText)
                             .font(.system(size: 18, weight: .bold, design: .rounded))
-                        Text("/month")
+                        Text(priceUnit)
                             .font(.system(size: 10))
                             .foregroundColor(.secondary)
                     } else {
@@ -199,17 +195,13 @@ struct PlanCard: View {
             
             // Features
             VStack(alignment: .leading, spacing: 6) {
-                PlanFeature(text: "\(plan.credits) AI generations per month")
-                if plan.name != "free" {
-                    PlanFeature(text: "Priority support")
-                }
-                if plan.name == "studio" {
-                    PlanFeature(text: "Early access to new features")
+                ForEach(features, id: \.self) { feature in
+                    PlanFeature(text: feature)
                 }
             }
             
             // Button
-            if !isCurrentPlan && plan.name != "free" {
+            if !isCurrentPlan && normalizedPlanName != "free" {
                 Button {
                     Task {
                         await onSelect()
@@ -221,7 +213,7 @@ struct PlanCard: View {
                                 .scaleEffect(0.7)
                                 .progressViewStyle(CircularProgressViewStyle(tint: .white))
                         }
-                        Text(isCurrentPlan ? "Current Plan" : "Subscribe")
+                        Text(buttonTitle)
                     }
                     .font(.system(size: 12, weight: .medium))
                     .frame(maxWidth: .infinity)
@@ -243,6 +235,71 @@ struct PlanCard: View {
                     lineWidth: 1
                 )
         )
+    }
+
+    private var normalizedPlanName: String {
+        plan.name.lowercased()
+    }
+
+    private var isYearlyPlan: Bool {
+        normalizedPlanName.contains("year") || normalizedPlanName.contains("annual")
+    }
+
+    private var isProPlan: Bool {
+        normalizedPlanName.contains("pro") || normalizedPlanName.contains("premium") || normalizedPlanName.contains("year")
+    }
+
+    private var isPopularPlan: Bool {
+        normalizedPlanName == "pro" || normalizedPlanName == "pro_monthly"
+    }
+
+    private var planDisplayName: String {
+        if normalizedPlanName == "free" { return "Free" }
+        if isProPlan {
+            return isYearlyPlan ? "Pro Yearly" : "Pro Monthly"
+        }
+        return plan.name.capitalized
+    }
+
+    private var priceText: String {
+        if normalizedPlanName == "pro_monthly" {
+            return "$15"
+        }
+        if normalizedPlanName == "pro_yearly" || normalizedPlanName == "yearly" || normalizedPlanName == "annual" {
+            return "$120"
+        }
+        return plan.priceFormatted
+    }
+
+    private var priceUnit: String {
+        isYearlyPlan ? "/year" : "/month"
+    }
+
+    private var features: [String] {
+        if normalizedPlanName == "free" {
+            return [
+                "Unlimited manual editing",
+                "Source-available non-commercial use (BSL 1.1)"
+            ]
+        }
+        if isProPlan {
+            return [
+                "AI Culling",
+                "Smart Sync",
+                "AI Masking",
+                "Batch processing"
+            ]
+        }
+        return [
+            "AI features",
+            "Account support"
+        ]
+    }
+
+    private var buttonTitle: String {
+        if isYearlyPlan { return "Choose Yearly" }
+        if isProPlan { return "Upgrade to Pro" }
+        return "Subscribe"
     }
 }
 

@@ -14,7 +14,7 @@ struct NanoBananaEditorView: View {
     let asset: PhotoAsset
     
     // State
-    @State private var selectedOperation: AIOperation = .inpaint
+    @State private var selectedOperation: AIOperation = .enhance
     @State private var previewImage: NSImage?
     @State private var isLoadingPreview = true
     
@@ -38,6 +38,7 @@ struct NanoBananaEditorView: View {
     
     // Processing state
     @StateObject private var nanoBananaService = NanoBananaService.shared
+    @ObservedObject private var accountService = AccountService.shared
     @State private var showProgress = false
     @State private var errorMessage: String?
     
@@ -93,8 +94,15 @@ struct NanoBananaEditorView: View {
             Text(errorMessage ?? "")
         }
         .task {
+            syncSelectedOperationWithEntitlement()
             await loadPreview()
             loadAIEdits()
+        }
+        .onChange(of: accountService.isAuthenticated) { _, _ in
+            syncSelectedOperationWithEntitlement()
+        }
+        .onChange(of: accountService.creditsBalance?.subscription.plan) { _, _ in
+            syncSelectedOperationWithEntitlement()
         }
     }
     
@@ -115,7 +123,7 @@ struct NanoBananaEditorView: View {
                     HStack(spacing: 4) {
                         Image(systemName: "sparkle")
                             .font(.system(size: 9))
-                        Text("\(AccountService.shared.creditsBalance?.totalRemaining ?? 0)")
+                        Text("\(accountService.creditsBalance?.totalRemaining ?? 0)")
                             .font(.system(size: 11, weight: .medium))
                     }
                     .foregroundColor(.secondary)
@@ -134,7 +142,7 @@ struct NanoBananaEditorView: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundColor(.secondary)
                     
-                    ForEach(AIOperation.allCases) { op in
+                    ForEach(availableOperations) { op in
                         OperationButton(
                             operation: op,
                             isSelected: selectedOperation == op,
@@ -148,6 +156,19 @@ struct NanoBananaEditorView: View {
                             }
                         }
                     }
+                }
+
+                if !AppFeatures.aiMaskingEnabled {
+                    HStack(spacing: 6) {
+                        Image(systemName: "crown.fill")
+                            .font(.system(size: 10))
+                            .foregroundColor(.yellow)
+                        Text("AI Masking (Inpaint) is available on Pro.")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 2)
                 }
                 
                 Divider()
@@ -425,12 +446,16 @@ struct NanoBananaEditorView: View {
         case .enhance:
             return true
         case .inpaint:
-            return !mask.isEmpty
+            return AppFeatures.aiMaskingEnabled && !mask.isEmpty
         case .style:
             return referenceURL != nil
         case .restore:
             return true
         }
+    }
+
+    private var availableOperations: [AIOperation] {
+        AppFeatures.aiMaskingEnabled ? AIOperation.allCases : AIOperation.allCases.filter { $0 != .inpaint }
     }
     
     private func loadPreview() async {
@@ -469,6 +494,12 @@ struct NanoBananaEditorView: View {
     private func startProcessing() {
         guard AccountService.shared.isAuthenticated else {
             errorMessage = "Please sign in to use AI features."
+            return
+        }
+
+        if selectedOperation == .inpaint && !AppFeatures.aiMaskingEnabled {
+            appState.showAccountSheet = true
+            errorMessage = "AI masking is available on Pro."
             return
         }
         
@@ -541,6 +572,13 @@ struct NanoBananaEditorView: View {
                 appState.setAIEdits(edits, for: assetURL)
             }
             await SidecarService.shared.saveAIEdits(edits, for: assetURL)
+        }
+    }
+
+    private func syncSelectedOperationWithEntitlement() {
+        guard availableOperations.contains(selectedOperation) else {
+            selectedOperation = .enhance
+            return
         }
     }
 }

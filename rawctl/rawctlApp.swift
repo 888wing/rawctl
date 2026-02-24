@@ -20,8 +20,14 @@ struct LatentApp: App {
         WindowGroup {
             MainLayoutView()
                 .onOpenURL { url in
-                    // Handle Google Sign-In callback
-                    GIDSignIn.sharedInstance.handle(url)
+                    // Handle Google Sign-In callback first; if not handled,
+                    // treat it as a Latent app deep link (e.g. billing return).
+                    if GIDSignIn.sharedInstance.handle(url) {
+                        return
+                    }
+                    Task {
+                        await AccountService.shared.handleIncomingURL(url)
+                    }
                 }
                 .onAppear {
                     // Check if we should show What's New

@@ -63,9 +63,9 @@ final class NodeGraphTests: XCTestCase {
         encoder.outputFormatting = .prettyPrinted
         let data = try encoder.encode(sidecar)
         let jsonString = String(data: data, encoding: .utf8)!
-        XCTAssertTrue(jsonString.contains("\"schemaVersion\" : 6"), "Expected schemaVersion 6 in JSON, got: \(jsonString)")
+        XCTAssertTrue(jsonString.contains("\"schemaVersion\" : 7"), "Expected schemaVersion 7 in JSON, got: \(jsonString)")
         let decoded = try JSONDecoder().decode(SidecarFile.self, from: data)
-        XCTAssertEqual(decoded.schemaVersion, 6)
+        XCTAssertEqual(decoded.schemaVersion, 7)
         XCTAssertNotNil(decoded.localNodes)
         XCTAssertEqual(decoded.localNodes?.count, 1)
         XCTAssertEqual(decoded.localNodes?.first?.name, "Brighten Face")

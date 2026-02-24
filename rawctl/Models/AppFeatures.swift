@@ -41,8 +41,14 @@ enum AppFeatures {
 
     // MARK: - AI Tier Flags
     //
-    // AI Culling is FREE — Apple Vision only, zero marginal cost.
-    // Smart Sync and AI Masking are PRO features.
+    // Free:
+    //   - Manual editing features.
+    //
+    // Pro:
+    //   - AI Culling
+    //   - Smart Sync
+    //   - AI Masking
+    //   - Batch Processing
     //
     // Tier check delegates to AccountService.shared.isProUser which reads
     // the subscription plan from the backend (no StoreKit purchase required).
@@ -52,8 +58,11 @@ enum AppFeatures {
     //
     // Override for QA/CI with: LATENT_PRO_OVERRIDE=1
 
-    /// AI Photo Culling is always available (free tier feature).
-    static var aiCullingEnabled: Bool { true }
+    /// AI Photo Culling — Pro only.
+    @MainActor
+    static var aiCullingEnabled: Bool {
+        isProUser
+    }
 
     /// Scene-Aware Smart Sync — Pro only.
     @MainActor
@@ -64,6 +73,12 @@ enum AppFeatures {
     /// AI Masking via Mobile-SAM — Pro only.
     @MainActor
     static var aiMaskingEnabled: Bool {
+        isProUser
+    }
+
+    /// Batch Processing — Pro only.
+    @MainActor
+    static var batchProcessingEnabled: Bool {
         isProUser
     }
 
