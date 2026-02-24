@@ -998,7 +998,7 @@ final class AppState: ObservableObject {
     /// The most recent pre-cull snapshot. Cleared when user dismisses or starts a new cull.
     @Published var lastPreCullSnapshot: PreCullSnapshot? = nil
 
-    /// Capture current rating + flag for every loaded asset.
+    /// Capture current rating, flag, and colorLabel for every loaded asset.
     func capturePreCullSnapshot() -> PreCullSnapshot {
         var snap = PreCullSnapshot()
         for (id, recipe) in recipes {
@@ -1007,7 +1007,7 @@ final class AppState: ObservableObject {
         return snap
     }
 
-    /// Restore rating + flag from a previously captured snapshot.
+    /// Restore rating, flag, and colorLabel from a previously captured snapshot.
     /// Does NOT touch any other recipe fields (exposure, crop, etc.).
     func restorePreCullSnapshot(_ snapshot: PreCullSnapshot) {
         for (id, saved) in snapshot {
