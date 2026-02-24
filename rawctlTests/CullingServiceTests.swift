@@ -108,6 +108,28 @@ struct CullingServiceTests {
         }
     }
 
+    // MARK: - Duplicate group logic
+
+    @Test func duplicateBurstKeepsRepresentative() {
+        // Representative (isGroupRepresentative = true): should NOT become reject
+        let rep = makeCullingScoreGroupAware(sharpness: 0.9, saliency: 0.8,
+                                              groupId: UUID(), isRepresentative: true)
+        #expect(rep.suggestedFlag != .reject, "Representative must not be auto-rejected")
+        #expect(rep.suggestedRating >= 4)
+
+        // Non-representative: should become reject
+        let nonRep = makeCullingScoreGroupAware(sharpness: 0.9, saliency: 0.8,
+                                                 groupId: UUID(), isRepresentative: false)
+        #expect(nonRep.suggestedFlag == .reject)
+        #expect(nonRep.suggestedRating == 0)
+    }
+
+    @Test func uniquePhotoIsNotRejectedByDuplicateLogic() {
+        let unique = makeCullingScoreGroupAware(sharpness: 0.7, saliency: 0.6,
+                                                 groupId: nil, isRepresentative: true)
+        #expect(unique.suggestedFlag != .reject)
+    }
+
     // MARK: - Helpers
 
     /// Instantiate a CullingScore by calling the internal score-computation logic
@@ -118,22 +140,52 @@ struct CullingServiceTests {
         saliency: Double,
         isDuplicate: Bool
     ) -> CullingScore {
-        // Replicate the rating table from CullingService.computeFinalScore.
         let combined = sharpness * 0.6 + saliency * 0.4
+        let groupId: UUID? = isDuplicate ? UUID() : nil
+        let isRep = !isDuplicate
         let (rating, flag): (Int, Flag)
         switch (isDuplicate, combined) {
-        case (true, _):      (rating, flag) = (0, .reject)
-        case (_, ..<0.20):   (rating, flag) = (0, .reject)
-        case (_, ..<0.40):   (rating, flag) = (1, .none)
-        case (_, ..<0.55):   (rating, flag) = (2, .none)
-        case (_, ..<0.70):   (rating, flag) = (3, .none)
-        case (_, ..<0.85):   (rating, flag) = (4, .pick)
-        default:             (rating, flag) = (5, .pick)
+        case (true, _):    (rating, flag) = (0, .reject)
+        case (_, ..<0.20): (rating, flag) = (0, .reject)
+        case (_, ..<0.40): (rating, flag) = (1, .none)
+        case (_, ..<0.55): (rating, flag) = (2, .none)
+        case (_, ..<0.70): (rating, flag) = (3, .none)
+        case (_, ..<0.85): (rating, flag) = (4, .pick)
+        default:           (rating, flag) = (5, .pick)
         }
         return CullingScore(
             sharpness: sharpness,
             saliency: saliency,
-            isDuplicate: isDuplicate,
+            duplicateGroupId: groupId,
+            isGroupRepresentative: isRep,
+            suggestedRating: rating,
+            suggestedFlag: flag
+        )
+    }
+
+    private func makeCullingScoreGroupAware(
+        sharpness: Double,
+        saliency: Double,
+        groupId: UUID?,
+        isRepresentative: Bool
+    ) -> CullingScore {
+        let combined = sharpness * 0.6 + saliency * 0.4
+        let isDuplicateNonRep = groupId != nil && !isRepresentative
+        let (rating, flag): (Int, Flag)
+        switch (isDuplicateNonRep, combined) {
+        case (true, _):    (rating, flag) = (0, .reject)
+        case (_, ..<0.20): (rating, flag) = (0, .reject)
+        case (_, ..<0.40): (rating, flag) = (1, .none)
+        case (_, ..<0.55): (rating, flag) = (2, .none)
+        case (_, ..<0.70): (rating, flag) = (3, .none)
+        case (_, ..<0.85): (rating, flag) = (4, .pick)
+        default:           (rating, flag) = (5, .pick)
+        }
+        return CullingScore(
+            sharpness: sharpness,
+            saliency: saliency,
+            duplicateGroupId: groupId,
+            isGroupRepresentative: isRepresentative,
             suggestedRating: rating,
             suggestedFlag: flag
         )

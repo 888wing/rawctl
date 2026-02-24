@@ -18,8 +18,11 @@ struct CullingScore: Sendable {
     let sharpness: Double
     /// Composition quality from attention saliency map, 0 – 1.
     let saliency: Double
-    /// True if a near-identical image was found in the same batch.
-    let isDuplicate: Bool
+    /// Non-nil when this photo belongs to a near-duplicate group.
+    let duplicateGroupId: UUID?
+    /// True if this photo is the chosen representative of its group (highest combined score).
+    /// Always true for unique photos (duplicateGroupId == nil).
+    let isGroupRepresentative: Bool
     /// Suggested star rating (0–5) derived from combined score.
     let suggestedRating: Int
     /// Suggested flag derived from combined score.
@@ -64,34 +67,39 @@ actor CullingService {
 
         let totalSteps = assets.count * 2
 
-        // ── Phase 1: Feature prints for duplicate detection ──────────────────
+        // ── Phase 1: Feature prints + sharpness/saliency (single thumbnail load per photo) ──
         var featurePrints: [UUID: VNFeaturePrintObservation] = [:]
+        var rawScores: [UUID: (sharpness: Double, saliency: Double)] = [:]
         featurePrints.reserveCapacity(assets.count)
+        rawScores.reserveCapacity(assets.count)
 
         for (idx, asset) in assets.enumerated() {
             onProgress(idx, totalSteps)
-            if let image = loadThumbnail(for: asset),
-               let fp = generateFeaturePrint(from: image) {
+            guard let image = loadThumbnail(for: asset) else { continue }
+            if let fp = generateFeaturePrint(from: image) {
                 featurePrints[asset.id] = fp
             }
+            rawScores[asset.id] = (
+                sharpness: scoreSharpness(image: image),
+                saliency:  scoreSaliency(image: image)
+            )
         }
 
-        // ── Phase 2: Score each asset ─────────────────────────────────────────
+        // ── Phase 2: Build groups, then compute final scores ──────────────────────────────
+        let groups = buildDuplicateGroups(prints: featurePrints, scores: rawScores)
+
         var results: [UUID: CullingScore] = [:]
         results.reserveCapacity(assets.count)
 
         for (idx, asset) in assets.enumerated() {
             onProgress(assets.count + idx, totalSteps)
-            guard let image = loadThumbnail(for: asset) else { continue }
-
-            let sharpness = scoreSharpness(image: image)
-            let saliency  = scoreSaliency(image: image)
-            let isDupe    = detectDuplicate(assetId: asset.id, in: featurePrints)
-
+            guard let raw = rawScores[asset.id] else { continue }
+            let group = groups[asset.id] ?? (groupId: nil, isRepresentative: true)
             results[asset.id] = computeFinalScore(
-                sharpness: sharpness,
-                saliency: saliency,
-                isDuplicate: isDupe
+                sharpness: raw.sharpness,
+                saliency:  raw.saliency,
+                groupId:   group.groupId,
+                isRepresentative: group.isRepresentative
             )
         }
 
@@ -212,19 +220,67 @@ actor CullingService {
         }
     }
 
-    private func detectDuplicate(
-        assetId: UUID,
-        in prints: [UUID: VNFeaturePrintObservation]
-    ) -> Bool {
-        guard let mine = prints[assetId] else { return false }
-        for (otherId, other) in prints where otherId != assetId {
-            var distance: Float = 0
-            if (try? mine.computeDistance(&distance, to: other)) != nil,
-               distance < duplicateDistanceThreshold {
-                return true
+    /// Build duplicate groups from feature prints using pairwise distance.
+    /// Returns a dict mapping assetId → (groupId, isRepresentative).
+    /// Photos with no near-duplicates map to (nil, true).
+    private func buildDuplicateGroups(
+        prints: [UUID: VNFeaturePrintObservation],
+        scores: [UUID: (sharpness: Double, saliency: Double)]
+    ) -> [UUID: (groupId: UUID?, isRepresentative: Bool)] {
+        // Union-Find: parent[id] = id means it's a root.
+        var parent: [UUID: UUID] = Dictionary(uniqueKeysWithValues: prints.keys.map { ($0, $0) })
+
+        func find(_ id: UUID) -> UUID {
+            var id = id
+            while parent[id] != id { id = parent[id] ?? id }
+            return id
+        }
+
+        func union(_ a: UUID, _ b: UUID) {
+            let ra = find(a), rb = find(b)
+            if ra != rb { parent[ra] = rb }
+        }
+
+        // Pairwise distance; O(n²) — acceptable for typical batch sizes.
+        let ids = Array(prints.keys)
+        for i in 0..<ids.count {
+            guard let pi = prints[ids[i]] else { continue }
+            for j in (i + 1)..<ids.count {
+                guard let pj = prints[ids[j]] else { continue }
+                var distance: Float = 0
+                if (try? pi.computeDistance(&distance, to: pj)) != nil,
+                   distance < duplicateDistanceThreshold {
+                    union(ids[i], ids[j])
+                }
             }
         }
-        return false
+
+        // Collect groups: root → [members]
+        var groups: [UUID: [UUID]] = [:]
+        for id in ids {
+            let root = find(id)
+            groups[root, default: []].append(id)
+        }
+
+        // Assign representative per group (highest combined score).
+        var result: [UUID: (groupId: UUID?, isRepresentative: Bool)] = [:]
+        for (_, members) in groups {
+            if members.count == 1 {
+                // Unique photo — not a duplicate.
+                result[members[0]] = (groupId: nil, isRepresentative: true)
+            } else {
+                let groupId = UUID()
+                let rep = members.max(by: { a, b in
+                    let sa = (scores[a]?.sharpness ?? 0) * 0.6 + (scores[a]?.saliency ?? 0) * 0.4
+                    let sb = (scores[b]?.sharpness ?? 0) * 0.6 + (scores[b]?.saliency ?? 0) * 0.4
+                    return sa < sb
+                })
+                for member in members {
+                    result[member] = (groupId: groupId, isRepresentative: member == rep)
+                }
+            }
+        }
+        return result
     }
 
     // MARK: - Score → Rating + Flag
@@ -232,12 +288,14 @@ actor CullingService {
     private func computeFinalScore(
         sharpness: Double,
         saliency: Double,
-        isDuplicate: Bool
+        groupId: UUID?,
+        isRepresentative: Bool
     ) -> CullingScore {
         let combined = sharpness * 0.6 + saliency * 0.4
+        let isNonRepDuplicate = groupId != nil && !isRepresentative
 
         let (rating, flag): (Int, Flag)
-        switch (isDuplicate, combined) {
+        switch (isNonRepDuplicate, combined) {
         case (true, _):      (rating, flag) = (0, .reject)
         case (_, ..<0.20):   (rating, flag) = (0, .reject)
         case (_, ..<0.40):   (rating, flag) = (1, .none)
@@ -249,10 +307,11 @@ actor CullingService {
 
         return CullingScore(
             sharpness: sharpness,
-            saliency: saliency,
-            isDuplicate: isDuplicate,
+            saliency:  saliency,
+            duplicateGroupId: groupId,
+            isGroupRepresentative: isRepresentative,
             suggestedRating: rating,
-            suggestedFlag: flag
+            suggestedFlag:   flag
         )
     }
 }
