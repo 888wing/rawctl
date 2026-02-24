@@ -293,7 +293,7 @@ actor CullingService {
 
     // MARK: - Score → Rating + Flag
 
-    private func computeFinalScore(
+    nonisolated func computeFinalScore(
         sharpness: Double,
         saliency: Double,
         groupId: UUID?,
