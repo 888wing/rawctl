@@ -993,7 +993,7 @@ final class AppState: ObservableObject {
 
     /// Stores rating+flag per asset captured immediately before an AI cull run.
     /// Used by "Undo AI Cull" to restore manually set metadata.
-    typealias PreCullSnapshot = [UUID: (rating: Int, flag: Flag)]
+    typealias PreCullSnapshot = [UUID: (rating: Int, flag: Flag, colorLabel: ColorLabel)]
 
     /// The most recent pre-cull snapshot. Cleared when user dismisses or starts a new cull.
     @Published var lastPreCullSnapshot: PreCullSnapshot? = nil
@@ -1002,7 +1002,7 @@ final class AppState: ObservableObject {
     func capturePreCullSnapshot() -> PreCullSnapshot {
         var snap = PreCullSnapshot()
         for (id, recipe) in recipes {
-            snap[id] = (rating: recipe.rating, flag: recipe.flag)
+            snap[id] = (rating: recipe.rating, flag: recipe.flag, colorLabel: recipe.colorLabel)
         }
         return snap
     }
@@ -1012,8 +1012,9 @@ final class AppState: ObservableObject {
     func restorePreCullSnapshot(_ snapshot: PreCullSnapshot) {
         for (id, saved) in snapshot {
             guard recipes[id] != nil else { continue }
-            recipes[id]?.rating = saved.rating
-            recipes[id]?.flag   = saved.flag
+            recipes[id]?.rating      = saved.rating
+            recipes[id]?.flag        = saved.flag
+            recipes[id]?.colorLabel  = saved.colorLabel
         }
         lastPreCullSnapshot = nil
     }

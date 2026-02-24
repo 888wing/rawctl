@@ -47,4 +47,32 @@ struct CullingUndoTests {
         #expect(state.recipes[assetId]?.rating == 4)
         #expect(state.recipes[assetId]?.flag == .pick)
     }
+
+    @Test func cullingUndoSnapshotCapturesColorLabel() {
+        let state = AppState()
+        let assetId = UUID()
+        var recipe = EditRecipe()
+        recipe.colorLabel = .red
+        state.recipes[assetId] = recipe
+
+        let snapshot = state.capturePreCullSnapshot()
+
+        #expect(snapshot[assetId]?.colorLabel == .red)
+    }
+
+    @Test func cullingUndoRestoresColorLabel() {
+        let state = AppState()
+        let assetId = UUID()
+        var original = EditRecipe()
+        original.colorLabel = .blue
+        state.recipes[assetId] = original
+
+        let snapshot = state.capturePreCullSnapshot()
+
+        // Simulate cull overwriting color label
+        state.recipes[assetId]?.colorLabel = .none
+
+        state.restorePreCullSnapshot(snapshot)
+        #expect(state.recipes[assetId]?.colorLabel == .blue)
+    }
 }
