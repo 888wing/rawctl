@@ -996,7 +996,7 @@ final class AppState: ObservableObject {
     typealias PreCullSnapshot = [UUID: (rating: Int, flag: Flag)]
 
     /// The most recent pre-cull snapshot. Cleared when user dismisses or starts a new cull.
-    var lastPreCullSnapshot: PreCullSnapshot? = nil
+    @Published var lastPreCullSnapshot: PreCullSnapshot? = nil
 
     /// Capture current rating + flag for every loaded asset.
     func capturePreCullSnapshot() -> PreCullSnapshot {
