@@ -1067,6 +1067,7 @@ final class AppState: ObservableObject {
     func undoAICull() {
         guard let snap = lastPreCullSnapshot else { return }
         cullingAutoHideTask?.cancel()
+        cullingAutoHideTask = nil
         restorePreCullSnapshot(snap)   // sets lastPreCullSnapshot = nil
         cullingProgress = .idle
     }

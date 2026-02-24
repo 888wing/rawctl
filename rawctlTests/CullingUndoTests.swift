@@ -76,6 +76,8 @@ struct CullingUndoTests {
         #expect(state.recipes[assetId]?.colorLabel == .blue)
     }
 
+    /// Regression guard: restorePreCullSnapshot must always clear lastPreCullSnapshot,
+    /// ensuring the undo window closes after restoration regardless of UI state.
     @Test func lastPreCullSnapshotClearedAfterRestore() {
         let state = AppState()
         let assetId = UUID()
