@@ -231,9 +231,17 @@ actor CullingService {
         var parent: [UUID: UUID] = Dictionary(uniqueKeysWithValues: prints.keys.map { ($0, $0) })
 
         func find(_ id: UUID) -> UUID {
-            var id = id
-            while parent[id] != id { id = parent[id] ?? id }
-            return id
+            // Pass 1: walk up to the root.
+            var root = id
+            while parent[root] != root { root = parent[root] ?? root }
+            // Pass 2: point every node on the path directly to root.
+            var node = id
+            while node != root {
+                let next = parent[node] ?? root
+                parent[node] = root
+                node = next
+            }
+            return root
         }
 
         func union(_ a: UUID, _ b: UUID) {
