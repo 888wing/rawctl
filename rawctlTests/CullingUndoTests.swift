@@ -75,4 +75,17 @@ struct CullingUndoTests {
         state.restorePreCullSnapshot(snapshot)
         #expect(state.recipes[assetId]?.colorLabel == .blue)
     }
+
+    @Test func lastPreCullSnapshotClearedAfterRestore() {
+        let state = AppState()
+        let assetId = UUID()
+        state.recipes[assetId] = EditRecipe()
+
+        let snapshot = state.capturePreCullSnapshot()
+        state.lastPreCullSnapshot = snapshot  // simulate "culling just ran"
+
+        state.restorePreCullSnapshot(snapshot)
+
+        #expect(state.lastPreCullSnapshot == nil)
+    }
 }

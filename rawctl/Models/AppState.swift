@@ -599,6 +599,49 @@ final class AppState: ObservableObject {
         )
     }
 
+    // MARK: - AI Colour Grading
+
+    /// Pending AI suggestion (set after `applyColorGrade`); cleared when user moves to next photo.
+    @Published var pendingAiSuggestion: PendingAISuggestion?
+
+    /// Analysis text from the last AI colour-grading response.
+    @Published var aiGradeAnalysis: String = ""
+
+    /// Apply a colour-grading result onto the current recipe.
+    /// Pushes undo history, merges delta, stores pending suggestion for preference recording.
+    func applyColorGrade(_ result: GeminiColorService.ColorGradeResult, mode: GeminiColorService.Mode) {
+        guard let id = selectedAssetId else { return }
+        let before = recipes[id] ?? EditRecipe()
+        pushHistory(before)
+        recipes[id] = result.delta.applying(to: before)
+        aiGradeAnalysis = result.analysis
+        pendingAiSuggestion = PendingAISuggestion(assetId: id, delta: result.delta, mode: mode)
+        saveCurrentRecipe()
+        objectWillChange.send()
+    }
+
+    /// Record preference diff for a pending AI suggestion, then clear it.
+    func recordAndClearPendingAISuggestion() {
+        guard let suggestion = pendingAiSuggestion else { return }
+        pendingAiSuggestion = nil
+        let aiApplied = suggestion.delta.applying(to: EditRecipe())
+        let userFinal = recipes[suggestion.assetId] ?? EditRecipe()
+        let diff = ColorGradeDelta.diff(ai: aiApplied, final: userFinal)
+        let modeString: String
+        let moodString: String?
+        switch suggestion.mode {
+        case .auto:           modeString = "auto";      moodString = nil
+        case .mood(let m):    modeString = "mood";      moodString = m
+        case .reference:      modeString = "reference"; moodString = nil
+        }
+        AccountService.shared.recordStylePreference(
+            originalSuggestion: suggestion.delta,
+            userModification: diff,
+            mode: modeString,
+            mood: moodString
+        )
+    }
+
     /// Update in-memory AI edits for an asset so preview/export contexts refresh immediately.
     func setAIEdits(_ edits: [AIEdit], for assetURL: URL) {
         aiEditsByURL[assetURL] = edits
@@ -1019,6 +1062,15 @@ final class AppState: ObservableObject {
         lastPreCullSnapshot = nil
     }
 
+    /// Cancel the auto-hide timer, restore the pre-cull snapshot, and reset progress to idle.
+    /// No-op if no snapshot is available.
+    func undoAICull() {
+        guard let snap = lastPreCullSnapshot else { return }
+        cullingAutoHideTask?.cancel()
+        restorePreCullSnapshot(snap)   // sets lastPreCullSnapshot = nil
+        cullingProgress = .idle
+    }
+
     /// Run AI culling on all currently loaded assets.
     /// Updates each asset's `rating` and `flag` in-place and saves to sidecar.
     func startAICulling() async {
@@ -1044,11 +1096,14 @@ final class AppState: ObservableObject {
 
         cullingProgress = .complete(scored: results.count)
 
-        // Auto-hide the completion badge after 4 seconds.
+        // Auto-hide the completion badge after 8 seconds.
         cullingAutoHideTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
             guard !Task.isCancelled else { return }
-            await MainActor.run { self?.cullingProgress = .idle }
+            await MainActor.run {
+                self?.cullingProgress = .idle
+                self?.lastPreCullSnapshot = nil   // undo window expired
+            }
         }
     }
 
@@ -1152,6 +1207,11 @@ final class AppState: ObservableObject {
         let isSwitchingAsset = selectedAssetId != asset.id
         // Save and flush current recipe before switching.
         flushPendingRecipeSave()
+
+        // Record AI colour-grading preference diff (if any) before leaving this asset.
+        if isSwitchingAsset {
+            recordAndClearPendingAISuggestion()
+        }
 
         // Reset mask editing state when switching asset.
         if isSwitchingAsset {
