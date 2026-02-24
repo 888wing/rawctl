@@ -1042,6 +1042,8 @@ final class AppState: ObservableObject {
     @Published var lastPreCullSnapshot: PreCullSnapshot? = nil
 
     /// Capture current rating, flag, and colorLabel for every loaded asset.
+    /// colorLabel is included proactively — culling does not currently mutate it,
+    /// but capturing it ensures undo is complete if that changes.
     func capturePreCullSnapshot() -> PreCullSnapshot {
         var snap = PreCullSnapshot()
         for (id, recipe) in recipes {
@@ -1068,7 +1070,7 @@ final class AppState: ObservableObject {
         guard let snap = lastPreCullSnapshot else { return }
         cullingAutoHideTask?.cancel()
         cullingAutoHideTask = nil
-        restorePreCullSnapshot(snap)   // sets lastPreCullSnapshot = nil
+        restorePreCullSnapshot(snap)   // snap is a local copy; this call nils out lastPreCullSnapshot as a side-effect.
         cullingProgress = .idle
     }
 

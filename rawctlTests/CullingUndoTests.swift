@@ -69,7 +69,8 @@ struct CullingUndoTests {
 
         let snapshot = state.capturePreCullSnapshot()
 
-        // Simulate cull overwriting color label
+        // Simulate an external mutation of colorLabel (note: the cull does not currently
+        // write colorLabel — this tests the restore mechanism proactively).
         state.recipes[assetId]?.colorLabel = .none
 
         state.restorePreCullSnapshot(snapshot)
