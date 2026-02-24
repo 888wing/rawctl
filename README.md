@@ -9,15 +9,16 @@ A native macOS RAW photo editor built with SwiftUI and Core Image, featuring tru
 
 ![macOS](https://img.shields.io/badge/macOS-14.0+-blue)
 ![Swift](https://img.shields.io/badge/Swift-5.9+-orange)
-![License](https://img.shields.io/badge/License-MIT-green)
+![License](https://img.shields.io/badge/License-BSL_1.1-blue)
 
-## 🆕 What's New (v1.4)
+## 🆕 What's New (v1.5)
 
-- **Crop System Optimization**: Draw new crop areas by dragging on dark region, instant aspect ratio application, CropPreviewThumbnail in Inspector
-- **Enhanced Zoom Controls**: Scroll wheel and pinch gesture zoom (25%-800%), zoom-to-cursor anchor point, Fit/50%/100%/200% quick buttons
-- **Lightroom-Style Crop Toolbar**: Aspect ratio picker, grid overlay picker (Rule of Thirds, Golden Ratio, Diagonals, Golden Spiral), straighten slider, flip/rotate buttons
-- **Performance**: Fixed severe slowdown when loading 800+ images via concurrency-limited thumbnail generation
-- **Installation Fix**: Fixed macOS 15.1 users unable to install (deployment target corrected to 14.0)
+- **AI Photo Culling** (Pro): Apple Vision-powered scoring — sharpness, saliency, burst-group duplicate detection with pre-cull undo snapshot
+- **Scene-Aware Smart Sync** (Pro): Automatically transfers your edit recipe to visually similar photos with EV-normalised exposure matching
+- **AI Masking** (Pro): Mobile-SAM on-device segmentation for precision brush masking with tap-to-select
+- **Pro Subscription**: All AI features now require a Pro plan; free tier retains full manual editing
+
+[→ Full changelog](CHANGELOG.md)
 
 Full changelog: [CHANGELOG.md](CHANGELOG.md)
 
@@ -78,8 +79,8 @@ Full changelog: [CHANGELOG.md](CHANGELOG.md)
 ### Installation
 
 ```bash
-git clone https://github.com/888wing/rawctl.git
-cd rawctl/rawctl
+git clone https://github.com/888wing/latent.git
+cd latent
 open rawctl.xcodeproj
 # Press ⌘R to build and run
 ```
@@ -210,7 +211,18 @@ Edits are stored in `{filename}.latent.json`:
 
 ## 📄 License
 
-MIT License - see [LICENSE](LICENSE) for details.
+Latent is source-available under the [Business Source License 1.1](LICENSE).
+
+| Use case | Allowed? |
+|---|---|
+| Personal use | ✅ Free |
+| Non-commercial projects | ✅ Free |
+| Commercial use ≤ 200 photos/project | ✅ Free |
+| Commercial use > 200 photos/project | 💼 Requires [Pro license](https://latent-app.com/#pricing) |
+| View, modify, fork source code | ✅ Free |
+| Each version after 4 years | ✅ Converts to MIT |
+
+The source code is publicly available. The Additional Use Grant covers all personal and small commercial workflows at no cost. See [LICENSE](LICENSE) for full terms.
 
 ## 🙏 Acknowledgments
 
