@@ -243,9 +243,18 @@ struct GridView: View {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundColor(.green)
                         .font(.caption)
-                    Text("AI Culled \(scored) photos — review ratings and flags")
+                    Text("AI Culled \(scored) photos")
                         .font(.caption2)
                         .foregroundColor(.secondary)
+                    Spacer()
+                    if appState.lastPreCullSnapshot != nil {
+                        Button("Undo") {
+                            appState.undoAICull()
+                        }
+                        .font(.caption2.weight(.medium))
+                        .buttonStyle(.plain)
+                        .foregroundColor(.accentColor)
+                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 6)
