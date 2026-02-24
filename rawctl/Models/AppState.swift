@@ -178,10 +178,10 @@ final class AppState: ObservableObject {
 
     init(
         userDefaults: UserDefaults = .standard,
-        folderManager: FolderManager = .shared
+        folderManager: FolderManager? = nil
     ) {
         self.userDefaults = userDefaults
-        self.folderManager = folderManager
+        self.folderManager = folderManager ?? .shared
         migrateLegacyStartupKeysIfNeeded()
 
         if ProcessInfo.processInfo.environment["RAWCTL_E2E_STATUS"] == "1" {
@@ -991,10 +991,43 @@ final class AppState: ObservableObject {
     
     // MARK: - AI Culling
 
+    /// Stores rating+flag per asset captured immediately before an AI cull run.
+    /// Used by "Undo AI Cull" to restore manually set metadata.
+    typealias PreCullSnapshot = [UUID: (rating: Int, flag: Flag)]
+
+    /// The most recent pre-cull snapshot. Cleared when user dismisses or starts a new cull.
+    var lastPreCullSnapshot: PreCullSnapshot? = nil
+
+    /// Capture current rating + flag for every loaded asset.
+    func capturePreCullSnapshot() -> PreCullSnapshot {
+        var snap = PreCullSnapshot()
+        for (id, recipe) in recipes {
+            snap[id] = (rating: recipe.rating, flag: recipe.flag)
+        }
+        return snap
+    }
+
+    /// Restore rating + flag from a previously captured snapshot.
+    /// Does NOT touch any other recipe fields (exposure, crop, etc.).
+    func restorePreCullSnapshot(_ snapshot: PreCullSnapshot) {
+        for (id, saved) in snapshot {
+            guard recipes[id] != nil else { continue }
+            recipes[id]?.rating = saved.rating
+            recipes[id]?.flag   = saved.flag
+        }
+        lastPreCullSnapshot = nil
+    }
+
     /// Run AI culling on all currently loaded assets.
     /// Updates each asset's `rating` and `flag` in-place and saves to sidecar.
     func startAICulling() async {
+        guard AppFeatures.aiCullingEnabled else {
+            showAccountSheet = true
+            showHUD("AI Cull is a Pro feature")
+            return
+        }
         guard !assets.isEmpty, !cullingProgress.isRunning else { return }
+        lastPreCullSnapshot = capturePreCullSnapshot()   // capture before overwriting ratings
 
         cullingAutoHideTask?.cancel()
         cullingProgress = .running(completed: 0, total: assets.count * 2)
@@ -1041,6 +1074,11 @@ final class AppState: ObservableObject {
     /// Populates `smartSyncMatches` and sets `showSmartSyncSheet = true`.
     /// No recipes are saved until the user confirms in the sheet.
     func startSmartSync() async {
+        guard AppFeatures.smartSyncEnabled else {
+            showAccountSheet = true
+            showHUD("Smart Sync is a Pro feature")
+            return
+        }
         guard let source = selectedAsset else { return }
         guard !smartSyncState.isRunning else { return }
 
