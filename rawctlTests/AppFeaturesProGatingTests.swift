@@ -35,11 +35,17 @@ struct AppFeaturesProGatingTests {
         #expect(AppFeatures.batchProcessingEnabled == AppFeatures.isProUser)
     }
 
+    /// aiColorGradingEnabled must equal isProUser — no tighter, no looser.
+    @Test @MainActor func aiColorGradingEnabledMatchesIsProUser() {
+        #expect(AppFeatures.aiColorGradingEnabled == AppFeatures.isProUser)
+    }
+
     /// All Pro features must be in lockstep.
     @Test @MainActor func proFeaturesAreInLockstep() {
-        #expect(AppFeatures.aiCullingEnabled == AppFeatures.smartSyncEnabled)
-        #expect(AppFeatures.smartSyncEnabled == AppFeatures.aiMaskingEnabled)
-        #expect(AppFeatures.aiMaskingEnabled == AppFeatures.batchProcessingEnabled)
+        #expect(AppFeatures.aiCullingEnabled      == AppFeatures.smartSyncEnabled)
+        #expect(AppFeatures.smartSyncEnabled      == AppFeatures.aiMaskingEnabled)
+        #expect(AppFeatures.aiMaskingEnabled      == AppFeatures.batchProcessingEnabled)
+        #expect(AppFeatures.batchProcessingEnabled == AppFeatures.aiColorGradingEnabled)
     }
 
     // MARK: - Unauthenticated / default environment
@@ -67,10 +73,11 @@ struct AppFeaturesProGatingTests {
         guard !hasOverride else { return }
 
         if !AccountService.shared.isAuthenticated {
-            #expect(AppFeatures.aiCullingEnabled == false)
-            #expect(AppFeatures.smartSyncEnabled == false)
-            #expect(AppFeatures.aiMaskingEnabled == false)
+            #expect(AppFeatures.aiCullingEnabled       == false)
+            #expect(AppFeatures.smartSyncEnabled       == false)
+            #expect(AppFeatures.aiMaskingEnabled       == false)
             #expect(AppFeatures.batchProcessingEnabled == false)
+            #expect(AppFeatures.aiColorGradingEnabled  == false)
         }
     }
 }

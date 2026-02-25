@@ -82,6 +82,12 @@ enum AppFeatures {
         isProUser
     }
 
+    /// AI Colour Grading (Gemini Flash 3) — Pro only.
+    @MainActor
+    static var aiColorGradingEnabled: Bool {
+        isProUser
+    }
+
     // MARK: - Pro Status
 
     /// True if the current user has an active Pro subscription.

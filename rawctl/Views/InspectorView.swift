@@ -785,6 +785,15 @@ struct InspectorView: View {
                 
                 Divider()
 
+                // AI Colour Grading section
+                if panelConfig.isVisible(.aiColorGrading), !isLocalNodeMode {
+                DisclosureGroup("AI Colour Grading") {
+                    AIColorGradingPanel(appState: appState)
+                        .padding(.top, 6)
+                }
+                .contextMenu { panelContextMenu(.aiColorGrading) }
+                }
+
                 // AI Generation section
                 if panelConfig.isVisible(.aiGeneration), !isLocalNodeMode {
                 DisclosureGroup("AI Generation") {

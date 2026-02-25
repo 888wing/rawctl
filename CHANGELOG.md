@@ -10,6 +10,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - App renamed from rawctl to **Latent**
 
+## [1.6.0] - 2026-02-24
+
+### Added
+
+#### AI Colour Grading (Pro)
+- **GeminiColorService** (`Services/GeminiColorService.swift`): `@MainActor` service calling `POST api.latent-app.com/ai/color-grade` with rendered photo thumbnail (1024px JPEG, base64); supports `auto`, `mood`, and `reference` modes; 3 typed errors (`authenticationRequired`, `insufficientCredits`, `invalidResponse`); refreshes credits balance after success
+- **ColorGradeDelta** (`Models/EditRecipe.swift`): Optional-field struct for AI-suggested recipe changes; `applying(to:)` merges delta onto base `EditRecipe` with temperature/tint clamping; `diff(ai:final:)` computes user deviation for preference learning; `hasChanges` sentinel
+- **AIColorGradingPanel** (`Components/AIColorGradingPanel.swift`): Inspector panel with Auto/Mood mode picker, 7 mood presets (Cinematic, Airy, Moody, Warm Golden, Cool Urban, B&W Dramatic, Natural Vibrant), credits balance display, "Analyse & Apply" button, last-analysis text view; Pro gate with upgrade CTA
+- **InspectorConfig**: Added `.aiColorGrading` panel case (visible by default, icon `sparkle.magnifyingglass`)
+- **InspectorView**: AI Colour Grading section above AI Generation
+- **AppFeatures**: `aiColorGradingEnabled` flag (Pro-gated via `isProUser`)
+- **AppState**: `pendingAiSuggestion: PendingAISuggestion?`, `aiGradeAnalysis: String`; `applyColorGrade(_:mode:)` pushes undo history then applies delta; `recordAndClearPendingAISuggestion()` computes user preference diff and posts to backend
+
+#### Style Preference Learning
+- **AccountService**: `userStyleProfile: UserStyleProfile?`; `recordStylePreference(originalSuggestion:userModification:mode:mood:)` fire-and-forget POST to `/ai/style-preference`
+- **UserStyleProfile**: `Codable` struct accumulating `exposureBias`, `contrastBias`, `preferredMoods`, `avoidedMoods`, `sampleCount`; personalisation activates after ≥5 samples
+- **SidecarService** / **AppState**: Preference diff recorded when user switches photo after AI grade applied
+
+#### Backend (`rawctl-api` Cloudflare Worker — reconstructed + extended)
+- Reconstructed full TypeScript source at `/Users/chuisiufai/Projects/rawctl-api/` from deployed bundle
+- **POST `/ai/color-grade`**: Calls Gemini 2.0 Flash with JSON-mode response; builds `ColorGradeDelta` from schema; injects `UserStyleProfile` biases when ≥5 samples; 1 credit (auto/mood) or 2 credits (reference)
+- **POST `/ai/style-preference`**: Accumulates rolling-average bias profile in `user_style_profiles` D1 table; free endpoint
+- **D1 migration**: Created `user_style_profiles`, `analytics_sessions`, `analytics_events` tables
+
+### Fixed
+- **GeminiColorService**: Decode response via `APIResponse<ColorGradeResponse>` wrapper (was decoding bare struct → key-not-found crash)
+- **GeminiColorService**: HTTP 401 → `.authenticationRequired`, 402 → `.insufficientCredits` (was generic `.invalidResponse`)
+- **ColorGradeResponse**: Changed conformance from `Decodable` to `Codable` to satisfy `APIResponse<T: Codable>` constraint
+
+### Technical
+- New test file `rawctlTests/GeminiColorServiceTests.swift`: 17 tests covering `ColorGradeDelta.applying`, `diff`, `hasChanges`, `APIResponse<ColorGradeResponse>` JSON decoding, and `AppState.applyColorGrade`
+- `AppFeaturesProGatingTests`: Added `aiColorGradingEnabled` lockstep assertions; all 25 new + existing tests pass
+
 ## [1.5.0] - 2026-02-24
 
 ### Added

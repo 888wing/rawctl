@@ -95,6 +95,7 @@ final class AccountService: ObservableObject {
     @Published var plans: [PlanInfo] = []
     @Published var creditsPacks: [CreditPackInfo] = []
     @Published var errorMessage: String?
+    @Published var userStyleProfile: UserStyleProfile?
 
     // Entitlement sync control (used after browser-based checkout returns)
     private var lastEntitlementRefreshAt: Date?
@@ -432,6 +433,33 @@ final class AccountService: ObservableObject {
         return balance.totalRemaining >= cost
     }
     
+    /// Record that the user modified an AI colour-grading suggestion before saving.
+    /// Posts a fire-and-forget preference update to the backend.
+    /// Requires at least 5 samples before the backend starts influencing future AI suggestions.
+    func recordStylePreference(
+        originalSuggestion: ColorGradeDelta,
+        userModification: ColorGradeDelta,
+        mode: String,
+        mood: String? = nil
+    ) {
+        guard isAuthenticated else { return }
+        Task {
+            let body: [String: Any] = [
+                "mode": mode,
+                "mood": mood as Any,
+                "originalSuggestion": (try? JSONEncoder().encode(originalSuggestion))
+                    .flatMap { try? JSONSerialization.jsonObject(with: $0) } as Any,
+                "userModification": (try? JSONEncoder().encode(userModification))
+                    .flatMap { try? JSONSerialization.jsonObject(with: $0) } as Any
+            ]
+            let _: APIResponse<EmptyResponse> = (try? await post(
+                endpoint: "/ai/style-preference",
+                body: body,
+                authenticated: true
+            )) ?? APIResponse(success: false, data: nil, error: nil)
+        }
+    }
+
     // MARK: - Device ID
 
     /// Get or create persistent device identifier
@@ -749,3 +777,20 @@ struct KeychainHelper {
 // MARK: - Empty Response
 
 struct EmptyResponse: Codable {}
+
+// MARK: - User Style Profile
+
+/// Accumulated colour-grading preference profile.
+/// Built from the rolling average of user corrections applied on top of AI suggestions.
+struct UserStyleProfile: Codable {
+    /// Number of AI grading cycles that have contributed to this profile.
+    var sampleCount: Int = 0
+    /// Rolling-average exposure correction the user applies after AI grading.
+    var exposureBias: Double = 0
+    /// Rolling-average contrast correction.
+    var contrastBias: Double = 0
+    /// Moods the user tends to request.
+    var preferredMoods: [String] = []
+    /// Moods the user rarely accepts.
+    var avoidedMoods: [String] = []
+}
