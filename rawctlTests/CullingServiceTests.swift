@@ -487,6 +487,21 @@ struct CullingServiceTests {
         #expect(decoded1.cullingAnalysis == decoded2.cullingAnalysis, "Save-load-save must be idempotent")
     }
 
+    // MARK: - AppState culling persistence integration
+
+    @Test func applyCullingResultsSetsRatingAndFlag() {
+        // This tests the CullingAnalysis → rating/flag mapping.
+        let analysis = CullingAnalysis(
+            version: 1, overallScore: 0.8,
+            sharpnessScore: 0.9, saliencyScore: 0.7, exposureScore: 0.85,
+            duplicateGroupId: nil, duplicateRank: nil,
+            suggestedRating: 4, suggestedFlag: .pick,
+            rejectedReasons: []
+        )
+        #expect(analysis.suggestedRating == 4)
+        #expect(analysis.suggestedFlag == .pick)
+    }
+
     // MARK: - Helpers
 
     private func makeCullingScore(

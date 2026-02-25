@@ -1089,15 +1089,22 @@ final class AppState: ObservableObject {
         cullingProgress = .running(completed: 0, total: assets.count * 2)
 
         let currentAssets = assets
-        let results = await CullingService.shared.score(assets: currentAssets) { [weak self] done, total in
+
+        // Reuse warm FeaturePrintIndex prints (shared with SmartSync).
+        let existingPrints = await FeaturePrintIndex.shared.allPrints()
+
+        let analyses = await CullingService.shared.scoreWithAnalysis(
+            assets: currentAssets,
+            existingPrints: existingPrints
+        ) { [weak self] done, total in
             Task { @MainActor [weak self] in
                 self?.cullingProgress = .running(completed: done, total: total)
             }
         }
 
-        await applyCullingResults(results)
+        await applyCullingResults(analyses)
 
-        cullingProgress = .complete(scored: results.count)
+        cullingProgress = .complete(scored: analyses.count)
 
         // Auto-hide the completion badge after 8 seconds.
         cullingAutoHideTask = Task { [weak self] in
@@ -1110,18 +1117,20 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func applyCullingResults(_ results: [UUID: CullingScore]) async {
+    /// Apply culling results to all scored assets.
+    /// Writes both legacy rating/flag (for UI) and full CullingAnalysis (for sidecar persistence).
+    private func applyCullingResults(_ analyses: [UUID: CullingAnalysis]) async {
         for asset in assets {
-            guard let score = results[asset.id] else { continue }
+            guard let analysis = analyses[asset.id] else { continue }
             var recipe = recipes[asset.id] ?? EditRecipe()
-            recipe.rating = score.suggestedRating
-            recipe.flag   = score.suggestedFlag
+            recipe.rating = analysis.suggestedRating
+            recipe.flag = analysis.suggestedFlag
             recipes[asset.id] = recipe
-            // Persist asynchronously (debounced via SidecarService).
             await SidecarService.shared.saveRecipe(
                 recipe,
                 snapshots: snapshots[asset.id] ?? [],
-                for: asset.url
+                for: asset.url,
+                cullingAnalysis: analysis
             )
         }
     }
