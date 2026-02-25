@@ -136,6 +136,7 @@ actor CullingService {
     ///   - onProgress: Called with `(stepsCompleted, totalSteps)` after each step.
     ///     Total steps = `assets.count * 2` (two phases).
     /// - Returns: A dictionary mapping `PhotoAsset.id → CullingScore`.
+    @available(*, deprecated, message: "Use scoreWithAnalysis() instead")
     func score(
         assets: [PhotoAsset],
         onProgress: @escaping @Sendable (Int, Int) -> Void
@@ -589,6 +590,7 @@ actor CullingService {
 
     // MARK: - Score → Rating + Flag
 
+    @available(*, deprecated, message: "Use buildAnalysis() instead")
     nonisolated func computeFinalScore(
         sharpness: Double,
         saliency: Double,

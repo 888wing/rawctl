@@ -535,6 +535,25 @@ struct CullingServiceTests {
         )
     }
 
+    /// Helper using the new CullingAnalysis path.
+    private func makeAnalysis(
+        sharpness: Double,
+        saliency: Double,
+        exposure: Double = 1.0,
+        groupId: UUID? = nil,
+        duplicateRank: Int? = nil,
+        isRepresentative: Bool = true
+    ) -> CullingAnalysis {
+        CullingService.shared.buildAnalysis(
+            sharpness: sharpness,
+            saliency: saliency,
+            exposure: exposure,
+            groupId: groupId,
+            duplicateRank: duplicateRank,
+            isRepresentative: isRepresentative
+        )
+    }
+
     /// Creates a minimal synthetic JPEG in a temp directory for testing.
     /// Returns `nil` if file creation fails (tests that use this skip gracefully).
     private func createSyntheticJPEG() -> URL? {
