@@ -161,6 +161,58 @@ struct CullingServiceTests {
         #expect(score.exposureScore == 0.75, "exposureScore should be stored verbatim")
     }
 
+    // MARK: - Rating boundary calibration
+
+    @Test func ratingBoundariesMatchConfig() {
+        let cfg = CullingConfig.default
+        // Verify config weights sum to 1.0
+        let weightSum = cfg.sharpnessWeight + cfg.saliencyWeight + cfg.exposureWeight
+        #expect(abs(weightSum - 1.0) < 0.001, "Weights must sum to 1.0, got \(weightSum)")
+    }
+
+    @Test func ratingBoundaryAtRejectThreshold() {
+        // Just below reject threshold → rating 0
+        let justBelow = makeCullingScore(sharpness: 0.19, saliency: 0.0, exposure: 0.0, isDuplicate: false)
+        #expect(justBelow.suggestedRating == 0, "Below reject threshold → rating 0")
+        #expect(justBelow.suggestedFlag == .reject)
+
+        // Just above reject threshold → rating 1+
+        let justAbove = makeCullingScore(sharpness: 0.45, saliency: 0.0, exposure: 0.0, isDuplicate: false)
+        // combined = 0.45 * 0.45 = 0.2025 → just above 0.20
+        #expect(justAbove.suggestedRating >= 1, "Above reject threshold → rating >= 1")
+    }
+
+    @Test func perfectScoresYieldRating5() {
+        let score = makeCullingScore(sharpness: 1.0, saliency: 1.0, exposure: 1.0, isDuplicate: false)
+        #expect(score.suggestedRating == 5)
+        #expect(score.suggestedFlag == .pick)
+    }
+
+    @Test func zeroScoresYieldReject() {
+        let score = makeCullingScore(sharpness: 0.0, saliency: 0.0, exposure: 0.0, isDuplicate: false)
+        #expect(score.suggestedRating == 0)
+        #expect(score.suggestedFlag == .reject)
+    }
+
+    // MARK: - Exposure scoring boundaries
+
+    @Test func exposureScoreRangeIsClamped() {
+        // Even with extreme inputs, computeFinalScore should produce valid ratings
+        for exp in stride(from: 0.0, through: 1.0, by: 0.1) {
+            let score = makeCullingScore(sharpness: 0.5, saliency: 0.5, exposure: exp, isDuplicate: false)
+            #expect((0...5).contains(score.suggestedRating),
+                    "exposure=\(exp) produced invalid rating \(score.suggestedRating)")
+            #expect(score.exposureScore == exp)
+        }
+    }
+
+    @Test func exposureDoesNotOverrideNonRepDuplicateReject() {
+        // Non-representative duplicates ALWAYS rejected regardless of exposure quality
+        let score = makeCullingScore(sharpness: 1.0, saliency: 1.0, exposure: 1.0, isDuplicate: true)
+        #expect(score.suggestedFlag == .reject)
+        #expect(score.suggestedRating == 0)
+    }
+
     // MARK: - Helpers
 
     private func makeCullingScore(

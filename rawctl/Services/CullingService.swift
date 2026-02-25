@@ -88,6 +88,9 @@ actor CullingService {
 
     let config: CullingConfig
 
+    /// Shared CIContext for histogram and sharpness rendering (expensive to create).
+    private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
+
     private init(config: CullingConfig = .default) {
         self.config = config
     }
@@ -113,7 +116,7 @@ actor CullingService {
 
         let totalSteps = assets.count * 2
 
-        // ── Phase 1: Feature prints + sharpness/saliency (single thumbnail load per photo) ──
+        // ── Phase 1: Feature prints + sharpness/saliency/exposure (single thumbnail load per photo) ──
         var featurePrints: [UUID: VNFeaturePrintObservation] = [:]
         var rawScores: [UUID: (sharpness: Double, saliency: Double, exposure: Double)] = [:]
         featurePrints.reserveCapacity(assets.count)
@@ -217,7 +220,7 @@ actor CullingService {
         guard let output = laplacian.outputImage else { return 0.5 }
 
         // Sample a 1×1 pixel from the centre — its brightness encodes mean edge energy.
-        let context = CIContext(options: [.useSoftwareRenderer: false])
+        let context = ciContext
         var pixel = [UInt8](repeating: 0, count: 4)
         let samplePoint = CGRect(
             x: output.extent.midX,
@@ -283,7 +286,7 @@ actor CullingService {
         guard let histImage = histFilter.outputImage else { return 0.8 }
 
         // Read the 256×1 histogram as float pixels.
-        let context = CIContext(options: [.useSoftwareRenderer: false])
+        let context = ciContext
         var bins = [Float](repeating: 0, count: 256 * 4) // RGBA float
         context.render(
             histImage,
