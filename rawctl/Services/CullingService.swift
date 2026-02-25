@@ -115,7 +115,7 @@ actor CullingService {
 
         // ── Phase 1: Feature prints + sharpness/saliency (single thumbnail load per photo) ──
         var featurePrints: [UUID: VNFeaturePrintObservation] = [:]
-        var rawScores: [UUID: (sharpness: Double, saliency: Double)] = [:]
+        var rawScores: [UUID: (sharpness: Double, saliency: Double, exposure: Double)] = [:]
         featurePrints.reserveCapacity(assets.count)
         rawScores.reserveCapacity(assets.count)
 
@@ -127,7 +127,8 @@ actor CullingService {
             }
             rawScores[asset.id] = (
                 sharpness: scoreSharpness(image: image),
-                saliency:  scoreSaliency(image: image)
+                saliency:  scoreSaliency(image: image),
+                exposure:  scoreExposure(image: image)
             )
         }
 
@@ -144,6 +145,7 @@ actor CullingService {
             results[asset.id] = computeFinalScore(
                 sharpness: raw.sharpness,
                 saliency:  raw.saliency,
+                exposure:  raw.exposure,
                 groupId:   group.groupId,
                 isRepresentative: group.isRepresentative
             )
@@ -253,6 +255,81 @@ actor CullingService {
         }
     }
 
+    // MARK: - Exposure Quality Scoring
+
+    /// Returns an exposure quality score (0–1) based on luminance histogram clipping.
+    ///
+    /// Uses CIAreaHistogram to compute a 256-bin luminance histogram.
+    /// Penalizes photos with clipped highlights (blown whites) or crushed shadows
+    /// beyond configurable thresholds. Includes an artistic tolerance band so
+    /// intentionally low-key or high-key images aren't over-penalized.
+    ///
+    /// - Returns: 1.0 for well-exposed images, decreasing toward 0 for severe clipping.
+    private func scoreExposure(image: CGImage) -> Double {
+        let ciImage = CIImage(cgImage: image)
+
+        // Convert to grayscale luminance for histogram analysis.
+        let gray = ciImage.applyingFilter("CIColorControls", parameters: [
+            kCIInputSaturationKey: 0.0
+        ])
+
+        // CIAreaHistogram: 256 bins across the full image extent.
+        guard let histFilter = CIFilter(name: "CIAreaHistogram") else { return 0.8 }
+        histFilter.setValue(gray, forKey: kCIInputImageKey)
+        histFilter.setValue(CIVector(cgRect: gray.extent), forKey: "inputExtent")
+        histFilter.setValue(NSNumber(value: 256), forKey: "inputCount")
+        histFilter.setValue(NSNumber(value: 1.0), forKey: "inputScale")
+
+        guard let histImage = histFilter.outputImage else { return 0.8 }
+
+        // Read the 256×1 histogram as float pixels.
+        let context = CIContext(options: [.useSoftwareRenderer: false])
+        var bins = [Float](repeating: 0, count: 256 * 4) // RGBA float
+        context.render(
+            histImage,
+            toBitmap: &bins,
+            rowBytes: 256 * 4 * MemoryLayout<Float>.size,
+            bounds: CGRect(x: 0, y: 0, width: 256, height: 1),
+            format: .RGBAf,
+            colorSpace: CGColorSpaceCreateDeviceRGB()
+        )
+
+        // Extract the red channel (luminance in grayscale) counts.
+        var luminanceBins = [Float](repeating: 0, count: 256)
+        for i in 0..<256 {
+            luminanceBins[i] = bins[i * 4] // R channel
+        }
+
+        let totalPixels = luminanceBins.reduce(0, +)
+        guard totalPixels > 0 else { return 0.8 }
+
+        // Fraction of pixels in shadow bin (0) and highlight bin (255).
+        let shadowFraction  = Double(luminanceBins[0]) / Double(totalPixels)
+        let highlightFraction = Double(luminanceBins[255]) / Double(totalPixels)
+
+        // Also check near-black (0–4) and near-white (251–255) for broader clipping.
+        let nearBlack = Double(luminanceBins[0...4].reduce(0, +)) / Double(totalPixels)
+        let nearWhite = Double(luminanceBins[251...255].reduce(0, +)) / Double(totalPixels)
+
+        let cfg = config
+
+        // Compute penalties only beyond the artistic tolerance thresholds.
+        let highlightExcess = max(0, highlightFraction - cfg.highlightClipFraction)
+        let shadowExcess    = max(0, shadowFraction - cfg.shadowClipFraction)
+
+        // Broader clipping is weighted at half rate (near-black/white bands).
+        let broadHighlightExcess = max(0, nearWhite - cfg.highlightClipFraction * 2)
+        let broadShadowExcess    = max(0, nearBlack - cfg.shadowClipFraction * 2)
+
+        let highlightPenalty = highlightExcess * cfg.highlightPenaltyRate
+                             + broadHighlightExcess * cfg.highlightPenaltyRate * 0.5
+        let shadowPenalty    = shadowExcess * cfg.shadowPenaltyRate
+                             + broadShadowExcess * cfg.shadowPenaltyRate * 0.5
+
+        let score = max(0.0, 1.0 - highlightPenalty - shadowPenalty)
+        return score
+    }
+
     // MARK: - Duplicate Detection
 
     private func generateFeaturePrint(from image: CGImage) -> VNFeaturePrintObservation? {
@@ -271,7 +348,7 @@ actor CullingService {
     /// Photos with no near-duplicates map to (nil, true).
     private func buildDuplicateGroups(
         prints: [UUID: VNFeaturePrintObservation],
-        scores: [UUID: (sharpness: Double, saliency: Double)]
+        scores: [UUID: (sharpness: Double, saliency: Double, exposure: Double)]
     ) -> [UUID: (groupId: UUID?, isRepresentative: Bool)] {
         // Union-Find: parent[id] = id means it's a root.
         var parent: [UUID: UUID] = Dictionary(uniqueKeysWithValues: prints.keys.map { ($0, $0) })

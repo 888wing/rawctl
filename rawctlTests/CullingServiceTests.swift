@@ -132,6 +132,35 @@ struct CullingServiceTests {
         #expect(unique.suggestedFlag != .reject)
     }
 
+    // MARK: - Exposure scoring via computeFinalScore
+
+    @Test func wellExposedPhotoGetsHighExposureContribution() {
+        // exposure=1.0 (perfect) should contribute full weight to combined score
+        let score = makeCullingScore(sharpness: 0.7, saliency: 0.6, exposure: 1.0, isDuplicate: false)
+        // combined = 0.7*0.45 + 0.6*0.30 + 1.0*0.25 = 0.315 + 0.18 + 0.25 = 0.745
+        #expect(score.suggestedRating >= 3, "Well-exposed photo with good quality should rate >= 3")
+    }
+
+    @Test func severelyUnderexposedPhotoPenalized() {
+        // exposure=0.0 (worst) should drag combined score down significantly
+        let score = makeCullingScore(sharpness: 0.7, saliency: 0.6, exposure: 0.0, isDuplicate: false)
+        // combined = 0.7*0.45 + 0.6*0.30 + 0.0*0.25 = 0.315 + 0.18 + 0 = 0.495
+        #expect(score.suggestedRating <= 2, "Severely underexposed should rate <= 2")
+    }
+
+    @Test func moderateExposureIssueReducesRatingByOne() {
+        // Compare perfect exposure vs moderate issue
+        let perfect  = makeCullingScore(sharpness: 0.8, saliency: 0.7, exposure: 1.0, isDuplicate: false)
+        let moderate = makeCullingScore(sharpness: 0.8, saliency: 0.7, exposure: 0.5, isDuplicate: false)
+        #expect(perfect.suggestedRating > moderate.suggestedRating,
+                "Moderate exposure issue should reduce rating vs perfect exposure")
+    }
+
+    @Test func exposureScoreStoredInCullingScore() {
+        let score = makeCullingScore(sharpness: 0.5, saliency: 0.5, exposure: 0.75, isDuplicate: false)
+        #expect(score.exposureScore == 0.75, "exposureScore should be stored verbatim")
+    }
+
     // MARK: - Helpers
 
     private func makeCullingScore(
