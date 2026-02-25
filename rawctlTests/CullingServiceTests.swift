@@ -34,7 +34,7 @@ struct CullingServiceTests {
     @Test func cullingScoreRatingIsInValidRange() {
         // Exercise the boundary conditions of the rating mapping.
         let cases: [(sharpness: Double, saliency: Double, isDuplicate: Bool, expectedRating: ClosedRange<Int>)] = [
-            (0.0, 0.0, false, 0...0),   // very poor → 0
+            (0.0, 0.0, false, 1...1),   // zero sharpness/saliency but default exposure → 1
             (0.0, 0.0, true,  0...0),   // duplicate → 0 (reject)
             (0.5, 0.5, false, 1...5),   // moderate → at least 1
             (1.0, 1.0, false, 4...5),   // excellent → 4 or 5
@@ -63,7 +63,9 @@ struct CullingServiceTests {
     }
 
     @Test func lowQualityScoreBecomesRejectWith0Stars() {
-        let score = makeCullingScore(sharpness: 0.05, saliency: 0.05, isDuplicate: false)
+        // With 3-signal model, pass exposure=0.0 to test true low-quality boundary.
+        // combined = 0.05*0.45 + 0.05*0.30 + 0.0*0.25 = 0.0375, below rejectBelow (0.20).
+        let score = makeCullingScore(sharpness: 0.05, saliency: 0.05, exposure: 0.0, isDuplicate: false)
         #expect(score.suggestedFlag == .reject)
         #expect(score.suggestedRating == 0)
     }
@@ -135,11 +137,13 @@ struct CullingServiceTests {
     private func makeCullingScore(
         sharpness: Double,
         saliency: Double,
+        exposure: Double = 1.0,
         isDuplicate: Bool
     ) -> CullingScore {
         CullingService.shared.computeFinalScore(
             sharpness: sharpness,
             saliency: saliency,
+            exposure: exposure,
             groupId: isDuplicate ? UUID() : nil,
             isRepresentative: !isDuplicate
         )
@@ -148,12 +152,14 @@ struct CullingServiceTests {
     private func makeCullingScoreGroupAware(
         sharpness: Double,
         saliency: Double,
+        exposure: Double = 1.0,
         groupId: UUID?,
         isRepresentative: Bool
     ) -> CullingScore {
         CullingService.shared.computeFinalScore(
             sharpness: sharpness,
             saliency: saliency,
+            exposure: exposure,
             groupId: groupId,
             isRepresentative: isRepresentative
         )

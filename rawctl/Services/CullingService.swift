@@ -18,6 +18,8 @@ struct CullingScore: Sendable {
     let sharpness: Double
     /// Composition quality from attention saliency map, 0 – 1.
     let saliency: Double
+    /// Exposure quality from histogram analysis, 0 (severely clipped) – 1 (well exposed).
+    let exposureScore: Double
     /// Non-nil when this photo belongs to a near-duplicate group.
     let duplicateGroupId: UUID?
     /// True if this photo is the chosen representative of its group (highest combined score).
@@ -27,6 +29,49 @@ struct CullingScore: Sendable {
     let suggestedRating: Int
     /// Suggested flag derived from combined score.
     let suggestedFlag: Flag
+}
+
+/// Single source of truth for all culling scoring parameters.
+struct CullingConfig: Sendable {
+    // MARK: - Signal Weights (must sum to 1.0)
+    let sharpnessWeight: Double
+    let saliencyWeight: Double
+    let exposureWeight: Double
+
+    // MARK: - Rating Boundaries (ascending combined-score thresholds)
+    let rejectBelow: Double
+    let rating1Below: Double
+    let rating2Below: Double
+    let rating3Below: Double
+    let rating4Below: Double
+
+    // MARK: - Exposure Thresholds
+    let highlightClipFraction: Double
+    let shadowClipFraction: Double
+    let highlightPenaltyRate: Double
+    let shadowPenaltyRate: Double
+
+    // MARK: - Duplicate Detection
+    let duplicateDistanceThreshold: Float
+
+    static let `default` = CullingConfig(
+        sharpnessWeight: 0.45,
+        saliencyWeight: 0.30,
+        exposureWeight: 0.25,
+
+        rejectBelow: 0.20,
+        rating1Below: 0.40,
+        rating2Below: 0.55,
+        rating3Below: 0.70,
+        rating4Below: 0.85,
+
+        highlightClipFraction: 0.03,
+        shadowClipFraction: 0.05,
+        highlightPenaltyRate: 8.0,
+        shadowPenaltyRate: 5.0,
+
+        duplicateDistanceThreshold: 0.15
+    )
 }
 
 /// On-device photo culling via Apple Vision framework.
@@ -40,11 +85,12 @@ struct CullingScore: Sendable {
 actor CullingService {
 
     static let shared = CullingService()
-    private init() {}
 
-    /// Distance threshold below which two photos are considered duplicates.
-    /// VNFeaturePrintObservation distances range 0 (identical) upward.
-    private let duplicateDistanceThreshold: Float = 0.15
+    let config: CullingConfig
+
+    private init(config: CullingConfig = .default) {
+        self.config = config
+    }
 
     // MARK: - Public API
 
@@ -257,7 +303,7 @@ actor CullingService {
                 guard let pj = prints[ids[j]] else { continue }
                 var distance: Float = 0
                 if (try? pi.computeDistance(&distance, to: pj)) != nil,
-                   distance < duplicateDistanceThreshold {
+                   distance < config.duplicateDistanceThreshold {
                     union(ids[i], ids[j])
                 }
             }
@@ -279,8 +325,11 @@ actor CullingService {
             } else {
                 let groupId = UUID()
                 let rep = members.max(by: { a, b in
-                    let sa = (scores[a]?.sharpness ?? 0) * 0.6 + (scores[a]?.saliency ?? 0) * 0.4
-                    let sb = (scores[b]?.sharpness ?? 0) * 0.6 + (scores[b]?.saliency ?? 0) * 0.4
+                    let cfg = CullingConfig.default
+                    let sa = (scores[a]?.sharpness ?? 0) * cfg.sharpnessWeight
+                           + (scores[a]?.saliency ?? 0)  * cfg.saliencyWeight
+                    let sb = (scores[b]?.sharpness ?? 0) * cfg.sharpnessWeight
+                           + (scores[b]?.saliency ?? 0)  * cfg.saliencyWeight
                     return sa < sb
                 })
                 for member in members {
@@ -296,26 +345,34 @@ actor CullingService {
     nonisolated func computeFinalScore(
         sharpness: Double,
         saliency: Double,
+        exposure: Double = 1.0,
         groupId: UUID?,
         isRepresentative: Bool
     ) -> CullingScore {
-        let combined = sharpness * 0.6 + saliency * 0.4
+        // Uses CullingConfig.default directly because this method is nonisolated
+        // and cannot access actor-isolated self.config. Safe because init is private
+        // and shared singleton always uses .default.
+        let cfg = CullingConfig.default
+        let combined = sharpness * cfg.sharpnessWeight
+                     + saliency  * cfg.saliencyWeight
+                     + exposure  * cfg.exposureWeight
         let isNonRepDuplicate = groupId != nil && !isRepresentative
 
         let (rating, flag): (Int, Flag)
         switch (isNonRepDuplicate, combined) {
-        case (true, _):      (rating, flag) = (0, .reject)
-        case (_, ..<0.20):   (rating, flag) = (0, .reject)
-        case (_, ..<0.40):   (rating, flag) = (1, .none)
-        case (_, ..<0.55):   (rating, flag) = (2, .none)
-        case (_, ..<0.70):   (rating, flag) = (3, .none)
-        case (_, ..<0.85):   (rating, flag) = (4, .pick)
-        default:             (rating, flag) = (5, .pick)
+        case (true, _):               (rating, flag) = (0, .reject)
+        case (_, ..<cfg.rejectBelow):  (rating, flag) = (0, .reject)
+        case (_, ..<cfg.rating1Below): (rating, flag) = (1, .none)
+        case (_, ..<cfg.rating2Below): (rating, flag) = (2, .none)
+        case (_, ..<cfg.rating3Below): (rating, flag) = (3, .none)
+        case (_, ..<cfg.rating4Below): (rating, flag) = (4, .pick)
+        default:                       (rating, flag) = (5, .pick)
         }
 
         return CullingScore(
             sharpness: sharpness,
             saliency:  saliency,
+            exposureScore: exposure,
             duplicateGroupId: groupId,
             isGroupRepresentative: isRepresentative,
             suggestedRating: rating,
