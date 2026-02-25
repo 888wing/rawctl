@@ -272,6 +272,107 @@ struct CullingServiceTests {
         }
     }
 
+    // MARK: - CullingAnalysis
+
+    @Test func analysisVersionIsSet() {
+        let analysis = CullingService.shared.buildAnalysis(
+            sharpness: 0.8, saliency: 0.7, exposure: 0.9,
+            groupId: nil, duplicateRank: nil, isRepresentative: true
+        )
+        #expect(analysis.version == CullingAnalysis.currentVersion)
+    }
+
+    @Test func analysisOverallScoreMatchesWeightedFormula() {
+        let analysis = CullingService.shared.buildAnalysis(
+            sharpness: 0.8, saliency: 0.6, exposure: 1.0,
+            groupId: nil, duplicateRank: nil, isRepresentative: true
+        )
+        let cfg = CullingConfig.default
+        let expected = 0.8 * cfg.sharpnessWeight + 0.6 * cfg.saliencyWeight + 1.0 * cfg.exposureWeight
+        #expect(abs(analysis.overallScore - expected) < 0.001)
+    }
+
+    @Test func analysisCarriesRejectedReasonsForBlurryPhoto() {
+        let analysis = CullingService.shared.buildAnalysis(
+            sharpness: 0.1, saliency: 0.5, exposure: 1.0,
+            groupId: nil, duplicateRank: nil, isRepresentative: true
+        )
+        #expect(analysis.rejectedReasons.contains("blurry"))
+        #expect(!analysis.rejectedReasons.contains("duplicate_non_best"))
+    }
+
+    @Test func analysisCarriesRejectedReasonsForDuplicate() {
+        let gid = UUID()
+        let analysis = CullingService.shared.buildAnalysis(
+            sharpness: 0.9, saliency: 0.8, exposure: 1.0,
+            groupId: gid, duplicateRank: 2, isRepresentative: false
+        )
+        #expect(analysis.rejectedReasons.contains("duplicate_non_best"))
+        #expect(analysis.suggestedFlag == .reject)
+        #expect(analysis.duplicateRank == 2)
+    }
+
+    @Test func analysisHasNoRejectedReasonsForGoodPhoto() {
+        let analysis = CullingService.shared.buildAnalysis(
+            sharpness: 0.9, saliency: 0.8, exposure: 0.95,
+            groupId: nil, duplicateRank: nil, isRepresentative: true
+        )
+        #expect(analysis.rejectedReasons.isEmpty)
+        #expect(analysis.suggestedRating >= 4)
+    }
+
+    @Test func analysisCarriesDuplicateRank() {
+        let gid = UUID()
+        let rep = CullingService.shared.buildAnalysis(
+            sharpness: 0.9, saliency: 0.8, exposure: 1.0,
+            groupId: gid, duplicateRank: 1, isRepresentative: true
+        )
+        #expect(rep.duplicateRank == 1)
+        #expect(!rep.rejectedReasons.contains("duplicate_non_best"))
+
+        let third = CullingService.shared.buildAnalysis(
+            sharpness: 0.5, saliency: 0.4, exposure: 0.8,
+            groupId: gid, duplicateRank: 3, isRepresentative: false
+        )
+        #expect(third.duplicateRank == 3)
+        #expect(third.rejectedReasons.contains("duplicate_non_best"))
+    }
+
+    @Test func analysisExposureClippedReason() {
+        let analysis = CullingService.shared.buildAnalysis(
+            sharpness: 0.8, saliency: 0.7, exposure: 0.2,
+            groupId: nil, duplicateRank: nil, isRepresentative: true
+        )
+        #expect(analysis.rejectedReasons.contains("exposure_clipped"))
+    }
+
+    @Test func analysisPoorCompositionReason() {
+        let analysis = CullingService.shared.buildAnalysis(
+            sharpness: 0.8, saliency: 0.1, exposure: 1.0,
+            groupId: nil, duplicateRank: nil, isRepresentative: true
+        )
+        #expect(analysis.rejectedReasons.contains("poor_composition"))
+    }
+
+    @Test func analysisCodableRoundtrip() throws {
+        let gid = UUID()
+        let original = CullingAnalysis(
+            version: 1,
+            overallScore: 0.75,
+            sharpnessScore: 0.8,
+            saliencyScore: 0.7,
+            exposureScore: 0.9,
+            duplicateGroupId: gid,
+            duplicateRank: 2,
+            suggestedRating: 4,
+            suggestedFlag: .pick,
+            rejectedReasons: []
+        )
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(CullingAnalysis.self, from: data)
+        #expect(decoded == original)
+    }
+
     // MARK: - Helpers
 
     private func makeCullingScore(

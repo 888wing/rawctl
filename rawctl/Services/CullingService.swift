@@ -74,6 +74,34 @@ struct CullingConfig: Sendable {
     )
 }
 
+/// Rich culling output persisted in the sidecar JSON.
+/// Replaces `CullingScore` as the primary culling result type.
+struct CullingAnalysis: Codable, Sendable, Equatable {
+    /// Schema version for forward compatibility.
+    let version: Int
+    /// Weighted combination of all signal scores, 0–1.
+    let overallScore: Double
+    /// Sharpness/focus quality, 0 (blurry) – 1 (sharp).
+    let sharpnessScore: Double
+    /// Composition quality from attention saliency, 0–1.
+    let saliencyScore: Double
+    /// Exposure quality from histogram analysis, 0–1.
+    let exposureScore: Double
+    /// Non-nil when this photo belongs to a near-duplicate group.
+    let duplicateGroupId: UUID?
+    /// Rank within duplicate group (1 = best). Nil if unique photo.
+    let duplicateRank: Int?
+    /// Suggested star rating (0–5) derived from overall score.
+    let suggestedRating: Int
+    /// Suggested flag derived from overall score.
+    let suggestedFlag: Flag
+    /// Human-readable reasons for rejection/downranking.
+    /// Empty array for well-rated photos.
+    let rejectedReasons: [String]
+
+    static let currentVersion = 1
+}
+
 /// On-device photo culling via Apple Vision framework.
 ///
 /// Usage:
@@ -457,6 +485,61 @@ actor CullingService {
             isGroupRepresentative: isRepresentative,
             suggestedRating: rating,
             suggestedFlag:   flag
+        )
+    }
+
+    /// Build a full CullingAnalysis with rejection reasons derived from signal scores.
+    nonisolated func buildAnalysis(
+        sharpness: Double,
+        saliency: Double,
+        exposure: Double,
+        groupId: UUID?,
+        duplicateRank: Int?,
+        isRepresentative: Bool
+    ) -> CullingAnalysis {
+        // Uses CullingConfig.default directly because this method is nonisolated.
+        let cfg = CullingConfig.default
+        let combined = sharpness * cfg.sharpnessWeight
+                     + saliency  * cfg.saliencyWeight
+                     + exposure  * cfg.exposureWeight
+        let isNonRepDuplicate = groupId != nil && !isRepresentative
+
+        let (rating, flag): (Int, Flag)
+        switch (isNonRepDuplicate, combined) {
+        case (true, _):               (rating, flag) = (0, .reject)
+        case (_, ..<cfg.rejectBelow):  (rating, flag) = (0, .reject)
+        case (_, ..<cfg.rating1Below): (rating, flag) = (1, .none)
+        case (_, ..<cfg.rating2Below): (rating, flag) = (2, .none)
+        case (_, ..<cfg.rating3Below): (rating, flag) = (3, .none)
+        case (_, ..<cfg.rating4Below): (rating, flag) = (4, .pick)
+        default:                       (rating, flag) = (5, .pick)
+        }
+
+        var reasons: [String] = []
+        if isNonRepDuplicate {
+            reasons.append("duplicate_non_best")
+        }
+        if sharpness < 0.25 {
+            reasons.append("blurry")
+        }
+        if saliency < 0.20 {
+            reasons.append("poor_composition")
+        }
+        if exposure < 0.40 {
+            reasons.append("exposure_clipped")
+        }
+
+        return CullingAnalysis(
+            version: CullingAnalysis.currentVersion,
+            overallScore: combined,
+            sharpnessScore: sharpness,
+            saliencyScore: saliency,
+            exposureScore: exposure,
+            duplicateGroupId: groupId,
+            duplicateRank: duplicateRank,
+            suggestedRating: rating,
+            suggestedFlag: flag,
+            rejectedReasons: reasons
         )
     }
 }
