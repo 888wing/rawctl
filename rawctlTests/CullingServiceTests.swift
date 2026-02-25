@@ -411,6 +411,82 @@ struct CullingServiceTests {
         #expect(results.isEmpty)
     }
 
+    // MARK: - Sidecar schema v8 roundtrip
+
+    @Test func sidecarV8RoundtripWithCullingAnalysis() throws {
+        let analysis = CullingAnalysis(
+            version: 1,
+            overallScore: 0.72,
+            sharpnessScore: 0.85,
+            saliencyScore: 0.60,
+            exposureScore: 0.90,
+            duplicateGroupId: UUID(),
+            duplicateRank: 2,
+            suggestedRating: 3,
+            suggestedFlag: .none,
+            rejectedReasons: ["duplicate_non_best"]
+        )
+
+        var sidecar = SidecarFile(
+            for: URL(fileURLWithPath: "/tmp/test.ARW"),
+            recipe: EditRecipe()
+        )
+        sidecar.cullingAnalysis = analysis
+
+        let data = try JSONEncoder().encode(sidecar)
+        let decoded = try JSONDecoder().decode(SidecarFile.self, from: data)
+
+        #expect(decoded.schemaVersion == 8)
+        #expect(decoded.cullingAnalysis != nil)
+        #expect(decoded.cullingAnalysis?.overallScore == 0.72)
+        #expect(decoded.cullingAnalysis?.duplicateRank == 2)
+        #expect(decoded.cullingAnalysis?.rejectedReasons == ["duplicate_non_best"])
+    }
+
+    @Test func sidecarV7BackwardCompatibleWithNilCullingAnalysis() throws {
+        // Simulate a v7 sidecar JSON (no cullingAnalysis key).
+        let v7Json = """
+        {
+            "schemaVersion": 7,
+            "asset": { "originalFilename": "old.ARW", "fileSize": 512, "modifiedTime": 0 },
+            "edit": {},
+            "snapshots": [],
+            "aiEdits": [],
+            "aiLayers": [],
+            "updatedAt": 0
+        }
+        """.data(using: .utf8)!
+
+        let decoded = try JSONDecoder().decode(SidecarFile.self, from: v7Json)
+        #expect(decoded.cullingAnalysis == nil, "Legacy v7 sidecar must decode with nil cullingAnalysis")
+        #expect(decoded.schemaVersion == 7)
+    }
+
+    @Test func sidecarSaveLoadIdempotent() throws {
+        let analysis = CullingAnalysis(
+            version: 1, overallScore: 0.5,
+            sharpnessScore: 0.6, saliencyScore: 0.4, exposureScore: 0.8,
+            duplicateGroupId: nil, duplicateRank: nil,
+            suggestedRating: 2, suggestedFlag: .none,
+            rejectedReasons: []
+        )
+
+        var sidecar = SidecarFile(
+            for: URL(fileURLWithPath: "/tmp/a.ARW"),
+            recipe: EditRecipe()
+        )
+        sidecar.cullingAnalysis = analysis
+
+        // Roundtrip 1
+        let data1 = try JSONEncoder().encode(sidecar)
+        let decoded1 = try JSONDecoder().decode(SidecarFile.self, from: data1)
+        // Roundtrip 2
+        let data2 = try JSONEncoder().encode(decoded1)
+        let decoded2 = try JSONDecoder().decode(SidecarFile.self, from: data2)
+
+        #expect(decoded1.cullingAnalysis == decoded2.cullingAnalysis, "Save-load-save must be idempotent")
+    }
+
     // MARK: - Helpers
 
     private func makeCullingScore(

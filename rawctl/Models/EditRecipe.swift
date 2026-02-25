@@ -748,7 +748,7 @@ struct RecipeSnapshot: Codable, Equatable, Identifiable {
 
 /// Complete sidecar file structure
 struct SidecarFile: Codable {
-    static let currentSchemaVersion = 7
+    static let currentSchemaVersion = 8  // v8: Added cullingAnalysis
 
     var schemaVersion: Int = SidecarFile.currentSchemaVersion // v7: Added aiLayers
     var asset: AssetInfo
@@ -757,6 +757,7 @@ struct SidecarFile: Codable {
     var aiEdits: [AIEdit] = []  // AI editing history (v3)
     var localNodes: [ColorNode]?  // v6: local adjustment nodes
     var aiLayers: [AILayer] = []  // v7: AI compositing layer stack
+    var cullingAnalysis: CullingAnalysis?  // v8: AI culling metadata
     var updatedAt: TimeInterval
 
     struct AssetInfo: Codable {
@@ -777,6 +778,7 @@ struct SidecarFile: Codable {
         self.aiEdits = []
         self.localNodes = nil
         self.aiLayers = []
+        self.cullingAnalysis = nil
         self.updatedAt = Date().timeIntervalSince1970
     }
 
@@ -792,6 +794,7 @@ struct SidecarFile: Codable {
         aiEdits = try container.decodeIfPresent([AIEdit].self, forKey: .aiEdits) ?? []  // v3
         localNodes = try container.decodeIfPresent([ColorNode].self, forKey: .localNodes)  // v6
         aiLayers = try container.decodeIfPresent([AILayer].self, forKey: .aiLayers) ?? []  // v7
+        cullingAnalysis = try container.decodeIfPresent(CullingAnalysis.self, forKey: .cullingAnalysis)  // v8
         updatedAt = try container.decode(TimeInterval.self, forKey: .updatedAt)
     }
 
@@ -807,11 +810,12 @@ struct SidecarFile: Codable {
         try container.encode(aiEdits, forKey: .aiEdits)
         try container.encodeIfPresent(localNodes, forKey: .localNodes)
         try container.encode(aiLayers, forKey: .aiLayers)
+        try container.encodeIfPresent(cullingAnalysis, forKey: .cullingAnalysis)
         try container.encode(updatedAt, forKey: .updatedAt)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, asset, edit, snapshots, aiEdits, localNodes, aiLayers, updatedAt
+        case schemaVersion, asset, edit, snapshots, aiEdits, localNodes, aiLayers, cullingAnalysis, updatedAt
     }
 }
 
