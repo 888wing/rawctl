@@ -213,6 +213,65 @@ struct CullingServiceTests {
         #expect(score.suggestedRating == 0)
     }
 
+    // MARK: - Synthetic exposure integration tests
+
+    @Test func overexposedSyntheticScoresLowerThanNormal() async {
+        guard let normalURL = createSyntheticJPEGWithBrightness(0.5),
+              let overURL   = createSyntheticJPEGWithBrightness(1.0) else { return }
+        defer {
+            try? FileManager.default.removeItem(at: normalURL)
+            try? FileManager.default.removeItem(at: overURL)
+        }
+
+        let normalAsset = PhotoAsset(url: normalURL)
+        let overAsset   = PhotoAsset(url: overURL)
+
+        let results = await CullingService.shared.score(
+            assets: [normalAsset, overAsset]
+        ) { _, _ in }
+
+        if let normalScore = results[normalAsset.id],
+           let overScore   = results[overAsset.id] {
+            #expect(normalScore.exposureScore >= overScore.exposureScore,
+                    "Overexposed image should have equal or lower exposure score")
+        }
+    }
+
+    @Test func underexposedSyntheticScoresLowerThanNormal() async {
+        guard let normalURL = createSyntheticJPEGWithBrightness(0.5),
+              let underURL  = createSyntheticJPEGWithBrightness(0.0) else { return }
+        defer {
+            try? FileManager.default.removeItem(at: normalURL)
+            try? FileManager.default.removeItem(at: underURL)
+        }
+
+        let normalAsset = PhotoAsset(url: normalURL)
+        let underAsset  = PhotoAsset(url: underURL)
+
+        let results = await CullingService.shared.score(
+            assets: [normalAsset, underAsset]
+        ) { _, _ in }
+
+        if let normalScore = results[normalAsset.id],
+           let underScore  = results[underAsset.id] {
+            #expect(normalScore.exposureScore >= underScore.exposureScore,
+                    "Underexposed image should have equal or lower exposure score")
+        }
+    }
+
+    @Test func exposureScoreReturnsValidRangeForSyntheticImage() async {
+        guard let url = createSyntheticJPEGWithBrightness(0.5) else { return }
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let asset = PhotoAsset(url: url)
+        let results = await CullingService.shared.score(assets: [asset]) { _, _ in }
+
+        if let score = results[asset.id] {
+            #expect(score.exposureScore >= 0.0 && score.exposureScore <= 1.0,
+                    "Exposure score must be in [0, 1], got \(score.exposureScore)")
+        }
+    }
+
     // MARK: - Helpers
 
     private func makeCullingScore(
@@ -276,6 +335,39 @@ struct CullingServiceTests {
         CGImageDestinationAddImage(dest, image, nil)
         guard CGImageDestinationFinalize(dest) else { return nil }
 
+        return url
+    }
+
+    /// Creates a synthetic JPEG with controlled brightness for exposure testing.
+    /// - Parameter brightness: 0.0 = pure black, 1.0 = pure white.
+    private func createSyntheticJPEGWithBrightness(_ brightness: CGFloat) -> URL? {
+        let size = CGSize(width: 128, height: 128)
+        guard let context = CGContext(
+            data: nil,
+            width: Int(size.width), height: Int(size.height),
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+
+        // Fill with uniform brightness (some variation to avoid degenerate histogram).
+        context.setFillColor(CGColor(red: brightness, green: brightness, blue: brightness, alpha: 1.0))
+        context.fill(CGRect(origin: .zero, size: size))
+
+        // Add a slightly different patch to create some histogram spread.
+        let altBrightness = max(0, min(1, brightness + (brightness > 0.5 ? -0.1 : 0.1)))
+        context.setFillColor(CGColor(red: altBrightness, green: altBrightness, blue: altBrightness, alpha: 1.0))
+        context.fill(CGRect(x: 32, y: 32, width: 64, height: 64))
+
+        guard let image = context.makeImage() else { return nil }
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("exposure_test_\(UUID().uuidString).jpg")
+        guard let dest = CGImageDestinationCreateWithURL(
+            url as CFURL, UTType.jpeg.identifier as CFString, 1, nil
+        ) else { return nil }
+        CGImageDestinationAddImage(dest, image, nil)
+        guard CGImageDestinationFinalize(dest) else { return nil }
         return url
     }
 }
