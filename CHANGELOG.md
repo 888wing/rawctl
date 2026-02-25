@@ -34,6 +34,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **POST `/ai/style-preference`**: Accumulates rolling-average bias profile in `user_style_profiles` D1 table; free endpoint
 - **D1 migration**: Created `user_style_profiles`, `analytics_sessions`, `analytics_events` tables
 
+#### AI Culling v1.1 — Scoring Hardening (E1)
+- **CullingConfig** (`Services/CullingService.swift`): Single source of truth for scoring weights (sharpness 0.45, saliency 0.30, exposure 0.25), rating boundaries, exposure clipping thresholds, and duplicate distance; replaces all hardcoded constants
+- **Exposure scoring** (`Services/CullingService.swift`): `scoreExposure(image:)` uses CIAreaHistogram (256-bin luminance) to detect highlight/shadow clipping; artistic tolerance band avoids over-penalizing intentional low-key/high-key images
+- **CullingScore.exposureScore**: New field carrying per-photo exposure quality (0–1)
+- **3-signal scoring formula**: `computeFinalScore` now combines sharpness + saliency + exposure using configurable weights
+- **Shared CIContext**: Reused across sharpness and exposure scoring for batch performance
+
 ### Fixed
 - **GeminiColorService**: Decode response via `APIResponse<ColorGradeResponse>` wrapper (was decoding bare struct → key-not-found crash)
 - **GeminiColorService**: HTTP 401 → `.authenticationRequired`, 402 → `.insufficientCredits` (was generic `.invalidResponse`)
@@ -42,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Technical
 - New test file `rawctlTests/GeminiColorServiceTests.swift`: 17 tests covering `ColorGradeDelta.applying`, `diff`, `hasChanges`, `APIResponse<ColorGradeResponse>` JSON decoding, and `AppState.applyColorGrade`
 - `AppFeaturesProGatingTests`: Added `aiColorGradingEnabled` lockstep assertions; all 25 new + existing tests pass
+- 13 new culling tests: exposure scoring boundaries, calibration regression, synthetic fixture integration (overexposed/underexposed ordering)
 
 ## [1.5.0] - 2026-02-24
 
