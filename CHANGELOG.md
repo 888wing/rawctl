@@ -41,6 +41,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **3-signal scoring formula**: `computeFinalScore` now combines sharpness + saliency + exposure using configurable weights
 - **Shared CIContext**: Reused across sharpness and exposure scoring for batch performance
 
+#### AI Culling v1.1 — Duplicate Grouping Upgrade (E2)
+- **CullingAnalysis** (`Services/CullingService.swift`): Rich Codable output struct replacing CullingScore — carries `version`, `overallScore`, all signal scores, `duplicateGroupId`, `duplicateRank` (1-indexed), `suggestedRating`, `suggestedFlag`, and `rejectedReasons` (e.g. "blurry", "duplicate_non_best", "exposure_clipped", "poor_composition")
+- **scoreWithAnalysis()**: New primary scoring API accepting pre-built `FeaturePrintIndex` prints to avoid duplicate feature print generation; returns `[UUID: CullingAnalysis]`
+- **buildDuplicateGroupsWithRank()**: Assigns 1-indexed rank within each duplicate group using 3-signal weighted sort (sharpness + saliency + exposure)
+- **FeaturePrintIndex reuse**: Culling pipeline shares the session-scoped feature print cache with SmartSync
+
+#### AI Culling v1.1 — Data Contract Persistence (E3)
+- **Sidecar schema v8**: `SidecarFile.cullingAnalysis: CullingAnalysis?` — optional field preserving full culling metadata across app restarts; backward compatible with v7 sidecars
+- **applyCullingResults()**: Now writes both legacy `rating/flag` and full `CullingAnalysis` to sidecar via `SidecarService`
+- **startAICulling()**: Uses `scoreWithAnalysis()` with `FeaturePrintIndex.shared.allPrints()` for cache reuse
+
 ### Fixed
 - **GeminiColorService**: Decode response via `APIResponse<ColorGradeResponse>` wrapper (was decoding bare struct → key-not-found crash)
 - **GeminiColorService**: HTTP 401 → `.authenticationRequired`, 402 → `.insufficientCredits` (was generic `.invalidResponse`)
@@ -50,6 +61,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New test file `rawctlTests/GeminiColorServiceTests.swift`: 17 tests covering `ColorGradeDelta.applying`, `diff`, `hasChanges`, `APIResponse<ColorGradeResponse>` JSON decoding, and `AppState.applyColorGrade`
 - `AppFeaturesProGatingTests`: Added `aiColorGradingEnabled` lockstep assertions; all 25 new + existing tests pass
 - 13 new culling tests: exposure scoring boundaries, calibration regression, synthetic fixture integration (overexposed/underexposed ordering)
+- 17 new culling tests (E2+E3): CullingAnalysis rejection reasons, Codable roundtrip, sidecar v8 backward compatibility, duplicate ranking, save-load idempotency
+- Deprecated: `CullingService.score()` and `computeFinalScore()` in favor of `scoreWithAnalysis()` and `buildAnalysis()`
 
 ## [1.5.0] - 2026-02-24
 
