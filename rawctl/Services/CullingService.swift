@@ -185,6 +185,70 @@ actor CullingService {
         return results
     }
 
+    /// Score a batch of assets using pre-built feature prints from FeaturePrintIndex.
+    ///
+    /// Avoids regenerating feature prints when an index already exists (e.g., from SmartSync).
+    /// Falls back to internal generation for assets missing from the index.
+    ///
+    /// - Parameters:
+    ///   - assets: The photos to score.
+    ///   - existingPrints: Pre-computed feature prints keyed by asset ID.
+    ///   - onProgress: Called with `(stepsCompleted, totalSteps)` after each step.
+    /// - Returns: A dictionary mapping `PhotoAsset.id -> CullingAnalysis`.
+    func scoreWithAnalysis(
+        assets: [PhotoAsset],
+        existingPrints: [UUID: VNFeaturePrintObservation] = [:],
+        onProgress: @escaping @Sendable (Int, Int) -> Void
+    ) async -> [UUID: CullingAnalysis] {
+        guard !assets.isEmpty else { return [:] }
+
+        let totalSteps = assets.count * 2
+
+        // ── Phase 1: Feature prints + sharpness/saliency/exposure ──
+        var featurePrints: [UUID: VNFeaturePrintObservation] = existingPrints
+        var rawScores: [UUID: (sharpness: Double, saliency: Double, exposure: Double)] = [:]
+        featurePrints.reserveCapacity(assets.count)
+        rawScores.reserveCapacity(assets.count)
+
+        for (idx, asset) in assets.enumerated() {
+            onProgress(idx, totalSteps)
+            guard let image = loadThumbnail(for: asset) else { continue }
+            // Reuse existing print if available; generate only if missing.
+            if featurePrints[asset.id] == nil {
+                if let fp = generateFeaturePrint(from: image) {
+                    featurePrints[asset.id] = fp
+                }
+            }
+            rawScores[asset.id] = (
+                sharpness: scoreSharpness(image: image),
+                saliency:  scoreSaliency(image: image),
+                exposure:  scoreExposure(image: image)
+            )
+        }
+
+        // ── Phase 2: Build groups with rank, then build analysis ──
+        let groups = buildDuplicateGroupsWithRank(prints: featurePrints, scores: rawScores)
+
+        var results: [UUID: CullingAnalysis] = [:]
+        results.reserveCapacity(assets.count)
+
+        for (idx, asset) in assets.enumerated() {
+            onProgress(assets.count + idx, totalSteps)
+            guard let raw = rawScores[asset.id] else { continue }
+            let group = groups[asset.id] ?? (groupId: nil, rank: nil, isRepresentative: true)
+            results[asset.id] = buildAnalysis(
+                sharpness: raw.sharpness,
+                saliency:  raw.saliency,
+                exposure:  raw.exposure,
+                groupId:   group.groupId,
+                duplicateRank: group.rank,
+                isRepresentative: group.isRepresentative
+            )
+        }
+
+        return results
+    }
+
     // MARK: - Image Loading
 
     /// Load a ≤512 px thumbnail via ImageIO.
@@ -442,6 +506,81 @@ actor CullingService {
                 })
                 for member in members {
                     result[member] = (groupId: groupId, isRepresentative: member == rep)
+                }
+            }
+        }
+        return result
+    }
+
+    /// Build duplicate groups with ranked members (1 = best in group).
+    /// Returns dict mapping assetId -> (groupId, rank, isRepresentative).
+    private func buildDuplicateGroupsWithRank(
+        prints: [UUID: VNFeaturePrintObservation],
+        scores: [UUID: (sharpness: Double, saliency: Double, exposure: Double)]
+    ) -> [UUID: (groupId: UUID?, rank: Int?, isRepresentative: Bool)] {
+        // Union-Find: same algorithm as buildDuplicateGroups.
+        var parent: [UUID: UUID] = Dictionary(uniqueKeysWithValues: prints.keys.map { ($0, $0) })
+
+        func find(_ id: UUID) -> UUID {
+            var root = id
+            while parent[root] != root { root = parent[root] ?? root }
+            var node = id
+            while node != root {
+                let next = parent[node] ?? root
+                parent[node] = root
+                node = next
+            }
+            return root
+        }
+
+        func union(_ a: UUID, _ b: UUID) {
+            let ra = find(a), rb = find(b)
+            if ra != rb { parent[ra] = rb }
+        }
+
+        let ids = Array(prints.keys)
+        for i in 0..<ids.count {
+            guard let pi = prints[ids[i]] else { continue }
+            for j in (i + 1)..<ids.count {
+                guard let pj = prints[ids[j]] else { continue }
+                var distance: Float = 0
+                if (try? pi.computeDistance(&distance, to: pj)) != nil,
+                   distance < config.duplicateDistanceThreshold {
+                    union(ids[i], ids[j])
+                }
+            }
+        }
+
+        var groups: [UUID: [UUID]] = [:]
+        for id in ids {
+            let root = find(id)
+            groups[root, default: []].append(id)
+        }
+
+        let cfg = CullingConfig.default
+        var result: [UUID: (groupId: UUID?, rank: Int?, isRepresentative: Bool)] = [:]
+
+        for (_, members) in groups {
+            if members.count == 1 {
+                result[members[0]] = (groupId: nil, rank: nil, isRepresentative: true)
+            } else {
+                let groupId = UUID()
+                // Sort by combined score descending to assign rank.
+                let sorted = members.sorted { a, b in
+                    let sa = (scores[a]?.sharpness ?? 0) * cfg.sharpnessWeight
+                           + (scores[a]?.saliency ?? 0)  * cfg.saliencyWeight
+                           + (scores[a]?.exposure ?? 0)   * cfg.exposureWeight
+                    let sb = (scores[b]?.sharpness ?? 0) * cfg.sharpnessWeight
+                           + (scores[b]?.saliency ?? 0)  * cfg.saliencyWeight
+                           + (scores[b]?.exposure ?? 0)   * cfg.exposureWeight
+                    return sa > sb
+                }
+                for (rank, member) in sorted.enumerated() {
+                    result[member] = (
+                        groupId: groupId,
+                        rank: rank + 1,  // 1-indexed
+                        isRepresentative: rank == 0
+                    )
                 }
             }
         }

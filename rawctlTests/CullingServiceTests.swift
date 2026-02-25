@@ -373,6 +373,44 @@ struct CullingServiceTests {
         #expect(decoded == original)
     }
 
+    // MARK: - Duplicate ranking
+
+    @Test func duplicateRankAssignedCorrectly() {
+        let gid = UUID()
+        // Rank 1 = best (representative)
+        let best = CullingService.shared.buildAnalysis(
+            sharpness: 0.9, saliency: 0.8, exposure: 1.0,
+            groupId: gid, duplicateRank: 1, isRepresentative: true
+        )
+        #expect(best.duplicateRank == 1)
+        #expect(best.suggestedFlag != .reject)
+
+        // Rank 2 = second best (non-representative)
+        let second = CullingService.shared.buildAnalysis(
+            sharpness: 0.7, saliency: 0.6, exposure: 0.9,
+            groupId: gid, duplicateRank: 2, isRepresentative: false
+        )
+        #expect(second.duplicateRank == 2)
+        #expect(second.suggestedFlag == .reject)
+    }
+
+    @Test func uniquePhotoHasNilRank() {
+        let analysis = CullingService.shared.buildAnalysis(
+            sharpness: 0.8, saliency: 0.7, exposure: 1.0,
+            groupId: nil, duplicateRank: nil, isRepresentative: true
+        )
+        #expect(analysis.duplicateRank == nil)
+        #expect(analysis.duplicateGroupId == nil)
+    }
+
+    @Test func scoreWithAnalysisReturnsAnalysisType() async {
+        let results = await CullingService.shared.scoreWithAnalysis(
+            assets: [],
+            onProgress: { _, _ in }
+        )
+        #expect(results.isEmpty)
+    }
+
     // MARK: - Helpers
 
     private func makeCullingScore(
