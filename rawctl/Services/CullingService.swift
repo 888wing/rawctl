@@ -54,6 +54,11 @@ struct CullingConfig: Sendable {
     // MARK: - Duplicate Detection
     let duplicateDistanceThreshold: Float
 
+    // MARK: - Rejection Reason Thresholds
+    let blurryThreshold: Double
+    let poorCompositionThreshold: Double
+    let exposureClippedThreshold: Double
+
     static let `default` = CullingConfig(
         sharpnessWeight: 0.45,
         saliencyWeight: 0.30,
@@ -70,7 +75,11 @@ struct CullingConfig: Sendable {
         highlightPenaltyRate: 8.0,
         shadowPenaltyRate: 5.0,
 
-        duplicateDistanceThreshold: 0.15
+        duplicateDistanceThreshold: 0.15,
+
+        blurryThreshold: 0.25,
+        poorCompositionThreshold: 0.20,
+        exposureClippedThreshold: 0.40
     )
 }
 
@@ -662,13 +671,13 @@ actor CullingService {
         if isNonRepDuplicate {
             reasons.append("duplicate_non_best")
         }
-        if sharpness < 0.25 {
+        if sharpness < cfg.blurryThreshold {
             reasons.append("blurry")
         }
-        if saliency < 0.20 {
+        if saliency < cfg.poorCompositionThreshold {
             reasons.append("poor_composition")
         }
-        if exposure < 0.40 {
+        if exposure < cfg.exposureClippedThreshold {
             reasons.append("exposure_clipped")
         }
 
