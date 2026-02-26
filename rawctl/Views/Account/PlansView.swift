@@ -76,6 +76,15 @@ struct PlansView: View {
     
     private var plansListView: some View {
         VStack(spacing: 12) {
+            Text(
+                AppDistributionChannel.current.usesStoreKitBilling
+                ? "All upgrades in this build are processed with Apple In-App Purchase."
+                : "Manage plans and billing through your secure browser checkout."
+            )
+            .font(.system(size: 11))
+            .foregroundColor(.secondary)
+            .multilineTextAlignment(.leading)
+
             ForEach(accountService.plans) { plan in
                 PlanCard(
                     plan: plan,
@@ -85,6 +94,23 @@ struct PlansView: View {
                     await selectPlan(plan)
                 }
             }
+
+            if AppDistributionChannel.current.usesStoreKitBilling {
+                Button {
+                    Task { await handleRestorePurchases() }
+                } label: {
+                    HStack {
+                        Image(systemName: "arrow.clockwise.circle")
+                        Text("Restore Purchases")
+                        Spacer()
+                    }
+                    .font(.system(size: 12, weight: .medium))
+                }
+                .buttonStyle(.bordered)
+                .disabled(isLoading)
+            }
+
+            legalLinksFooter
         }
         .padding()
     }
@@ -106,6 +132,8 @@ struct PlansView: View {
                     await purchaseCreditsPack(pack)
                 }
             }
+
+            legalLinksFooter
         }
         .padding()
     }
@@ -119,7 +147,7 @@ struct PlansView: View {
         defer { isLoading = false }
         
         do {
-            try await accountService.createSubscriptionCheckout(plan: plan.name)
+            try await accountService.purchasePlan(named: plan.name)
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
@@ -131,11 +159,40 @@ struct PlansView: View {
         defer { isLoading = false }
         
         do {
-            try await accountService.createCreditsCheckout(pack: pack.name)
+            try await accountService.purchaseCreditsPack(named: pack.name)
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func handleRestorePurchases() async {
+        isLoading = true
+        defer { isLoading = false }
+
+        do {
+            try await accountService.restorePurchases()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private var legalLinksFooter: some View {
+        VStack(spacing: 6) {
+            if let notice = accountService.billingNotice, !notice.isEmpty {
+                Text(notice)
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+            }
+
+            HStack(spacing: 14) {
+                Link("Privacy", destination: AppLegalLinks.privacyPolicy)
+                Link("Terms", destination: AppLegalLinks.termsOfService)
+                Link("Support", destination: AppLegalLinks.support)
+            }
+            .font(.system(size: 10, weight: .medium))
+        }
+        .padding(.top, 4)
     }
 }
 

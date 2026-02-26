@@ -142,7 +142,14 @@ final class ErrorHandler: ObservableObject {
                 return .fatal
             case .networkError, .rateLimited:
                 return .recoverable
-            case .invalidResponse, .insufficientCredits, .securityBlock:
+            case .invalidResponse,
+                    .insufficientCredits,
+                    .securityBlock,
+                    .externalCheckoutNotAllowed,
+                    .billingProductUnavailable,
+                    .purchasePending,
+                    .purchaseCancelled,
+                    .accountDeletionConfirmationMismatch:
                 return .warning
             }
         }

@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import AuthenticationServices
 import GoogleSignIn
 import GoogleSignInSwift
 
@@ -20,6 +21,7 @@ struct SignInView: View {
     @State private var isLoading = false
     @State private var loadingMessage = ""
     @State private var googleSignInTask: Task<Void, Never>?
+    @State private var appleSignInTask: Task<Void, Never>?
 
     enum SignInStep {
         case email
@@ -90,7 +92,7 @@ struct SignInView: View {
                             .foregroundColor(.white)
 
                         Button("Cancel") {
-                            cancelGoogleSignIn()
+                            cancelInFlightSignIn()
                         }
                         .buttonStyle(.bordered)
                         .tint(.white)
@@ -115,12 +117,13 @@ struct SignInView: View {
         }
         .onDisappear {
             // Clean up any pending tasks
-            googleSignInTask?.cancel()
+            cancelInFlightSignIn()
         }
     }
 
-    private func cancelGoogleSignIn() {
+    private func cancelInFlightSignIn() {
         googleSignInTask?.cancel()
+        appleSignInTask?.cancel()
         isLoading = false
         loadingMessage = ""
     }
@@ -189,6 +192,17 @@ struct SignInView: View {
                     .frame(height: 1)
             }
 
+            SignInWithAppleButton(.continue) { request in
+                request.requestedScopes = [.email, .fullName]
+            } onCompletion: { result in
+                handleAppleSignIn(result)
+            }
+            .signInWithAppleButtonStyle(.black)
+            .frame(maxWidth: .infinity)
+            .frame(height: 44)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .disabled(isLoading)
+
             // Google Sign-In button
             Button {
                 handleGoogleSignIn()
@@ -204,6 +218,21 @@ struct SignInView: View {
             }
             .buttonStyle(.bordered)
             .disabled(isLoading)
+
+            VStack(spacing: 6) {
+                Text("By continuing, you agree to our terms and privacy policy.")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+
+                HStack(spacing: 14) {
+                    Link("Privacy", destination: AppLegalLinks.privacyPolicy)
+                    Link("Terms", destination: AppLegalLinks.termsOfService)
+                    Link("Support", destination: AppLegalLinks.support)
+                }
+                .font(.system(size: 10, weight: .medium))
+            }
+            .padding(.top, 4)
         }
     }
 
@@ -395,6 +424,48 @@ struct SignInView: View {
                             self.loadingMessage = ""
                             self.errorMessage = "Sign-in failed: \(error.localizedDescription)"
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    private func handleAppleSignIn(_ result: Result<ASAuthorization, Error>) {
+        switch result {
+        case .failure(let error):
+            let nsError = error as NSError
+            if nsError.domain == ASAuthorizationError.errorDomain,
+               nsError.code == ASAuthorizationError.canceled.rawValue {
+                return
+            }
+            errorMessage = "Apple Sign-In failed: \(error.localizedDescription)"
+
+        case .success(let auth):
+            guard let credential = auth.credential as? ASAuthorizationAppleIDCredential,
+                  let tokenData = credential.identityToken,
+                  let identityToken = String(data: tokenData, encoding: .utf8) else {
+                errorMessage = "Failed to get Apple credentials."
+                return
+            }
+
+            isLoading = true
+            loadingMessage = "Signing in..."
+
+            appleSignInTask = Task {
+                do {
+                    try await accountService.signInWithApple(
+                        identityToken: identityToken,
+                        email: credential.email
+                    )
+                    await MainActor.run {
+                        isLoading = false
+                        loadingMessage = ""
+                    }
+                } catch {
+                    await MainActor.run {
+                        isLoading = false
+                        loadingMessage = ""
+                        errorMessage = "Sign-in failed: \(error.localizedDescription)"
                     }
                 }
             }

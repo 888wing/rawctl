@@ -7,6 +7,8 @@
 
 import Foundation
 import AuthenticationServices
+import AppKit
+import StoreKit
 
 // MARK: - API Response Types
 
@@ -23,6 +25,12 @@ struct APIError: Codable {
 
 struct AuthResponse: Codable {
     let user: UserInfo
+    let accessToken: String
+    let refreshToken: String
+}
+
+/// Response from `/auth/refresh` — does NOT include `user`.
+struct RefreshTokenResponse: Codable {
     let accessToken: String
     let refreshToken: String
 }
@@ -65,6 +73,21 @@ struct PlanInfo: Codable, Identifiable {
     let credits: Int
     let price: Double
     let priceFormatted: String
+    let storeKitProductId: String?
+
+    init(
+        name: String,
+        credits: Int,
+        price: Double,
+        priceFormatted: String,
+        storeKitProductId: String? = nil
+    ) {
+        self.name = name
+        self.credits = credits
+        self.price = price
+        self.priceFormatted = priceFormatted
+        self.storeKitProductId = storeKitProductId
+    }
     
     var id: String { name }
 }
@@ -74,6 +97,21 @@ struct CreditPackInfo: Codable, Identifiable {
     let credits: Int
     let price: Double
     let priceFormatted: String
+    let storeKitProductId: String?
+
+    init(
+        name: String,
+        credits: Int,
+        price: Double,
+        priceFormatted: String,
+        storeKitProductId: String? = nil
+    ) {
+        self.name = name
+        self.credits = credits
+        self.price = price
+        self.priceFormatted = priceFormatted
+        self.storeKitProductId = storeKitProductId
+    }
     
     var id: String { name }
 }
@@ -96,15 +134,25 @@ final class AccountService: ObservableObject {
     @Published var creditsPacks: [CreditPackInfo] = []
     @Published var errorMessage: String?
     @Published var userStyleProfile: UserStyleProfile?
+    @Published var billingNotice: String?
 
     // Entitlement sync control (used after browser-based checkout returns)
     private var lastEntitlementRefreshAt: Date?
     private var checkoutSyncTask: Task<Void, Never>?
     private static let entitlementRefreshThrottleSeconds: TimeInterval = 8
     private static let checkoutSyncWindowSeconds: TimeInterval = 180
-
+    
+    // Guard against recursive refresh attempts
+    private var isRefreshingToken = false
     // Local credit reservation for in-flight AI operations
     private var reservedCredits: Int = 0
+    private let cachedCreditsBalanceKey = "rawctl_cached_credits_balance_v1"
+    private lazy var billingProvider: any BillingProvider = {
+        if AppDistributionChannel.current.usesStoreKitBilling {
+            return StoreKitBillingProvider()
+        }
+        return DirectBillingProvider()
+    }()
 
     // Token storage
     private var accessToken: String? {
@@ -130,6 +178,8 @@ final class AccountService: ObservableObject {
     }
     
     init() {
+        restoreCachedCreditsBalance()
+
         // Check if we have tokens on launch
         if accessToken != nil {
             isAuthenticated = true
@@ -171,9 +221,7 @@ final class AccountService: ObservableObject {
         currentUser = data.user
         isAuthenticated = true
         
-        // Load additional data
-        await loadCreditsBalance()
-        await loadPlans()
+        await postAuthenticationBootstrap()
     }
     
     /// Sign in with Google
@@ -195,8 +243,7 @@ final class AccountService: ObservableObject {
         currentUser = data.user
         isAuthenticated = true
         
-        await loadCreditsBalance()
-        await loadPlans()
+        await postAuthenticationBootstrap()
     }
     
     /// Sign in with Apple
@@ -223,8 +270,7 @@ final class AccountService: ObservableObject {
         currentUser = data.user
         isAuthenticated = true
         
-        await loadCreditsBalance()
-        await loadPlans()
+        await postAuthenticationBootstrap()
     }
     
     /// Sign out
@@ -236,7 +282,16 @@ final class AccountService: ObservableObject {
         refreshToken = nil
         currentUser = nil
         creditsBalance = nil
+        billingNotice = nil
         isAuthenticated = false
+    }
+
+    private func postAuthenticationBootstrap() async {
+        if AppDistributionChannel.current.usesStoreKitBilling {
+            await billingProvider.syncEntitlements(accountService: self, reason: "post_auth")
+        }
+        await loadCreditsBalance()
+        await loadPlans()
     }
     
     // MARK: - User Data
@@ -287,14 +342,19 @@ final class AccountService: ObservableObject {
 
         do {
             let response: APIResponse<CreditsBalance> = try await get(endpoint: "/user/credits")
-            creditsBalance = response.data
-            lastEntitlementRefreshAt = Date()
+            if let balance = response.data {
+                creditsBalance = balance
+                cacheCreditsBalance(balance)
+                lastEntitlementRefreshAt = Date()
+            }
         } catch AccountError.unauthorized {
             // Token expired and refresh failed, sign out
             print("[AccountService] Unauthorized loading credits, signing out")
             signOut()
         } catch {
             print("[AccountService] Failed to load credits: \(error)")
+            // Keep last known entitlements for offline use.
+            restoreCachedCreditsBalance()
         }
     }
     
@@ -313,12 +373,38 @@ final class AccountService: ObservableObject {
             // Keep a deterministic fallback so pricing UI is never empty.
             applyFallbackPlansIfNeeded()
         }
+
+        await billingProvider.refreshCatalog(accountService: self)
     }
     
     // MARK: - Checkout
+
+    /// Channel-aware entrypoint for plan purchase.
+    func purchasePlan(named plan: String) async throws {
+        try await billingProvider.purchasePlan(named: plan, accountService: self)
+    }
+
+    /// Channel-aware entrypoint for one-off credits purchase.
+    func purchaseCreditsPack(named pack: String) async throws {
+        try await billingProvider.purchaseCreditsPack(named: pack, accountService: self)
+    }
+
+    /// Channel-aware "manage billing" action.
+    func openBillingPortal() async throws {
+        try await billingProvider.openManageSubscription(accountService: self)
+    }
+
+    /// MAS restore purchases entrypoint.
+    func restorePurchases() async throws {
+        try await billingProvider.restorePurchases(accountService: self)
+    }
     
     /// Create subscription checkout and open in browser
     func createSubscriptionCheckout(plan: String) async throws {
+        guard AppDistributionChannel.current.allowsExternalCheckout else {
+            throw AccountError.externalCheckoutNotAllowed
+        }
+
         isLoading = true
         defer { isLoading = false }
         
@@ -338,6 +424,10 @@ final class AccountService: ObservableObject {
     
     /// Create credits pack checkout and open in browser
     func createCreditsCheckout(pack: String) async throws {
+        guard AppDistributionChannel.current.allowsExternalCheckout else {
+            throw AccountError.externalCheckoutNotAllowed
+        }
+
         isLoading = true
         defer { isLoading = false }
         
@@ -355,8 +445,12 @@ final class AccountService: ObservableObject {
         startCheckoutSyncWindow(reason: "credits_checkout_opened")
     }
     
-    /// Open billing portal
-    func openBillingPortal() async throws {
+    /// Direct-channel billing portal.
+    func openDirectBillingPortal() async throws {
+        guard AppDistributionChannel.current.allowsExternalCheckout else {
+            throw AccountError.externalCheckoutNotAllowed
+        }
+
         isLoading = true
         defer { isLoading = false }
         
@@ -383,6 +477,10 @@ final class AccountService: ObservableObject {
            let last = lastEntitlementRefreshAt,
            Date().timeIntervalSince(last) < Self.entitlementRefreshThrottleSeconds {
             return
+        }
+
+        if AppDistributionChannel.current.usesStoreKitBilling {
+            await billingProvider.syncEntitlements(accountService: self, reason: reason)
         }
 
         lastEntitlementRefreshAt = Date()
@@ -418,6 +516,90 @@ final class AccountService: ObservableObject {
         }
 
         return false
+    }
+
+    // MARK: - Account Deletion
+
+    /// Sends a short-lived re-auth code to the signed-in email before destructive delete.
+    func sendAccountDeletionCode() async throws {
+        guard let email = currentUser?.email else {
+            throw AccountError.unauthorized
+        }
+
+        isLoading = true
+        defer { isLoading = false }
+
+        let _: APIResponse<EmptyResponse> = try await post(
+            endpoint: "/auth/magic-link",
+            body: [
+                "email": email,
+                "purpose": "account_deletion"
+            ],
+            authenticated: true
+        )
+    }
+
+    /// Permanently deletes account after in-app re-auth + explicit confirmation.
+    func deleteAccount(verificationCode: String, typedEmail: String) async throws {
+        guard let currentEmail = currentUser?.email else {
+            throw AccountError.unauthorized
+        }
+
+        guard typedEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() == currentEmail.lowercased() else {
+            throw AccountError.accountDeletionConfirmationMismatch
+        }
+
+        isLoading = true
+        defer { isLoading = false }
+
+        let payload: [String: Any] = [
+            "email": currentEmail,
+            "code": verificationCode,
+            "confirmDelete": true
+        ]
+
+        do {
+            let _: APIResponse<EmptyResponse> = try await post(
+                endpoint: "/user/delete",
+                body: payload,
+                authenticated: true
+            )
+        } catch {
+            // Backward compatibility for older backend routes.
+            let _: APIResponse<EmptyResponse> = try await post(
+                endpoint: "/user/account/delete",
+                body: payload,
+                authenticated: true
+            )
+        }
+
+        UserDefaults.standard.set(
+            Date().timeIntervalSince1970,
+            forKey: "rawctl_account_deletion_requested_at"
+        )
+        signOut()
+    }
+
+    // MARK: - StoreKit Verification Bridge
+
+    /// Sends signed App Store transaction payloads to backend for server-side verification.
+    func syncStoreKitTransactionsWithBackend(
+        signedTransactions: [String],
+        reason: String
+    ) async throws {
+        guard isAuthenticated else { return }
+        guard !signedTransactions.isEmpty else { return }
+
+        let _: APIResponse<EmptyResponse> = try await post(
+            endpoint: "/billing/app-store/sync",
+            body: [
+                "channel": "mas",
+                "reason": reason,
+                "transactions": signedTransactions
+            ],
+            authenticated: true
+        )
     }
     
     // MARK: - Pro Subscription
@@ -489,10 +671,61 @@ final class AccountService: ObservableObject {
         if plans.isEmpty {
             plans = [
                 PlanInfo(name: "free", credits: 0, price: 0, priceFormatted: "$0"),
-                PlanInfo(name: "pro_monthly", credits: 0, price: 15, priceFormatted: "$15"),
-                PlanInfo(name: "pro_yearly", credits: 0, price: 120, priceFormatted: "$120")
+                PlanInfo(
+                    name: "pro_monthly",
+                    credits: 0,
+                    price: 15,
+                    priceFormatted: "$15",
+                    storeKitProductId: "com.latent.pro.monthly"
+                ),
+                PlanInfo(
+                    name: "pro_yearly",
+                    credits: 0,
+                    price: 120,
+                    priceFormatted: "$120",
+                    storeKitProductId: "com.latent.pro.yearly"
+                )
             ]
         }
+
+        if creditsPacks.isEmpty {
+            creditsPacks = [
+                CreditPackInfo(
+                    name: "credits_100",
+                    credits: 100,
+                    price: 4.99,
+                    priceFormatted: "$4.99",
+                    storeKitProductId: "com.latent.credits.100"
+                ),
+                CreditPackInfo(
+                    name: "credits_300",
+                    credits: 300,
+                    price: 11.99,
+                    priceFormatted: "$11.99",
+                    storeKitProductId: "com.latent.credits.300"
+                ),
+                CreditPackInfo(
+                    name: "credits_1000",
+                    credits: 1000,
+                    price: 29.99,
+                    priceFormatted: "$29.99",
+                    storeKitProductId: "com.latent.credits.1000"
+                )
+            ]
+        }
+    }
+
+    private func cacheCreditsBalance(_ balance: CreditsBalance) {
+        guard let encoded = try? JSONEncoder().encode(balance) else { return }
+        UserDefaults.standard.set(encoded, forKey: cachedCreditsBalanceKey)
+    }
+
+    private func restoreCachedCreditsBalance() {
+        guard let data = UserDefaults.standard.data(forKey: cachedCreditsBalanceKey),
+              let cached = try? JSONDecoder().decode(CreditsBalance.self, from: data) else {
+            return
+        }
+        creditsBalance = cached
     }
 
     private func startCheckoutSyncWindow(reason: String) {
@@ -666,14 +899,18 @@ final class AccountService: ObservableObject {
     
     private func refreshAccessToken() async throws -> Bool {
         guard let token = refreshToken else { return false }
-        
-        let response: APIResponse<AuthResponse> = try await post(
+        guard !isRefreshingToken else { return false }
+
+        isRefreshingToken = true
+        defer { isRefreshingToken = false }
+
+        let response: APIResponse<RefreshTokenResponse> = try await post(
             endpoint: "/auth/refresh",
             body: ["refreshToken": token]
         )
-        
+
         guard let data = response.data else { return false }
-        
+
         accessToken = data.accessToken
         refreshToken = data.refreshToken
         return true
@@ -690,6 +927,11 @@ enum AccountError: LocalizedError {
     case rateLimited(retryAfter: Int)
     case securityBlock(reason: String)
     case tokenReplayDetected
+    case externalCheckoutNotAllowed
+    case billingProductUnavailable
+    case purchasePending
+    case purchaseCancelled
+    case accountDeletionConfirmationMismatch
 
     var errorDescription: String? {
         switch self {
@@ -700,6 +942,11 @@ enum AccountError: LocalizedError {
         case .rateLimited(let retryAfter): return "Too many requests. Please wait \(retryAfter) seconds."
         case .securityBlock(let reason): return "Request blocked: \(reason)"
         case .tokenReplayDetected: return "Security alert: Please sign in again."
+        case .externalCheckoutNotAllowed: return "This build uses in-app purchases only."
+        case .billingProductUnavailable: return "Pricing is currently unavailable. Please try again."
+        case .purchasePending: return "Purchase is pending approval."
+        case .purchaseCancelled: return "Purchase was cancelled."
+        case .accountDeletionConfirmationMismatch: return "Email confirmation does not match your account."
         }
     }
 
@@ -809,4 +1056,249 @@ struct UserStyleProfile: Codable {
     var preferredMoods: [String] = []
     /// Moods the user rarely accepts.
     var avoidedMoods: [String] = []
+}
+
+// MARK: - Billing Abstraction
+
+@MainActor
+protocol BillingProvider {
+    var channel: AppDistributionChannel { get }
+
+    func refreshCatalog(accountService: AccountService) async
+    func purchasePlan(named: String, accountService: AccountService) async throws
+    func purchaseCreditsPack(named: String, accountService: AccountService) async throws
+    func openManageSubscription(accountService: AccountService) async throws
+    func restorePurchases(accountService: AccountService) async throws
+    func syncEntitlements(accountService: AccountService, reason: String) async
+}
+
+@MainActor
+struct DirectBillingProvider: BillingProvider {
+    let channel: AppDistributionChannel = .direct
+
+    func refreshCatalog(accountService: AccountService) async {
+        _ = accountService
+    }
+
+    func purchasePlan(named: String, accountService: AccountService) async throws {
+        try await accountService.createSubscriptionCheckout(plan: named)
+    }
+
+    func purchaseCreditsPack(named: String, accountService: AccountService) async throws {
+        try await accountService.createCreditsCheckout(pack: named)
+    }
+
+    func openManageSubscription(accountService: AccountService) async throws {
+        try await accountService.openDirectBillingPortal()
+    }
+
+    func restorePurchases(accountService: AccountService) async throws {
+        await accountService.refreshEntitlementsIfNeeded(force: true, reason: "direct_manual_restore")
+        accountService.billingNotice = "Account status refreshed."
+    }
+
+    func syncEntitlements(accountService: AccountService, reason: String) async {
+        _ = accountService
+        _ = reason
+    }
+}
+
+@MainActor
+struct StoreKitBillingProvider: BillingProvider {
+    let channel: AppDistributionChannel = .mas
+
+    private let planProductMap: [String: String] = [
+        "pro": "com.latent.pro.monthly",
+        "pro_monthly": "com.latent.pro.monthly",
+        "pro_yearly": "com.latent.pro.yearly",
+        "yearly": "com.latent.pro.yearly",
+        "annual": "com.latent.pro.yearly"
+    ]
+
+    private let creditPackProductMap: [String: String] = [
+        "credits_100": "com.latent.credits.100",
+        "credits_300": "com.latent.credits.300",
+        "credits_1000": "com.latent.credits.1000"
+    ]
+
+    func refreshCatalog(accountService: AccountService) async {
+        let ids = Set(
+            accountService.plans.compactMap(productId(for:)) +
+            accountService.creditsPacks.compactMap(productId(for:))
+        )
+        guard !ids.isEmpty else { return }
+
+        do {
+            let products = try await Product.products(for: Array(ids))
+            guard !products.isEmpty else { return }
+
+            let productsById = Dictionary(uniqueKeysWithValues: products.map { ($0.id, $0) })
+
+            accountService.plans = accountService.plans.map { plan in
+                guard let id = productId(for: plan),
+                      let product = productsById[id] else {
+                    return plan
+                }
+                return PlanInfo(
+                    name: plan.name,
+                    credits: plan.credits,
+                    price: NSDecimalNumber(decimal: product.price).doubleValue,
+                    priceFormatted: product.displayPrice,
+                    storeKitProductId: id
+                )
+            }
+
+            accountService.creditsPacks = accountService.creditsPacks.map { pack in
+                guard let id = productId(for: pack),
+                      let product = productsById[id] else {
+                    return pack
+                }
+                return CreditPackInfo(
+                    name: pack.name,
+                    credits: pack.credits,
+                    price: NSDecimalNumber(decimal: product.price).doubleValue,
+                    priceFormatted: product.displayPrice,
+                    storeKitProductId: id
+                )
+            }
+        } catch {
+            print("[StoreKitBillingProvider] Failed to refresh catalog: \(error)")
+        }
+    }
+
+    func purchasePlan(named: String, accountService: AccountService) async throws {
+        guard let plan = accountService.plans.first(where: { $0.name.caseInsensitiveCompare(named) == .orderedSame }),
+              let productId = productId(for: plan) else {
+            throw AccountError.billingProductUnavailable
+        }
+
+        try await purchase(productId: productId, accountService: accountService, reason: "mas_plan_purchase")
+    }
+
+    func purchaseCreditsPack(named: String, accountService: AccountService) async throws {
+        guard let pack = accountService.creditsPacks.first(where: { $0.name.caseInsensitiveCompare(named) == .orderedSame }),
+              let productId = productId(for: pack) else {
+            throw AccountError.billingProductUnavailable
+        }
+
+        try await purchase(productId: productId, accountService: accountService, reason: "mas_credits_purchase")
+    }
+
+    func openManageSubscription(accountService: AccountService) async throws {
+        _ = accountService
+        guard let subscriptionsURL = URL(string: "https://apps.apple.com/account/subscriptions") else {
+            throw AccountError.invalidResponse
+        }
+        NSWorkspace.shared.open(subscriptionsURL)
+    }
+
+    func restorePurchases(accountService: AccountService) async throws {
+        accountService.isLoading = true
+        defer { accountService.isLoading = false }
+
+        try await AppStore.sync()
+        await syncEntitlements(accountService: accountService, reason: "mas_restore")
+        await accountService.refreshEntitlementsIfNeeded(force: true, reason: "mas_restore")
+        accountService.billingNotice = "Purchases restored."
+    }
+
+    func syncEntitlements(accountService: AccountService, reason: String) async {
+        var signedTransactions: [String] = []
+
+        for await entitlement in Transaction.currentEntitlements {
+            switch entitlement {
+            case .verified(let transaction):
+                signedTransactions.append(transaction.jsonRepresentation.base64EncodedString())
+                if transaction.revocationDate != nil {
+                    accountService.billingNotice = "A previous purchase was revoked or refunded."
+                }
+            case .unverified(_, let error):
+                print("[StoreKitBillingProvider] Unverified entitlement: \(error)")
+            }
+        }
+
+        do {
+            try await accountService.syncStoreKitTransactionsWithBackend(
+                signedTransactions: signedTransactions,
+                reason: reason
+            )
+        } catch {
+            print("[StoreKitBillingProvider] Failed to sync transactions: \(error)")
+        }
+    }
+
+    private func purchase(
+        productId: String,
+        accountService: AccountService,
+        reason: String
+    ) async throws {
+        let products = try await Product.products(for: [productId])
+        guard let product = products.first else {
+            throw AccountError.billingProductUnavailable
+        }
+
+        accountService.isLoading = true
+        defer { accountService.isLoading = false }
+
+        let result = try await product.purchase()
+        switch result {
+        case .success(let verification):
+            let transaction = try verifiedTransaction(from: verification)
+            await transaction.finish()
+            await syncEntitlements(accountService: accountService, reason: reason)
+            await accountService.refreshEntitlementsIfNeeded(force: true, reason: reason)
+            accountService.billingNotice = "Purchase completed."
+
+        case .pending:
+            accountService.billingNotice = "Purchase is pending approval."
+            throw AccountError.purchasePending
+
+        case .userCancelled:
+            throw AccountError.purchaseCancelled
+
+        @unknown default:
+            throw AccountError.invalidResponse
+        }
+    }
+
+    private func verifiedTransaction(
+        from verification: VerificationResult<Transaction>
+    ) throws -> Transaction {
+        switch verification {
+        case .verified(let transaction):
+            return transaction
+        case .unverified:
+            throw AccountError.invalidResponse
+        }
+    }
+
+    private func productId(for plan: PlanInfo) -> String? {
+        if let explicit = normalized(plan.storeKitProductId) {
+            return explicit
+        }
+        return planProductMap[normalized(plan.name) ?? ""]
+    }
+
+    private func productId(for pack: CreditPackInfo) -> String? {
+        if let explicit = normalized(pack.storeKitProductId) {
+            return explicit
+        }
+
+        if let mapped = creditPackProductMap[normalized(pack.name) ?? ""] {
+            return mapped
+        }
+
+        let digits = pack.name.filter { $0.isNumber }
+        if !digits.isEmpty {
+            return creditPackProductMap["credits_\(digits)"]
+        }
+
+        return nil
+    }
+
+    private func normalized(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return trimmed.isEmpty ? nil : trimmed
+    }
 }

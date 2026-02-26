@@ -14,6 +14,7 @@ struct AccountSheet: View {
     @State private var showSignIn = false
     @State private var showPlans = false
     @State private var showCredits = false
+    @State private var showDeleteAccount = false
     
     var body: some View {
         VStack(spacing: 0) {
@@ -59,6 +60,9 @@ struct AccountSheet: View {
         }
         .sheet(isPresented: $showCredits) {
             CreditsDetailView()
+        }
+        .sheet(isPresented: $showDeleteAccount) {
+            DeleteAccountView()
         }
         .task {
             await accountService.refreshEntitlementsIfNeeded(force: true, reason: "account_sheet_open")
@@ -181,6 +185,32 @@ struct AccountSheet: View {
                     
                     Divider().padding(.leading, 44)
                 }
+
+                if AppDistributionChannel.current.usesStoreKitBilling {
+                    AccountSheetButton(
+                        icon: "arrow.clockwise.circle.fill",
+                        title: "Restore Purchases",
+                        subtitle: "Sync App Store transactions",
+                        iconColor: .secondary
+                    ) {
+                        Task {
+                            try? await accountService.restorePurchases()
+                        }
+                    }
+
+                    Divider().padding(.leading, 44)
+                }
+
+                AccountSheetButton(
+                    icon: "trash.fill",
+                    title: "Delete Account",
+                    subtitle: "Permanently remove account data",
+                    iconColor: .red
+                ) {
+                    showDeleteAccount = true
+                }
+
+                Divider().padding(.leading, 44)
                 
                 AccountSheetButton(
                     icon: "rectangle.portrait.and.arrow.right",

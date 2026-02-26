@@ -13,6 +13,7 @@ struct AccountView: View {
     @State private var showSignIn = false
     @State private var showPlans = false
     @State private var showCredits = false
+    @State private var showDeleteAccount = false
     
     var body: some View {
         VStack(spacing: 0) {
@@ -32,6 +33,9 @@ struct AccountView: View {
         }
         .sheet(isPresented: $showCredits) {
             CreditsDetailView()
+        }
+        .sheet(isPresented: $showDeleteAccount) {
+            DeleteAccountView()
         }
     }
     
@@ -126,6 +130,34 @@ struct AccountView: View {
                     }
                     .buttonStyle(AccountActionButtonStyle())
                 }
+
+                if AppDistributionChannel.current.usesStoreKitBilling {
+                    Button {
+                        Task {
+                            try? await accountService.restorePurchases()
+                        }
+                    } label: {
+                        HStack {
+                            Image(systemName: "arrow.clockwise.circle")
+                            Text("Restore Purchases")
+                            Spacer()
+                        }
+                        .font(.system(size: 12))
+                    }
+                    .buttonStyle(AccountActionButtonStyle())
+                }
+
+                Button(role: .destructive) {
+                    showDeleteAccount = true
+                } label: {
+                    HStack {
+                        Image(systemName: "trash")
+                        Text("Delete Account")
+                        Spacer()
+                    }
+                    .font(.system(size: 12))
+                }
+                .buttonStyle(AccountActionButtonStyle(isDestructive: true))
                 
                 // Sign Out
                 Button(role: .destructive) {
