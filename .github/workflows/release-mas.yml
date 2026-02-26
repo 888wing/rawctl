@@ -1,0 +1,66 @@
+name: Release MAS
+
+on:
+  push:
+    tags:
+      - "mas-v*"
+
+jobs:
+  build-mas:
+    name: Build MAS Archive
+    runs-on: macos-14
+    env:
+      VERSION: ${{ github.ref_name }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Normalize version
+        run: |
+          VERSION_STRIPPED="${VERSION#mas-v}"
+          echo "VERSION=${VERSION_STRIPPED}" >> "$GITHUB_ENV"
+
+      - name: Verify MAS compliance gates
+        run: ./scripts/verify-mas-compliance.sh
+
+      - name: Build MAS archive
+        env:
+          CODE_SIGN_IDENTITY: ${{ secrets.MACOS_CODE_SIGN_IDENTITY }}
+          DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          xcodebuild -project rawctl.xcodeproj \
+            -scheme rawctl-mas \
+            -configuration Release \
+            -archivePath mas.xcarchive \
+            archive \
+            CODE_SIGN_IDENTITY="${CODE_SIGN_IDENTITY}" \
+            DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM}" \
+            MARKETING_VERSION="${VERSION}"
+
+      - name: Export MAS archive for App Store Connect
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath mas.xcarchive \
+            -exportOptionsPlist exportOptions-mas.plist \
+            -exportPath ./export-mas
+
+      - name: Upload MAS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: latent-mas-${{ env.VERSION }}
+          path: export-mas/*.pkg
+
+      - name: Upload to App Store Connect (optional)
+        if: ${{ secrets.APPSTORE_CONNECT_API_KEY_ID != '' }}
+        env:
+          APPSTORE_CONNECT_API_KEY_ID: ${{ secrets.APPSTORE_CONNECT_API_KEY_ID }}
+          APPSTORE_CONNECT_API_ISSUER_ID: ${{ secrets.APPSTORE_CONNECT_API_ISSUER_ID }}
+          APPSTORE_CONNECT_API_PRIVATE_KEY_P8: ${{ secrets.APPSTORE_CONNECT_API_PRIVATE_KEY_P8 }}
+        run: |
+          mkdir -p ~/.private_keys
+          echo "$APPSTORE_CONNECT_API_PRIVATE_KEY_P8" > ~/.private_keys/AuthKey_${APPSTORE_CONNECT_API_KEY_ID}.p8
+          xcrun altool --upload-app \
+            --type macos \
+            --file "$(find export-mas -name '*.pkg' | head -n1)" \
+            --apiKey "$APPSTORE_CONNECT_API_KEY_ID" \
+            --apiIssuer "$APPSTORE_CONNECT_API_ISSUER_ID"

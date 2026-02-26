@@ -44,12 +44,14 @@ struct LatentApp: App {
         .commands {
             // App menu - Check for Updates
             CommandGroup(after: .appInfo) {
-                Button("Check for Updates…") {
-                    updaterManager.checkForUpdates()
-                }
-                .disabled(!updaterManager.canCheckForUpdates)
+                if AppDistributionChannel.current.supportsSparkleUpdates {
+                    Button("Check for Updates…") {
+                        updaterManager.checkForUpdates()
+                    }
+                    .disabled(!updaterManager.canCheckForUpdates)
 
-                Divider()
+                    Divider()
+                }
 
                 Button("What's New…") {
                     showWhatsNew = true

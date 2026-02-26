@@ -1,0 +1,53 @@
+name: Release Direct
+
+on:
+  push:
+    tags:
+      - "direct-v*"
+
+jobs:
+  build-direct:
+    name: Build Direct Release
+    runs-on: macos-14
+    env:
+      VERSION: ${{ github.ref_name }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Normalize version
+        run: |
+          VERSION_STRIPPED="${VERSION#direct-v}"
+          echo "VERSION=${VERSION_STRIPPED}" >> "$GITHUB_ENV"
+
+      - name: Verify direct distribution prerequisites
+        run: |
+          test -f Info.plist
+          test -x ./scripts/verify-capability-checklist.sh
+
+      - name: Build Direct archive
+        env:
+          CODE_SIGN_IDENTITY: ${{ secrets.MACOS_CODE_SIGN_IDENTITY }}
+          DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          xcodebuild -project rawctl.xcodeproj \
+            -scheme rawctl \
+            -configuration Release \
+            -archivePath direct.xcarchive \
+            archive \
+            CODE_SIGN_IDENTITY="${CODE_SIGN_IDENTITY}" \
+            DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM}" \
+            MARKETING_VERSION="${VERSION}"
+
+      - name: Export Direct archive
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath direct.xcarchive \
+            -exportOptionsPlist exportOptions.plist \
+            -exportPath ./export-direct
+
+      - name: Upload Direct artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: latent-direct-${{ env.VERSION }}
+          path: export-direct/*.app

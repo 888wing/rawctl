@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.649279628182-5j3r4bpboc30pv4lifchalgdco9jfsv8</string>
+			</array>
+			<key>CFBundleURLName</key>
+			<string>Google Sign-In</string>
+		</dict>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>latent</string>
+				<string>latent-app</string>
+			</array>
+			<key>CFBundleURLName</key>
+			<string>Latent Deep Link</string>
+		</dict>
+	</array>
+	<key>GIDClientID</key>
+	<string>649279628182-5j3r4bpboc30pv4lifchalgdco9jfsv8.apps.googleusercontent.com</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+</dict>
+</plist>

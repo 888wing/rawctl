@@ -2,80 +2,112 @@
 //  UpdaterManager.swift
 //  rawctl
 //
-//  Manages app updates using Sparkle framework
+//  Distribution-aware update manager.
 //
 
 import Foundation
-import Sparkle
+import SwiftUI
 
-/// Manages automatic updates using Sparkle framework
+#if DISTRIBUTION_CHANNEL_MAS
+
+/// MAS builds are updated exclusively via the Mac App Store.
 @MainActor
 final class UpdaterManager: ObservableObject {
-
-    // MARK: - Shared Instance
-
     static let shared = UpdaterManager()
 
-    // MARK: - Properties
+    @Published private(set) var canCheckForUpdates = false
+    @Published private(set) var lastUpdateCheckDate: Date?
+
+    private init() {}
+
+    func checkForUpdates() {
+        // No-op by design for Mac App Store builds.
+    }
+
+    var automaticallyChecksForUpdates: Bool {
+        get { false }
+        set { }
+    }
+
+    var automaticallyDownloadsUpdates: Bool {
+        get { false }
+        set { }
+    }
+
+    var updateCheckInterval: TimeInterval {
+        get { 0 }
+        set { }
+    }
+}
+
+struct UpdateSettingsView: View {
+    var body: some View {
+        Form {
+            Section {
+                Text("This build updates through the Mac App Store.")
+                    .foregroundStyle(.secondary)
+
+                if let subscriptionsURL = URL(string: "macappstore://showUpdatesPage") {
+                    Link("Open App Store Updates", destination: subscriptionsURL)
+                }
+            } header: {
+                Text("Mac App Store Updates")
+            }
+        }
+        .formStyle(.grouped)
+        .frame(width: 400)
+    }
+}
+
+#else
+
+import Sparkle
+
+/// Manages automatic updates using Sparkle framework.
+@MainActor
+final class UpdaterManager: ObservableObject {
+    static let shared = UpdaterManager()
 
     private let updaterController: SPUStandardUpdaterController
 
-    /// Whether the updater can check for updates
     @Published private(set) var canCheckForUpdates = false
-
-    /// Last time updates were checked
     @Published private(set) var lastUpdateCheckDate: Date?
 
-    // MARK: - Initialization
-
     private init() {
-        // Initialize the updater controller with automatic start
         updaterController = SPUStandardUpdaterController(
             startingUpdater: true,
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
 
-        // Bind canCheckForUpdates
         updaterController.updater.publisher(for: \.canCheckForUpdates)
             .receive(on: DispatchQueue.main)
             .assign(to: &$canCheckForUpdates)
 
-        // Bind lastUpdateCheckDate
         updaterController.updater.publisher(for: \.lastUpdateCheckDate)
             .receive(on: DispatchQueue.main)
             .assign(to: &$lastUpdateCheckDate)
     }
 
-    // MARK: - Public Methods
-
-    /// Check for updates manually
     func checkForUpdates() {
         updaterController.checkForUpdates(nil)
     }
 
-    /// Whether to automatically check for updates
     var automaticallyChecksForUpdates: Bool {
         get { updaterController.updater.automaticallyChecksForUpdates }
         set { updaterController.updater.automaticallyChecksForUpdates = newValue }
     }
 
-    /// Whether to automatically download updates
     var automaticallyDownloadsUpdates: Bool {
         get { updaterController.updater.automaticallyDownloadsUpdates }
         set { updaterController.updater.automaticallyDownloadsUpdates = newValue }
     }
 
-    /// Update check interval in seconds
     var updateCheckInterval: TimeInterval {
         get { updaterController.updater.updateCheckInterval }
         set { updaterController.updater.updateCheckInterval = newValue }
     }
 }
-
-// MARK: - SwiftUI View for Settings
-
-import SwiftUI
 
 struct UpdateSettingsView: View {
     @ObservedObject private var updater = UpdaterManager.shared
@@ -116,6 +148,8 @@ struct UpdateSettingsView: View {
         .frame(width: 400)
     }
 }
+
+#endif
 
 #Preview {
     UpdateSettingsView()
