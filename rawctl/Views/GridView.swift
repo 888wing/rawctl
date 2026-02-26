@@ -290,38 +290,52 @@ struct GridView: View {
                 
                 Spacer()
 
-                // AI Cull button
+                // AI Cull button (menu when selection exists, single button otherwise)
                 Group {
                     if appState.cullingProgress.isRunning {
                         ProgressView()
                             .scaleEffect(0.6)
                             .frame(width: 20, height: 16)
-                    } else {
+                    } else if !AppFeatures.aiCullingEnabled {
                         Button {
-                            if AppFeatures.aiCullingEnabled {
-                                Task { await appState.startAICulling() }
-                            } else {
-                                appState.showAccountSheet = true
-                                appState.showHUD("AI Cull is a Pro feature")
-                            }
+                            appState.showAccountSheet = true
+                            appState.showHUD("AI Cull is a Pro feature")
                         } label: {
                             HStack(spacing: 4) {
                                 Label("AI Cull", systemImage: "sparkles")
-                                if !AppFeatures.aiCullingEnabled {
-                                    Image(systemName: "crown.fill")
-                                        .font(.caption2)
-                                        .foregroundColor(.yellow)
-                                }
+                                Image(systemName: "crown.fill")
+                                    .font(.caption2)
+                                    .foregroundColor(.yellow)
                             }
+                            .font(.caption)
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(appState.assets.isEmpty)
+                        .help("AI Cull is a Pro feature — upgrade to unlock")
+                    } else if appState.selectionCount > 1 {
+                        Menu {
+                            Button("Cull Selected (\(appState.selectionCount))") {
+                                Task { await appState.startAICulling(scope: .selected) }
+                            }
+                            Button("Cull All (\(appState.assets.count))") {
+                                Task { await appState.startAICulling(scope: .all) }
+                            }
+                        } label: {
+                            Label("AI Cull", systemImage: "sparkles")
+                                .font(.caption)
+                        }
+                        .menuStyle(.borderlessButton)
+                        .help("Score photos for sharpness, composition, and duplicates")
+                    } else {
+                        Button {
+                            Task { await appState.startAICulling(scope: .all) }
+                        } label: {
+                            Label("AI Cull", systemImage: "sparkles")
                                 .font(.caption)
                         }
                         .buttonStyle(.borderless)
                         .disabled(appState.assets.isEmpty)
-                        .help(
-                            AppFeatures.aiCullingEnabled
-                            ? "Score all photos for sharpness, composition, and duplicates"
-                            : "AI Cull is a Pro feature — upgrade to unlock"
-                        )
+                        .help("Score all photos for sharpness, composition, and duplicates")
                     }
                 }
 
