@@ -231,7 +231,7 @@ struct SidebarView: View {
                         Text("Sign In")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundColor(.primary)
-                        Text("Get 10 free AI credits")
+                        Text("Free manual editing + Pro AI tools")
                             .font(.system(size: 9))
                             .foregroundColor(.secondary)
                     }

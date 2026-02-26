@@ -100,6 +100,36 @@ final class AppState: ObservableObject {
     @Published var cullingProgress: CullingProgress = .idle
     private var cullingAutoHideTask: Task<Void, Never>?
 
+    // MARK: - Smart Sync Progress
+
+    /// Progress state for the background Smart Sync pass.
+    enum SmartSyncState: Equatable {
+        case idle
+        case indexing(completed: Int, total: Int)
+        case complete(synced: Int)
+
+        var isRunning: Bool {
+            if case .indexing = self { return true }
+            return false
+        }
+
+        static func == (lhs: SmartSyncState, rhs: SmartSyncState) -> Bool {
+            switch (lhs, rhs) {
+            case (.idle, .idle): return true
+            case (.indexing(let a, let b), .indexing(let c, let d)): return a == c && b == d
+            case (.complete(let a), .complete(let b)): return a == b
+            default: return false
+            }
+        }
+    }
+
+    @Published var smartSyncState: SmartSyncState = .idle
+    /// Pending match results awaiting user confirmation.
+    @Published var smartSyncMatches: [SmartSyncMatch] = []
+    /// Whether the Smart Sync confirmation sheet is presented.
+    @Published var showSmartSyncSheet: Bool = false
+    private var smartSyncAutoHideTask: Task<Void, Never>?
+
     private var recipeLoadTask: Task<Void, Never>?
     private var thumbnailPreloadTask: Task<Void, Never>?
     private var thumbnailAutoHideTask: Task<Void, Never>?
@@ -148,10 +178,10 @@ final class AppState: ObservableObject {
 
     init(
         userDefaults: UserDefaults = .standard,
-        folderManager: FolderManager = .shared
+        folderManager: FolderManager? = nil
     ) {
         self.userDefaults = userDefaults
-        self.folderManager = folderManager
+        self.folderManager = folderManager ?? .shared
         migrateLegacyStartupKeysIfNeeded()
 
         if ProcessInfo.processInfo.environment["RAWCTL_E2E_STATUS"] == "1" {
@@ -569,6 +599,49 @@ final class AppState: ObservableObject {
         )
     }
 
+    // MARK: - AI Colour Grading
+
+    /// Pending AI suggestion (set after `applyColorGrade`); cleared when user moves to next photo.
+    @Published var pendingAiSuggestion: PendingAISuggestion?
+
+    /// Analysis text from the last AI colour-grading response.
+    @Published var aiGradeAnalysis: String = ""
+
+    /// Apply a colour-grading result onto the current recipe.
+    /// Pushes undo history, merges delta, stores pending suggestion for preference recording.
+    func applyColorGrade(_ result: GeminiColorService.ColorGradeResult, mode: GeminiColorService.Mode) {
+        guard let id = selectedAssetId else { return }
+        let before = recipes[id] ?? EditRecipe()
+        pushHistory(before)
+        recipes[id] = result.delta.applying(to: before)
+        aiGradeAnalysis = result.analysis
+        pendingAiSuggestion = PendingAISuggestion(assetId: id, delta: result.delta, mode: mode)
+        saveCurrentRecipe()
+        objectWillChange.send()
+    }
+
+    /// Record preference diff for a pending AI suggestion, then clear it.
+    func recordAndClearPendingAISuggestion() {
+        guard let suggestion = pendingAiSuggestion else { return }
+        pendingAiSuggestion = nil
+        let aiApplied = suggestion.delta.applying(to: EditRecipe())
+        let userFinal = recipes[suggestion.assetId] ?? EditRecipe()
+        let diff = ColorGradeDelta.diff(ai: aiApplied, final: userFinal)
+        let modeString: String
+        let moodString: String?
+        switch suggestion.mode {
+        case .auto:           modeString = "auto";      moodString = nil
+        case .mood(let m):    modeString = "mood";      moodString = m
+        case .reference:      modeString = "reference"; moodString = nil
+        }
+        AccountService.shared.recordStylePreference(
+            originalSuggestion: suggestion.delta,
+            userModification: diff,
+            mode: modeString,
+            mood: moodString
+        )
+    }
+
     /// Update in-memory AI edits for an asset so preview/export contexts refresh immediately.
     func setAIEdits(_ edits: [AIEdit], for assetURL: URL) {
         aiEditsByURL[assetURL] = edits
@@ -961,46 +1034,206 @@ final class AppState: ObservableObject {
     
     // MARK: - AI Culling
 
-    /// Run AI culling on all currently loaded assets.
+    /// Stores rating+flag per asset captured immediately before an AI cull run.
+    /// Used by "Undo AI Cull" to restore manually set metadata.
+    typealias PreCullSnapshot = [UUID: (rating: Int, flag: Flag, colorLabel: ColorLabel)]
+
+    /// The most recent pre-cull snapshot. Cleared when user dismisses or starts a new cull.
+    @Published var lastPreCullSnapshot: PreCullSnapshot? = nil
+
+    /// Capture current rating, flag, and colorLabel for the given assets (or all if omitted).
+    /// colorLabel is included proactively — culling does not currently mutate it,
+    /// but capturing it ensures undo is complete if that changes.
+    func capturePreCullSnapshot(for targetAssets: [PhotoAsset]? = nil) -> PreCullSnapshot {
+        var snap = PreCullSnapshot()
+        if let targetAssets {
+            for asset in targetAssets {
+                let recipe = recipes[asset.id] ?? EditRecipe()
+                snap[asset.id] = (rating: recipe.rating, flag: recipe.flag, colorLabel: recipe.colorLabel)
+            }
+        } else {
+            for (id, recipe) in recipes {
+                snap[id] = (rating: recipe.rating, flag: recipe.flag, colorLabel: recipe.colorLabel)
+            }
+        }
+        return snap
+    }
+
+    /// Restore rating, flag, and colorLabel from a previously captured snapshot.
+    /// Does NOT touch any other recipe fields (exposure, crop, etc.).
+    func restorePreCullSnapshot(_ snapshot: PreCullSnapshot) {
+        for (id, saved) in snapshot {
+            guard recipes[id] != nil else { continue }
+            recipes[id]?.rating      = saved.rating
+            recipes[id]?.flag        = saved.flag
+            recipes[id]?.colorLabel  = saved.colorLabel
+        }
+        lastPreCullSnapshot = nil
+    }
+
+    /// Cancel the auto-hide timer, restore the pre-cull snapshot, and reset progress to idle.
+    /// No-op if no snapshot is available.
+    func undoAICull() {
+        guard let snap = lastPreCullSnapshot else { return }
+        cullingAutoHideTask?.cancel()
+        cullingAutoHideTask = nil
+        restorePreCullSnapshot(snap)   // snap is a local copy; this call nils out lastPreCullSnapshot as a side-effect.
+        cullingProgress = .idle
+    }
+
+    /// The scope of an AI culling run.
+    enum CullingScope {
+        /// Score every asset in the current folder.
+        case all
+        /// Score only the assets whose IDs are in `selectedAssetIds`.
+        case selected
+    }
+
+    /// Run AI culling on the given scope (all assets or selected only).
     /// Updates each asset's `rating` and `flag` in-place and saves to sidecar.
-    func startAICulling() async {
+    func startAICulling(scope: CullingScope = .all) async {
+        guard AppFeatures.aiCullingEnabled else {
+            showAccountSheet = true
+            showHUD("AI Cull is a Pro feature")
+            return
+        }
         guard !assets.isEmpty, !cullingProgress.isRunning else { return }
 
-        cullingAutoHideTask?.cancel()
-        cullingProgress = .running(completed: 0, total: assets.count * 2)
+        let targetAssets: [PhotoAsset]
+        switch scope {
+        case .all:
+            targetAssets = assets
+        case .selected:
+            let ids = selectedAssetIds
+            targetAssets = assets.filter { ids.contains($0.id) }
+            guard !targetAssets.isEmpty else {
+                showHUD("No photos selected")
+                return
+            }
+        }
 
-        let currentAssets = assets
-        let results = await CullingService.shared.score(assets: currentAssets) { [weak self] done, total in
+        // Snapshot only the targeted assets so undo restores exactly what was overwritten.
+        lastPreCullSnapshot = capturePreCullSnapshot(for: targetAssets)
+
+        cullingAutoHideTask?.cancel()
+        cullingProgress = .running(completed: 0, total: targetAssets.count * 2)
+
+        // Reuse warm FeaturePrintIndex prints (shared with SmartSync).
+        let existingPrints = await FeaturePrintIndex.shared.allPrints()
+
+        let analyses = await CullingService.shared.scoreWithAnalysis(
+            assets: targetAssets,
+            existingPrints: existingPrints
+        ) { [weak self] done, total in
             Task { @MainActor [weak self] in
                 self?.cullingProgress = .running(completed: done, total: total)
             }
         }
 
-        await applyCullingResults(results)
+        await applyCullingResults(analyses, targetAssets: targetAssets)
 
-        cullingProgress = .complete(scored: results.count)
+        cullingProgress = .complete(scored: analyses.count)
 
-        // Auto-hide the completion badge after 4 seconds.
+        // Auto-hide the completion badge after 8 seconds.
         cullingAutoHideTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
             guard !Task.isCancelled else { return }
-            await MainActor.run { self?.cullingProgress = .idle }
+            await MainActor.run {
+                self?.cullingProgress = .idle
+                self?.lastPreCullSnapshot = nil   // undo window expired
+            }
         }
     }
 
-    private func applyCullingResults(_ results: [UUID: CullingScore]) async {
-        for asset in assets {
-            guard let score = results[asset.id] else { continue }
+    /// Apply culling results to the targeted assets.
+    /// Writes both legacy rating/flag (for UI) and full CullingAnalysis (for sidecar persistence).
+    private func applyCullingResults(_ analyses: [UUID: CullingAnalysis], targetAssets: [PhotoAsset]? = nil) async {
+        for asset in (targetAssets ?? assets) {
+            guard let analysis = analyses[asset.id] else { continue }
             var recipe = recipes[asset.id] ?? EditRecipe()
-            recipe.rating = score.suggestedRating
-            recipe.flag   = score.suggestedFlag
+            recipe.rating = analysis.suggestedRating
+            recipe.flag = analysis.suggestedFlag
             recipes[asset.id] = recipe
-            // Persist asynchronously (debounced via SidecarService).
             await SidecarService.shared.saveRecipe(
                 recipe,
                 snapshots: snapshots[asset.id] ?? [],
-                for: asset.url
+                for: asset.url,
+                cullingAnalysis: analysis
             )
+        }
+    }
+
+    // MARK: - Smart Sync
+
+    /// Find visually similar scenes and stage adapted recipes for user confirmation.
+    ///
+    /// Populates `smartSyncMatches` and sets `showSmartSyncSheet = true`.
+    /// No recipes are saved until the user confirms in the sheet.
+    func startSmartSync() async {
+        guard AppFeatures.smartSyncEnabled else {
+            showAccountSheet = true
+            showHUD("Smart Sync is a Pro feature")
+            return
+        }
+        guard let source = selectedAsset else { return }
+        guard !smartSyncState.isRunning else { return }
+
+        smartSyncAutoHideTask?.cancel()
+        let total = assets.count
+        smartSyncState = .indexing(completed: 0, total: total)
+
+        let currentAssets = assets
+        let sourceRecipe  = recipes[source.id] ?? EditRecipe()
+
+        let matches = await SmartSyncService.shared.findAndAdapt(
+            source: source,
+            sourceRecipe: sourceRecipe,
+            candidates: currentAssets,
+            onProgress: { [weak self] done, total in
+                Task { @MainActor [weak self] in
+                    self?.smartSyncState = .indexing(completed: done, total: total)
+                }
+            }
+        )
+
+        smartSyncMatches  = matches
+        showSmartSyncSheet = !matches.isEmpty
+
+        if matches.isEmpty {
+            smartSyncState = .complete(synced: 0)
+            scheduleSmartSyncAutoHide()
+        } else {
+            smartSyncState = .idle   // Sheet is now showing; reset progress bar.
+        }
+    }
+
+    /// Apply confirmed Smart Sync matches — write adapted recipes and save sidecars.
+    ///
+    /// Call this from the confirmation sheet's "Apply" button.
+    func applySmartSync(selections: [SmartSyncMatch]) async {
+        showSmartSyncSheet = false
+        for match in selections {
+            var recipe = match.adaptedRecipe
+            recipes[match.id] = recipe
+            if let asset = assets.first(where: { $0.id == match.id }) {
+                await SidecarService.shared.saveRecipe(
+                    recipe,
+                    snapshots: snapshots[match.id] ?? [],
+                    for: asset.url
+                )
+            }
+        }
+        smartSyncMatches = []
+        smartSyncState   = .complete(synced: selections.count)
+        scheduleSmartSyncAutoHide()
+    }
+
+    private func scheduleSmartSyncAutoHide() {
+        smartSyncAutoHideTask?.cancel()
+        smartSyncAutoHideTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run { self?.smartSyncState = .idle }
         }
     }
 
@@ -1014,6 +1247,11 @@ final class AppState: ObservableObject {
         let isSwitchingAsset = selectedAssetId != asset.id
         // Save and flush current recipe before switching.
         flushPendingRecipeSave()
+
+        // Record AI colour-grading preference diff (if any) before leaving this asset.
+        if isSwitchingAsset {
+            recordAndClearPendingAISuggestion()
+        }
 
         // Reset mask editing state when switching asset.
         if isSwitchingAsset {
@@ -1092,6 +1330,7 @@ final class AppState: ObservableObject {
         } catch {
             print("[AppState] save(recipe:localNodes:aiLayers:) failed: \(error) — local nodes/AI layers will NOT be persisted in fallback path.")
             await SidecarService.shared.saveRecipe(payload.recipe, snapshots: payload.snapshots, for: payload.asset.url)
+            showHUD("Failed to save AI layers")
         }
     }
 
@@ -1283,15 +1522,71 @@ final class AppState: ObservableObject {
 
         let totalCount = plannedAssets.count
         var loadedCount = 0
-        
+
         // Update loading message
         loadingMessage = "Loading edits..."
-        
+
+        // Batch size for flushing collected results to @Published properties.
+        // Each individual assignment to recipes/localNodes/aiEditsByURL/aiLayerStacks
+        // triggers objectWillChange → GridView re-render → ScrollView re-layout.
+        // Batching reduces ~4N notifications to ~4*(N/batchSize) notifications,
+        // preventing the scrollbar from re-animating on every sidecar load.
+        let flushBatchSize = max(20, totalCount / 10)
+
+        // Accumulators for batched @Published updates
+        var pendingRecipes: [UUID: EditRecipe] = [:]
+        var pendingLocalNodes: [URL: [ColorNode]] = [:]
+        var pendingAIEdits: [URL: [AIEdit]] = [:]
+        var pendingAILayers: [(UUID, [AILayer])] = []
+        var pendingCount = 0
+
+        /// Flush accumulated results into @Published properties in bulk.
+        func flushPending() {
+            if !pendingRecipes.isEmpty {
+                var merged = self.recipes
+                for (id, recipe) in pendingRecipes { merged[id] = recipe }
+                self.recipes = merged
+                pendingRecipes.removeAll(keepingCapacity: true)
+            }
+            if !pendingLocalNodes.isEmpty {
+                var merged = self.localNodes
+                for (url, nodes) in pendingLocalNodes { merged[url] = nodes }
+                self.localNodes = merged
+                pendingLocalNodes.removeAll(keepingCapacity: true)
+            }
+            if !pendingAIEdits.isEmpty {
+                var merged = self.aiEditsByURL
+                for (url, edits) in pendingAIEdits { merged[url] = edits }
+                self.aiEditsByURL = merged
+                pendingAIEdits.removeAll(keepingCapacity: true)
+            }
+            for (id, layers) in pendingAILayers {
+                self.setAILayers(layers, for: id)
+            }
+            pendingAILayers.removeAll(keepingCapacity: true)
+            pendingCount = 0
+        }
+
+        /// Collect a single sidecar result into the pending batch.
+        func collectResult(_ id: UUID, _ url: URL, _ state: SidecarService.RenderState?) {
+            if let state {
+                pendingRecipes[id] = state.recipe
+                pendingLocalNodes[url] = state.localNodes
+                pendingAIEdits[url] = state.aiEdits
+                pendingAILayers.append((id, state.aiLayers))
+            } else {
+                pendingLocalNodes[url] = []
+                pendingAIEdits[url] = []
+                pendingAILayers.append((id, []))
+            }
+            pendingCount += 1
+        }
+
         // Parallel loading with concurrency limit
         await withTaskGroup(of: (UUID, URL, SidecarService.RenderState?).self) { group in
             var pending = 0
             let maxConcurrent = Self.sidecarLoadConcurrency(forAssetCount: plannedAssets.count)
-            
+
             for asset in plannedAssets {
                 if Task.isCancelled || !isAssetLoadContextValid(expectedFolderPath: expectedFolderPath) {
                     shouldAbort = true
@@ -1308,22 +1603,17 @@ final class AppState: ObservableObject {
                             break
                         }
 
-                        if let state = result.2 {
-                            recipes[result.0] = state.recipe
-                            localNodes[result.1] = state.localNodes
-                            aiEditsByURL[result.1] = state.aiEdits
-                            setAILayers(state.aiLayers, for: result.0)
-                        } else {
-                            localNodes[result.1] = []
-                            aiEditsByURL[result.1] = []
-                            setAILayers([], for: result.0)
-                        }
+                        collectResult(result.0, result.1, result.2)
                         loadedCount += 1
                         e2eSidecarLoadedCount = loadedCount
                         pending -= 1
+
+                        if pendingCount >= flushBatchSize {
+                            flushPending()
+                        }
                     }
                 }
-                
+
                 group.addTask { [url = asset.url, id = asset.id] in
                     guard !Task.isCancelled else { return (id, url, nil) }
                     let state = await SidecarService.shared.loadRenderState(for: url)
@@ -1332,7 +1622,7 @@ final class AppState: ObservableObject {
                 }
                 pending += 1
             }
-            
+
             if !shouldAbort {
                 // Collect remaining results
                 for await result in group {
@@ -1342,27 +1632,25 @@ final class AppState: ObservableObject {
                         break
                     }
 
-                    if let state = result.2 {
-                        recipes[result.0] = state.recipe
-                        localNodes[result.1] = state.localNodes
-                        aiEditsByURL[result.1] = state.aiEdits
-                        setAILayers(state.aiLayers, for: result.0)
-                    } else {
-                        localNodes[result.1] = []
-                        aiEditsByURL[result.1] = []
-                        setAILayers([], for: result.0)
-                    }
+                    collectResult(result.0, result.1, result.2)
                     loadedCount += 1
                     e2eSidecarLoadedCount = loadedCount
-                    
+
                     // Update progress periodically with a larger step for big folders.
                     let progressStep = max(10, totalCount / 20)
                     if loadedCount % progressStep == 0 {
                         loadingMessage = "Loading edits... \(loadedCount)/\(totalCount)"
                     }
+
+                    if pendingCount >= flushBatchSize {
+                        flushPending()
+                    }
                 }
             }
         }
+
+        // Flush any remaining collected results
+        flushPending()
 
         if shouldAbort || Task.isCancelled || !isAssetLoadContextValid(expectedFolderPath: expectedFolderPath) {
             phaseStatus = "cancelled"

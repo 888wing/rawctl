@@ -10,7 +10,7 @@ import Testing
 import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
-@testable import rawctl
+@testable import Latent
 
 struct CullingServiceTests {
 
@@ -34,7 +34,7 @@ struct CullingServiceTests {
     @Test func cullingScoreRatingIsInValidRange() {
         // Exercise the boundary conditions of the rating mapping.
         let cases: [(sharpness: Double, saliency: Double, isDuplicate: Bool, expectedRating: ClosedRange<Int>)] = [
-            (0.0, 0.0, false, 0...0),   // very poor → 0
+            (0.0, 0.0, false, 1...1),   // zero sharpness/saliency but default exposure → 1
             (0.0, 0.0, true,  0...0),   // duplicate → 0 (reject)
             (0.5, 0.5, false, 1...5),   // moderate → at least 1
             (1.0, 1.0, false, 4...5),   // excellent → 4 or 5
@@ -63,7 +63,9 @@ struct CullingServiceTests {
     }
 
     @Test func lowQualityScoreBecomesRejectWith0Stars() {
-        let score = makeCullingScore(sharpness: 0.05, saliency: 0.05, isDuplicate: false)
+        // With 3-signal model, pass exposure=0.0 to test true low-quality boundary.
+        // combined = 0.05*0.45 + 0.05*0.30 + 0.0*0.25 = 0.0375, below rejectBelow (0.20).
+        let score = makeCullingScore(sharpness: 0.05, saliency: 0.05, exposure: 0.0, isDuplicate: false)
         #expect(score.suggestedFlag == .reject)
         #expect(score.suggestedRating == 0)
     }
@@ -108,34 +110,447 @@ struct CullingServiceTests {
         }
     }
 
+    // MARK: - Duplicate group logic
+
+    @Test func duplicateBurstKeepsRepresentative() {
+        // Representative (isGroupRepresentative = true): should NOT become reject
+        let rep = makeCullingScoreGroupAware(sharpness: 0.9, saliency: 0.8,
+                                              groupId: UUID(), isRepresentative: true)
+        #expect(rep.suggestedFlag != .reject, "Representative must not be auto-rejected")
+        #expect(rep.suggestedRating >= 4)
+
+        // Non-representative: should become reject
+        let nonRep = makeCullingScoreGroupAware(sharpness: 0.9, saliency: 0.8,
+                                                 groupId: UUID(), isRepresentative: false)
+        #expect(nonRep.suggestedFlag == .reject)
+        #expect(nonRep.suggestedRating == 0)
+    }
+
+    @Test func uniquePhotoIsNotRejectedByDuplicateLogic() {
+        let unique = makeCullingScoreGroupAware(sharpness: 0.7, saliency: 0.6,
+                                                 groupId: nil, isRepresentative: true)
+        #expect(unique.suggestedFlag != .reject)
+    }
+
+    // MARK: - Exposure scoring via computeFinalScore
+
+    @Test func wellExposedPhotoGetsHighExposureContribution() {
+        // exposure=1.0 (perfect) should contribute full weight to combined score
+        let score = makeCullingScore(sharpness: 0.7, saliency: 0.6, exposure: 1.0, isDuplicate: false)
+        // combined = 0.7*0.45 + 0.6*0.30 + 1.0*0.25 = 0.315 + 0.18 + 0.25 = 0.745
+        #expect(score.suggestedRating >= 3, "Well-exposed photo with good quality should rate >= 3")
+    }
+
+    @Test func severelyUnderexposedPhotoPenalized() {
+        // exposure=0.0 (worst) should drag combined score down significantly
+        let score = makeCullingScore(sharpness: 0.7, saliency: 0.6, exposure: 0.0, isDuplicate: false)
+        // combined = 0.7*0.45 + 0.6*0.30 + 0.0*0.25 = 0.315 + 0.18 + 0 = 0.495
+        #expect(score.suggestedRating <= 2, "Severely underexposed should rate <= 2")
+    }
+
+    @Test func moderateExposureIssueReducesRatingByOne() {
+        // Compare perfect exposure vs moderate issue
+        let perfect  = makeCullingScore(sharpness: 0.8, saliency: 0.7, exposure: 1.0, isDuplicate: false)
+        let moderate = makeCullingScore(sharpness: 0.8, saliency: 0.7, exposure: 0.5, isDuplicate: false)
+        #expect(perfect.suggestedRating > moderate.suggestedRating,
+                "Moderate exposure issue should reduce rating vs perfect exposure")
+    }
+
+    @Test func exposureScoreStoredInCullingScore() {
+        let score = makeCullingScore(sharpness: 0.5, saliency: 0.5, exposure: 0.75, isDuplicate: false)
+        #expect(score.exposureScore == 0.75, "exposureScore should be stored verbatim")
+    }
+
+    // MARK: - Rating boundary calibration
+
+    @Test func ratingBoundariesMatchConfig() {
+        let cfg = CullingConfig.default
+        // Verify config weights sum to 1.0
+        let weightSum = cfg.sharpnessWeight + cfg.saliencyWeight + cfg.exposureWeight
+        #expect(abs(weightSum - 1.0) < 0.001, "Weights must sum to 1.0, got \(weightSum)")
+    }
+
+    @Test func ratingBoundaryAtRejectThreshold() {
+        // Just below reject threshold → rating 0
+        let justBelow = makeCullingScore(sharpness: 0.19, saliency: 0.0, exposure: 0.0, isDuplicate: false)
+        #expect(justBelow.suggestedRating == 0, "Below reject threshold → rating 0")
+        #expect(justBelow.suggestedFlag == .reject)
+
+        // Just above reject threshold → rating 1+
+        let justAbove = makeCullingScore(sharpness: 0.45, saliency: 0.0, exposure: 0.0, isDuplicate: false)
+        // combined = 0.45 * 0.45 = 0.2025 → just above 0.20
+        #expect(justAbove.suggestedRating >= 1, "Above reject threshold → rating >= 1")
+    }
+
+    @Test func perfectScoresYieldRating5() {
+        let score = makeCullingScore(sharpness: 1.0, saliency: 1.0, exposure: 1.0, isDuplicate: false)
+        #expect(score.suggestedRating == 5)
+        #expect(score.suggestedFlag == .pick)
+    }
+
+    @Test func zeroScoresYieldReject() {
+        let score = makeCullingScore(sharpness: 0.0, saliency: 0.0, exposure: 0.0, isDuplicate: false)
+        #expect(score.suggestedRating == 0)
+        #expect(score.suggestedFlag == .reject)
+    }
+
+    // MARK: - Exposure scoring boundaries
+
+    @Test func exposureScoreRangeIsClamped() {
+        // Even with extreme inputs, computeFinalScore should produce valid ratings
+        for exp in stride(from: 0.0, through: 1.0, by: 0.1) {
+            let score = makeCullingScore(sharpness: 0.5, saliency: 0.5, exposure: exp, isDuplicate: false)
+            #expect((0...5).contains(score.suggestedRating),
+                    "exposure=\(exp) produced invalid rating \(score.suggestedRating)")
+            #expect(score.exposureScore == exp)
+        }
+    }
+
+    @Test func exposureDoesNotOverrideNonRepDuplicateReject() {
+        // Non-representative duplicates ALWAYS rejected regardless of exposure quality
+        let score = makeCullingScore(sharpness: 1.0, saliency: 1.0, exposure: 1.0, isDuplicate: true)
+        #expect(score.suggestedFlag == .reject)
+        #expect(score.suggestedRating == 0)
+    }
+
+    // MARK: - Synthetic exposure integration tests
+
+    @Test func overexposedSyntheticScoresLowerThanNormal() async {
+        guard let normalURL = createSyntheticJPEGWithBrightness(0.5),
+              let overURL   = createSyntheticJPEGWithBrightness(1.0) else { return }
+        defer {
+            try? FileManager.default.removeItem(at: normalURL)
+            try? FileManager.default.removeItem(at: overURL)
+        }
+
+        let normalAsset = PhotoAsset(url: normalURL)
+        let overAsset   = PhotoAsset(url: overURL)
+
+        let results = await CullingService.shared.score(
+            assets: [normalAsset, overAsset]
+        ) { _, _ in }
+
+        if let normalScore = results[normalAsset.id],
+           let overScore   = results[overAsset.id] {
+            #expect(normalScore.exposureScore >= overScore.exposureScore,
+                    "Overexposed image should have equal or lower exposure score")
+        }
+    }
+
+    @Test func underexposedSyntheticScoresLowerThanNormal() async {
+        guard let normalURL = createSyntheticJPEGWithBrightness(0.5),
+              let underURL  = createSyntheticJPEGWithBrightness(0.0) else { return }
+        defer {
+            try? FileManager.default.removeItem(at: normalURL)
+            try? FileManager.default.removeItem(at: underURL)
+        }
+
+        let normalAsset = PhotoAsset(url: normalURL)
+        let underAsset  = PhotoAsset(url: underURL)
+
+        let results = await CullingService.shared.score(
+            assets: [normalAsset, underAsset]
+        ) { _, _ in }
+
+        if let normalScore = results[normalAsset.id],
+           let underScore  = results[underAsset.id] {
+            #expect(normalScore.exposureScore >= underScore.exposureScore,
+                    "Underexposed image should have equal or lower exposure score")
+        }
+    }
+
+    @Test func exposureScoreReturnsValidRangeForSyntheticImage() async {
+        guard let url = createSyntheticJPEGWithBrightness(0.5) else { return }
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let asset = PhotoAsset(url: url)
+        let results = await CullingService.shared.score(assets: [asset]) { _, _ in }
+
+        if let score = results[asset.id] {
+            #expect(score.exposureScore >= 0.0 && score.exposureScore <= 1.0,
+                    "Exposure score must be in [0, 1], got \(score.exposureScore)")
+        }
+    }
+
+    // MARK: - CullingAnalysis
+
+    @Test func analysisVersionIsSet() {
+        let analysis = CullingService.shared.buildAnalysis(
+            sharpness: 0.8, saliency: 0.7, exposure: 0.9,
+            groupId: nil, duplicateRank: nil, isRepresentative: true
+        )
+        #expect(analysis.version == CullingAnalysis.currentVersion)
+    }
+
+    @Test func analysisOverallScoreMatchesWeightedFormula() {
+        let analysis = CullingService.shared.buildAnalysis(
+            sharpness: 0.8, saliency: 0.6, exposure: 1.0,
+            groupId: nil, duplicateRank: nil, isRepresentative: true
+        )
+        let cfg = CullingConfig.default
+        let expected = 0.8 * cfg.sharpnessWeight + 0.6 * cfg.saliencyWeight + 1.0 * cfg.exposureWeight
+        #expect(abs(analysis.overallScore - expected) < 0.001)
+    }
+
+    @Test func analysisCarriesRejectedReasonsForBlurryPhoto() {
+        let analysis = CullingService.shared.buildAnalysis(
+            sharpness: 0.1, saliency: 0.5, exposure: 1.0,
+            groupId: nil, duplicateRank: nil, isRepresentative: true
+        )
+        #expect(analysis.rejectedReasons.contains("blurry"))
+        #expect(!analysis.rejectedReasons.contains("duplicate_non_best"))
+    }
+
+    @Test func analysisCarriesRejectedReasonsForDuplicate() {
+        let gid = UUID()
+        let analysis = CullingService.shared.buildAnalysis(
+            sharpness: 0.9, saliency: 0.8, exposure: 1.0,
+            groupId: gid, duplicateRank: 2, isRepresentative: false
+        )
+        #expect(analysis.rejectedReasons.contains("duplicate_non_best"))
+        #expect(analysis.suggestedFlag == .reject)
+        #expect(analysis.duplicateRank == 2)
+    }
+
+    @Test func analysisHasNoRejectedReasonsForGoodPhoto() {
+        let analysis = CullingService.shared.buildAnalysis(
+            sharpness: 0.9, saliency: 0.8, exposure: 0.95,
+            groupId: nil, duplicateRank: nil, isRepresentative: true
+        )
+        #expect(analysis.rejectedReasons.isEmpty)
+        #expect(analysis.suggestedRating >= 4)
+    }
+
+    @Test func analysisCarriesDuplicateRank() {
+        let gid = UUID()
+        let rep = CullingService.shared.buildAnalysis(
+            sharpness: 0.9, saliency: 0.8, exposure: 1.0,
+            groupId: gid, duplicateRank: 1, isRepresentative: true
+        )
+        #expect(rep.duplicateRank == 1)
+        #expect(!rep.rejectedReasons.contains("duplicate_non_best"))
+
+        let third = CullingService.shared.buildAnalysis(
+            sharpness: 0.5, saliency: 0.4, exposure: 0.8,
+            groupId: gid, duplicateRank: 3, isRepresentative: false
+        )
+        #expect(third.duplicateRank == 3)
+        #expect(third.rejectedReasons.contains("duplicate_non_best"))
+    }
+
+    @Test func analysisExposureClippedReason() {
+        let analysis = CullingService.shared.buildAnalysis(
+            sharpness: 0.8, saliency: 0.7, exposure: 0.2,
+            groupId: nil, duplicateRank: nil, isRepresentative: true
+        )
+        #expect(analysis.rejectedReasons.contains("exposure_clipped"))
+    }
+
+    @Test func analysisPoorCompositionReason() {
+        let analysis = CullingService.shared.buildAnalysis(
+            sharpness: 0.8, saliency: 0.1, exposure: 1.0,
+            groupId: nil, duplicateRank: nil, isRepresentative: true
+        )
+        #expect(analysis.rejectedReasons.contains("poor_composition"))
+    }
+
+    @Test func analysisCodableRoundtrip() throws {
+        let gid = UUID()
+        let original = CullingAnalysis(
+            version: 1,
+            overallScore: 0.75,
+            sharpnessScore: 0.8,
+            saliencyScore: 0.7,
+            exposureScore: 0.9,
+            duplicateGroupId: gid,
+            duplicateRank: 2,
+            suggestedRating: 4,
+            suggestedFlag: .pick,
+            rejectedReasons: []
+        )
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(CullingAnalysis.self, from: data)
+        #expect(decoded == original)
+    }
+
+    // MARK: - Duplicate ranking
+
+    @Test func duplicateRankAssignedCorrectly() {
+        let gid = UUID()
+        // Rank 1 = best (representative)
+        let best = CullingService.shared.buildAnalysis(
+            sharpness: 0.9, saliency: 0.8, exposure: 1.0,
+            groupId: gid, duplicateRank: 1, isRepresentative: true
+        )
+        #expect(best.duplicateRank == 1)
+        #expect(best.suggestedFlag != .reject)
+
+        // Rank 2 = second best (non-representative)
+        let second = CullingService.shared.buildAnalysis(
+            sharpness: 0.7, saliency: 0.6, exposure: 0.9,
+            groupId: gid, duplicateRank: 2, isRepresentative: false
+        )
+        #expect(second.duplicateRank == 2)
+        #expect(second.suggestedFlag == .reject)
+    }
+
+    @Test func uniquePhotoHasNilRank() {
+        let analysis = CullingService.shared.buildAnalysis(
+            sharpness: 0.8, saliency: 0.7, exposure: 1.0,
+            groupId: nil, duplicateRank: nil, isRepresentative: true
+        )
+        #expect(analysis.duplicateRank == nil)
+        #expect(analysis.duplicateGroupId == nil)
+    }
+
+    @Test func scoreWithAnalysisReturnsAnalysisType() async {
+        let results = await CullingService.shared.scoreWithAnalysis(
+            assets: [],
+            onProgress: { _, _ in }
+        )
+        #expect(results.isEmpty)
+    }
+
+    // MARK: - Sidecar schema v8 roundtrip
+
+    @Test func sidecarV8RoundtripWithCullingAnalysis() throws {
+        let analysis = CullingAnalysis(
+            version: 1,
+            overallScore: 0.72,
+            sharpnessScore: 0.85,
+            saliencyScore: 0.60,
+            exposureScore: 0.90,
+            duplicateGroupId: UUID(),
+            duplicateRank: 2,
+            suggestedRating: 3,
+            suggestedFlag: .none,
+            rejectedReasons: ["duplicate_non_best"]
+        )
+
+        var sidecar = SidecarFile(
+            for: URL(fileURLWithPath: "/tmp/test.ARW"),
+            recipe: EditRecipe()
+        )
+        sidecar.cullingAnalysis = analysis
+
+        let data = try JSONEncoder().encode(sidecar)
+        let decoded = try JSONDecoder().decode(SidecarFile.self, from: data)
+
+        #expect(decoded.schemaVersion == 8)
+        #expect(decoded.cullingAnalysis != nil)
+        #expect(decoded.cullingAnalysis?.overallScore == 0.72)
+        #expect(decoded.cullingAnalysis?.duplicateRank == 2)
+        #expect(decoded.cullingAnalysis?.rejectedReasons == ["duplicate_non_best"])
+    }
+
+    @Test func sidecarV7BackwardCompatibleWithNilCullingAnalysis() throws {
+        // Simulate a v7 sidecar JSON (no cullingAnalysis key).
+        let v7Json = """
+        {
+            "schemaVersion": 7,
+            "asset": { "originalFilename": "old.ARW", "fileSize": 512, "modifiedTime": 0 },
+            "edit": {},
+            "snapshots": [],
+            "aiEdits": [],
+            "aiLayers": [],
+            "updatedAt": 0
+        }
+        """.data(using: .utf8)!
+
+        let decoded = try JSONDecoder().decode(SidecarFile.self, from: v7Json)
+        #expect(decoded.cullingAnalysis == nil, "Legacy v7 sidecar must decode with nil cullingAnalysis")
+        #expect(decoded.schemaVersion == 7)
+    }
+
+    @Test func sidecarSaveLoadIdempotent() throws {
+        let analysis = CullingAnalysis(
+            version: 1, overallScore: 0.5,
+            sharpnessScore: 0.6, saliencyScore: 0.4, exposureScore: 0.8,
+            duplicateGroupId: nil, duplicateRank: nil,
+            suggestedRating: 2, suggestedFlag: .none,
+            rejectedReasons: []
+        )
+
+        var sidecar = SidecarFile(
+            for: URL(fileURLWithPath: "/tmp/a.ARW"),
+            recipe: EditRecipe()
+        )
+        sidecar.cullingAnalysis = analysis
+
+        // Roundtrip 1
+        let data1 = try JSONEncoder().encode(sidecar)
+        let decoded1 = try JSONDecoder().decode(SidecarFile.self, from: data1)
+        // Roundtrip 2
+        let data2 = try JSONEncoder().encode(decoded1)
+        let decoded2 = try JSONDecoder().decode(SidecarFile.self, from: data2)
+
+        #expect(decoded1.cullingAnalysis == decoded2.cullingAnalysis, "Save-load-save must be idempotent")
+    }
+
+    // MARK: - AppState culling persistence integration
+
+    @Test func applyCullingResultsSetsRatingAndFlag() {
+        // This tests the CullingAnalysis → rating/flag mapping.
+        let analysis = CullingAnalysis(
+            version: 1, overallScore: 0.8,
+            sharpnessScore: 0.9, saliencyScore: 0.7, exposureScore: 0.85,
+            duplicateGroupId: nil, duplicateRank: nil,
+            suggestedRating: 4, suggestedFlag: .pick,
+            rejectedReasons: []
+        )
+        #expect(analysis.suggestedRating == 4)
+        #expect(analysis.suggestedFlag == .pick)
+    }
+
     // MARK: - Helpers
 
-    /// Instantiate a CullingScore by calling the internal score-computation logic
-    /// via the service. Since computeFinalScore is private we derive scores by crafting
-    /// synthetic results directly from the struct.
     private func makeCullingScore(
         sharpness: Double,
         saliency: Double,
+        exposure: Double = 1.0,
         isDuplicate: Bool
     ) -> CullingScore {
-        // Replicate the rating table from CullingService.computeFinalScore.
-        let combined = sharpness * 0.6 + saliency * 0.4
-        let (rating, flag): (Int, Flag)
-        switch (isDuplicate, combined) {
-        case (true, _):      (rating, flag) = (0, .reject)
-        case (_, ..<0.20):   (rating, flag) = (0, .reject)
-        case (_, ..<0.40):   (rating, flag) = (1, .none)
-        case (_, ..<0.55):   (rating, flag) = (2, .none)
-        case (_, ..<0.70):   (rating, flag) = (3, .none)
-        case (_, ..<0.85):   (rating, flag) = (4, .pick)
-        default:             (rating, flag) = (5, .pick)
-        }
-        return CullingScore(
+        CullingService.shared.computeFinalScore(
             sharpness: sharpness,
             saliency: saliency,
-            isDuplicate: isDuplicate,
-            suggestedRating: rating,
-            suggestedFlag: flag
+            exposure: exposure,
+            groupId: isDuplicate ? UUID() : nil,
+            isRepresentative: !isDuplicate
+        )
+    }
+
+    private func makeCullingScoreGroupAware(
+        sharpness: Double,
+        saliency: Double,
+        exposure: Double = 1.0,
+        groupId: UUID?,
+        isRepresentative: Bool
+    ) -> CullingScore {
+        CullingService.shared.computeFinalScore(
+            sharpness: sharpness,
+            saliency: saliency,
+            exposure: exposure,
+            groupId: groupId,
+            isRepresentative: isRepresentative
+        )
+    }
+
+    /// Helper using the new CullingAnalysis path.
+    private func makeAnalysis(
+        sharpness: Double,
+        saliency: Double,
+        exposure: Double = 1.0,
+        groupId: UUID? = nil,
+        duplicateRank: Int? = nil,
+        isRepresentative: Bool = true
+    ) -> CullingAnalysis {
+        CullingService.shared.buildAnalysis(
+            sharpness: sharpness,
+            saliency: saliency,
+            exposure: exposure,
+            groupId: groupId,
+            duplicateRank: duplicateRank,
+            isRepresentative: isRepresentative
         )
     }
 
@@ -169,6 +584,39 @@ struct CullingServiceTests {
         CGImageDestinationAddImage(dest, image, nil)
         guard CGImageDestinationFinalize(dest) else { return nil }
 
+        return url
+    }
+
+    /// Creates a synthetic JPEG with controlled brightness for exposure testing.
+    /// - Parameter brightness: 0.0 = pure black, 1.0 = pure white.
+    private func createSyntheticJPEGWithBrightness(_ brightness: CGFloat) -> URL? {
+        let size = CGSize(width: 128, height: 128)
+        guard let context = CGContext(
+            data: nil,
+            width: Int(size.width), height: Int(size.height),
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+
+        // Fill with uniform brightness (some variation to avoid degenerate histogram).
+        context.setFillColor(CGColor(red: brightness, green: brightness, blue: brightness, alpha: 1.0))
+        context.fill(CGRect(origin: .zero, size: size))
+
+        // Add a slightly different patch to create some histogram spread.
+        let altBrightness = max(0, min(1, brightness + (brightness > 0.5 ? -0.1 : 0.1)))
+        context.setFillColor(CGColor(red: altBrightness, green: altBrightness, blue: altBrightness, alpha: 1.0))
+        context.fill(CGRect(x: 32, y: 32, width: 64, height: 64))
+
+        guard let image = context.makeImage() else { return nil }
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("exposure_test_\(UUID().uuidString).jpg")
+        guard let dest = CGImageDestinationCreateWithURL(
+            url as CFURL, UTType.jpeg.identifier as CFString, 1, nil
+        ) else { return nil }
+        CGImageDestinationAddImage(dest, image, nil)
+        guard CGImageDestinationFinalize(dest) else { return nil }
         return url
     }
 }

@@ -8,7 +8,7 @@
 import AppKit
 import Foundation
 import Testing
-@testable import rawctl
+@testable import Latent
 
 struct LayerCompositingOrderTests {
 
@@ -204,6 +204,32 @@ struct LayerCompositingOrderTests {
         }
 
         #expect(meanAbsoluteDifference(baseline, skipped) < 0.0001)
+    }
+
+    @Test func aiLayerStackMoveLayerReordersCorrectly() {
+        let idA = UUID()
+        let idB = UUID()
+        let idC = UUID()
+
+        let stack = AILayerStack(documentId: UUID())
+        stack.layers = [
+            AILayer(id: idA, type: .transform, prompt: "A", originalPrompt: "A",
+                    generatedImagePath: "a.jpg", creditsUsed: 1),
+            AILayer(id: idB, type: .transform, prompt: "B", originalPrompt: "B",
+                    generatedImagePath: "b.jpg", creditsUsed: 1),
+            AILayer(id: idC, type: .transform, prompt: "C", originalPrompt: "C",
+                    generatedImagePath: "c.jpg", creditsUsed: 1),
+        ]
+
+        // Move A (index 0) to C's position (index 2) — "move down"
+        stack.moveLayer(from: idA, to: idC)
+        // After remove(0): [B,C] targetIndex was 2 → adjusted to 1 → insert at 1 → [B,A,C]
+        #expect(stack.layers.map(\.id) == [idB, idA, idC])
+
+        // Move C (now index 2) to B's position (index 0) — "move up"
+        stack.moveLayer(from: idC, to: idB)
+        // remove(2): [B,A] targetIndex=0, source>target so no shift → insert at 0 → [C,B,A]
+        #expect(stack.layers.map(\.id) == [idC, idB, idA])
     }
 
     // MARK: - Helpers

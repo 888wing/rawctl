@@ -165,7 +165,53 @@ struct InspectorView: View {
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
-                        
+
+                        Spacer()
+                    }
+
+                    // Smart Sync button
+                    HStack {
+                        Group {
+                            if appState.smartSyncState.isRunning {
+                                HStack(spacing: 6) {
+                                    ProgressView().scaleEffect(0.6).frame(width: 16, height: 16)
+                                    if case .indexing(let done, let total) = appState.smartSyncState {
+                                        Text("Indexing \(min(done, total))/\(total)…")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                            } else if case .complete(let n) = appState.smartSyncState, n == 0 {
+                                Label("No similar scenes found", systemImage: "sparkles.slash")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            } else {
+                                Button {
+                                    if AppFeatures.smartSyncEnabled {
+                                        Task { await appState.startSmartSync() }
+                                    } else {
+                                        // Non-Pro: redirect to account sheet (paywall).
+                                        appState.showAccountSheet = true
+                                    }
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Label("Smart Sync…", systemImage: "sparkles.rectangle.stack")
+                                        if !AppFeatures.smartSyncEnabled {
+                                            Image(systemName: "crown.fill")
+                                                .font(.caption2)
+                                                .foregroundColor(.yellow)
+                                        }
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .disabled(appState.selectedAsset == nil)
+                                .help(AppFeatures.smartSyncEnabled
+                                    ? "Find visually similar scenes and sync this photo's edit settings"
+                                    : "Smart Sync is a Pro feature — upgrade to unlock"
+                                )
+                            }
+                        }
                         Spacer()
                     }
                 }
@@ -739,6 +785,15 @@ struct InspectorView: View {
                 
                 Divider()
 
+                // AI Colour Grading section
+                if panelConfig.isVisible(.aiColorGrading), !isLocalNodeMode {
+                DisclosureGroup("AI Colour Grading") {
+                    AIColorGradingPanel(appState: appState)
+                        .padding(.top, 6)
+                }
+                .contextMenu { panelContextMenu(.aiColorGrading) }
+                }
+
                 // AI Generation section
                 if panelConfig.isVisible(.aiGeneration), !isLocalNodeMode {
                 DisclosureGroup("AI Generation") {
@@ -915,6 +970,9 @@ struct InspectorView: View {
         }
         .sheet(isPresented: $appState.showAccountSheet) {
             AccountSheet()
+        }
+        .sheet(isPresented: $appState.showSmartSyncSheet) {
+            SmartSyncSheet(appState: appState)
         }
         .overlay {
             if showNanoBananaProgress {

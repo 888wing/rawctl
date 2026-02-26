@@ -31,6 +31,7 @@ actor SidecarService {
         let assetURL: URL
         let recipe: EditRecipe
         let snapshots: [RecipeSnapshot]
+        let cullingAnalysis: CullingAnalysis?  // v8: optional culling metadata
     }
 
     // Debounce per-asset to avoid cancelling saves across photos.
@@ -140,7 +141,7 @@ actor SidecarService {
     }
     
     /// Save recipe and snapshots to sidecar file (debounced)
-    func saveRecipe(_ recipe: EditRecipe, snapshots: [RecipeSnapshot], for assetURL: URL) async {
+    func saveRecipe(_ recipe: EditRecipe, snapshots: [RecipeSnapshot], for assetURL: URL, cullingAnalysis: CullingAnalysis? = nil) async {
         let sidecarURL = FileSystemService.sidecarURL(for: assetURL)
 
         // Cancel any pending save for this asset only.
@@ -151,7 +152,8 @@ actor SidecarService {
             requestId: requestId,
             assetURL: assetURL,
             recipe: recipe,
-            snapshots: snapshots
+            snapshots: snapshots,
+            cullingAnalysis: cullingAnalysis
         )
         writeMetrics.queued += 1
 
@@ -173,10 +175,10 @@ actor SidecarService {
         pendingSaves[sidecarURL] = nil
         saveTasks[sidecarURL] = nil
 
-        await performSave(pending.recipe, snapshots: pending.snapshots, for: pending.assetURL)
+        await performSave(pending.recipe, snapshots: pending.snapshots, for: pending.assetURL, cullingAnalysis: pending.cullingAnalysis)
     }
 
-    private func performSave(_ recipe: EditRecipe, snapshots: [RecipeSnapshot], for assetURL: URL) async {
+    private func performSave(_ recipe: EditRecipe, snapshots: [RecipeSnapshot], for assetURL: URL, cullingAnalysis: CullingAnalysis? = nil) async {
         let sidecarURL = FileSystemService.sidecarURL(for: assetURL)
 
         // Preserve existing AI edits and other sidecar fields when saving.
@@ -193,6 +195,12 @@ actor SidecarService {
             sidecar = SidecarFile(for: assetURL, recipe: recipe)
             sidecar.snapshots = snapshots
         }
+
+        // Merge culling analysis: new value wins, otherwise preserve existing.
+        if let analysis = cullingAnalysis {
+            sidecar.cullingAnalysis = analysis
+        }
+        // Note: if cullingAnalysis is nil, we preserve whatever was in the existing sidecar.
 
         if shouldSkipWrite(sidecar, existing: existingSidecar, sidecarURL: sidecarURL) {
             return
@@ -398,7 +406,7 @@ actor SidecarService {
             saveTasks[sidecarURL] = nil
             pendingSaves[sidecarURL] = nil
             writeMetrics.flushed += 1
-            await performSave(pending.recipe, snapshots: pending.snapshots, for: pending.assetURL)
+            await performSave(pending.recipe, snapshots: pending.snapshots, for: pending.assetURL, cullingAnalysis: pending.cullingAnalysis)
         }
     }
 

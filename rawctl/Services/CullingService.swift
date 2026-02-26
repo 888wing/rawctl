@@ -18,12 +18,97 @@ struct CullingScore: Sendable {
     let sharpness: Double
     /// Composition quality from attention saliency map, 0 – 1.
     let saliency: Double
-    /// True if a near-identical image was found in the same batch.
-    let isDuplicate: Bool
+    /// Exposure quality from histogram analysis, 0 (severely clipped) – 1 (well exposed).
+    let exposureScore: Double
+    /// Non-nil when this photo belongs to a near-duplicate group.
+    let duplicateGroupId: UUID?
+    /// True if this photo is the chosen representative of its group (highest combined score).
+    /// Always true for unique photos (duplicateGroupId == nil).
+    let isGroupRepresentative: Bool
     /// Suggested star rating (0–5) derived from combined score.
     let suggestedRating: Int
     /// Suggested flag derived from combined score.
     let suggestedFlag: Flag
+}
+
+/// Single source of truth for all culling scoring parameters.
+struct CullingConfig: Sendable {
+    // MARK: - Signal Weights (must sum to 1.0)
+    let sharpnessWeight: Double
+    let saliencyWeight: Double
+    let exposureWeight: Double
+
+    // MARK: - Rating Boundaries (ascending combined-score thresholds)
+    let rejectBelow: Double
+    let rating1Below: Double
+    let rating2Below: Double
+    let rating3Below: Double
+    let rating4Below: Double
+
+    // MARK: - Exposure Thresholds
+    let highlightClipFraction: Double
+    let shadowClipFraction: Double
+    let highlightPenaltyRate: Double
+    let shadowPenaltyRate: Double
+
+    // MARK: - Duplicate Detection
+    let duplicateDistanceThreshold: Float
+
+    // MARK: - Rejection Reason Thresholds
+    let blurryThreshold: Double
+    let poorCompositionThreshold: Double
+    let exposureClippedThreshold: Double
+
+    static let `default` = CullingConfig(
+        sharpnessWeight: 0.45,
+        saliencyWeight: 0.30,
+        exposureWeight: 0.25,
+
+        rejectBelow: 0.20,
+        rating1Below: 0.40,
+        rating2Below: 0.55,
+        rating3Below: 0.70,
+        rating4Below: 0.85,
+
+        highlightClipFraction: 0.03,
+        shadowClipFraction: 0.05,
+        highlightPenaltyRate: 8.0,
+        shadowPenaltyRate: 5.0,
+
+        duplicateDistanceThreshold: 0.15,
+
+        blurryThreshold: 0.25,
+        poorCompositionThreshold: 0.20,
+        exposureClippedThreshold: 0.40
+    )
+}
+
+/// Rich culling output persisted in the sidecar JSON.
+/// Replaces `CullingScore` as the primary culling result type.
+struct CullingAnalysis: Codable, Sendable, Equatable {
+    /// Schema version for forward compatibility.
+    let version: Int
+    /// Weighted combination of all signal scores, 0–1.
+    let overallScore: Double
+    /// Sharpness/focus quality, 0 (blurry) – 1 (sharp).
+    let sharpnessScore: Double
+    /// Composition quality from attention saliency, 0–1.
+    let saliencyScore: Double
+    /// Exposure quality from histogram analysis, 0–1.
+    let exposureScore: Double
+    /// Non-nil when this photo belongs to a near-duplicate group.
+    let duplicateGroupId: UUID?
+    /// Rank within duplicate group (1 = best). Nil if unique photo.
+    let duplicateRank: Int?
+    /// Suggested star rating (0–5) derived from overall score.
+    let suggestedRating: Int
+    /// Suggested flag derived from overall score.
+    let suggestedFlag: Flag
+    /// Human-readable reasons for rejection/downranking.
+    /// Empty array for well-rated photos.
+    let rejectedReasons: [String]
+
+    static let currentVersion = 1
 }
 
 /// On-device photo culling via Apple Vision framework.
@@ -37,11 +122,15 @@ struct CullingScore: Sendable {
 actor CullingService {
 
     static let shared = CullingService()
-    private init() {}
 
-    /// Distance threshold below which two photos are considered duplicates.
-    /// VNFeaturePrintObservation distances range 0 (identical) upward.
-    private let duplicateDistanceThreshold: Float = 0.15
+    let config: CullingConfig
+
+    /// Shared CIContext for histogram and sharpness rendering (expensive to create).
+    private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
+
+    private init(config: CullingConfig = .default) {
+        self.config = config
+    }
 
     // MARK: - Public API
 
@@ -56,6 +145,7 @@ actor CullingService {
     ///   - onProgress: Called with `(stepsCompleted, totalSteps)` after each step.
     ///     Total steps = `assets.count * 2` (two phases).
     /// - Returns: A dictionary mapping `PhotoAsset.id → CullingScore`.
+    @available(*, deprecated, message: "Use scoreWithAnalysis() instead")
     func score(
         assets: [PhotoAsset],
         onProgress: @escaping @Sendable (Int, Int) -> Void
@@ -64,34 +154,105 @@ actor CullingService {
 
         let totalSteps = assets.count * 2
 
-        // ── Phase 1: Feature prints for duplicate detection ──────────────────
+        // ── Phase 1: Feature prints + sharpness/saliency/exposure (single thumbnail load per photo) ──
         var featurePrints: [UUID: VNFeaturePrintObservation] = [:]
+        var rawScores: [UUID: (sharpness: Double, saliency: Double, exposure: Double)] = [:]
         featurePrints.reserveCapacity(assets.count)
+        rawScores.reserveCapacity(assets.count)
 
         for (idx, asset) in assets.enumerated() {
             onProgress(idx, totalSteps)
-            if let image = loadThumbnail(for: asset),
-               let fp = generateFeaturePrint(from: image) {
+            guard let image = loadThumbnail(for: asset) else { continue }
+            if let fp = generateFeaturePrint(from: image) {
                 featurePrints[asset.id] = fp
             }
+            rawScores[asset.id] = (
+                sharpness: scoreSharpness(image: image),
+                saliency:  scoreSaliency(image: image),
+                exposure:  scoreExposure(image: image)
+            )
         }
 
-        // ── Phase 2: Score each asset ─────────────────────────────────────────
+        // ── Phase 2: Build groups, then compute final scores ──────────────────────────────
+        let groups = buildDuplicateGroups(prints: featurePrints, scores: rawScores)
+
         var results: [UUID: CullingScore] = [:]
         results.reserveCapacity(assets.count)
 
         for (idx, asset) in assets.enumerated() {
             onProgress(assets.count + idx, totalSteps)
-            guard let image = loadThumbnail(for: asset) else { continue }
-
-            let sharpness = scoreSharpness(image: image)
-            let saliency  = scoreSaliency(image: image)
-            let isDupe    = detectDuplicate(assetId: asset.id, in: featurePrints)
-
+            guard let raw = rawScores[asset.id] else { continue }
+            let group = groups[asset.id] ?? (groupId: nil, isRepresentative: true)
             results[asset.id] = computeFinalScore(
-                sharpness: sharpness,
-                saliency: saliency,
-                isDuplicate: isDupe
+                sharpness: raw.sharpness,
+                saliency:  raw.saliency,
+                exposure:  raw.exposure,
+                groupId:   group.groupId,
+                isRepresentative: group.isRepresentative
+            )
+        }
+
+        return results
+    }
+
+    /// Score a batch of assets using pre-built feature prints from FeaturePrintIndex.
+    ///
+    /// Avoids regenerating feature prints when an index already exists (e.g., from SmartSync).
+    /// Falls back to internal generation for assets missing from the index.
+    ///
+    /// - Parameters:
+    ///   - assets: The photos to score.
+    ///   - existingPrints: Pre-computed feature prints keyed by asset ID.
+    ///   - onProgress: Called with `(stepsCompleted, totalSteps)` after each step.
+    /// - Returns: A dictionary mapping `PhotoAsset.id -> CullingAnalysis`.
+    func scoreWithAnalysis(
+        assets: [PhotoAsset],
+        existingPrints: [UUID: VNFeaturePrintObservation] = [:],
+        onProgress: @escaping @Sendable (Int, Int) -> Void
+    ) async -> [UUID: CullingAnalysis] {
+        guard !assets.isEmpty else { return [:] }
+
+        let totalSteps = assets.count * 2
+
+        // ── Phase 1: Feature prints + sharpness/saliency/exposure ──
+        var featurePrints: [UUID: VNFeaturePrintObservation] = existingPrints
+        var rawScores: [UUID: (sharpness: Double, saliency: Double, exposure: Double)] = [:]
+        featurePrints.reserveCapacity(assets.count)
+        rawScores.reserveCapacity(assets.count)
+
+        for (idx, asset) in assets.enumerated() {
+            onProgress(idx, totalSteps)
+            guard let image = loadThumbnail(for: asset) else { continue }
+            // Reuse existing print if available; generate only if missing.
+            if featurePrints[asset.id] == nil {
+                if let fp = generateFeaturePrint(from: image) {
+                    featurePrints[asset.id] = fp
+                }
+            }
+            rawScores[asset.id] = (
+                sharpness: scoreSharpness(image: image),
+                saliency:  scoreSaliency(image: image),
+                exposure:  scoreExposure(image: image)
+            )
+        }
+
+        // ── Phase 2: Build groups with rank, then build analysis ──
+        let groups = buildDuplicateGroupsWithRank(prints: featurePrints, scores: rawScores)
+
+        var results: [UUID: CullingAnalysis] = [:]
+        results.reserveCapacity(assets.count)
+
+        for (idx, asset) in assets.enumerated() {
+            onProgress(assets.count + idx, totalSteps)
+            guard let raw = rawScores[asset.id] else { continue }
+            let group = groups[asset.id] ?? (groupId: nil, rank: nil, isRepresentative: true)
+            results[asset.id] = buildAnalysis(
+                sharpness: raw.sharpness,
+                saliency:  raw.saliency,
+                exposure:  raw.exposure,
+                groupId:   group.groupId,
+                duplicateRank: group.rank,
+                isRepresentative: group.isRepresentative
             )
         }
 
@@ -161,7 +322,7 @@ actor CullingService {
         guard let output = laplacian.outputImage else { return 0.5 }
 
         // Sample a 1×1 pixel from the centre — its brightness encodes mean edge energy.
-        let context = CIContext(options: [.useSoftwareRenderer: false])
+        let context = ciContext
         var pixel = [UInt8](repeating: 0, count: 4)
         let samplePoint = CGRect(
             x: output.extent.midX,
@@ -199,6 +360,81 @@ actor CullingService {
         }
     }
 
+    // MARK: - Exposure Quality Scoring
+
+    /// Returns an exposure quality score (0–1) based on luminance histogram clipping.
+    ///
+    /// Uses CIAreaHistogram to compute a 256-bin luminance histogram.
+    /// Penalizes photos with clipped highlights (blown whites) or crushed shadows
+    /// beyond configurable thresholds. Includes an artistic tolerance band so
+    /// intentionally low-key or high-key images aren't over-penalized.
+    ///
+    /// - Returns: 1.0 for well-exposed images, decreasing toward 0 for severe clipping.
+    private func scoreExposure(image: CGImage) -> Double {
+        let ciImage = CIImage(cgImage: image)
+
+        // Convert to grayscale luminance for histogram analysis.
+        let gray = ciImage.applyingFilter("CIColorControls", parameters: [
+            kCIInputSaturationKey: 0.0
+        ])
+
+        // CIAreaHistogram: 256 bins across the full image extent.
+        guard let histFilter = CIFilter(name: "CIAreaHistogram") else { return 0.8 }
+        histFilter.setValue(gray, forKey: kCIInputImageKey)
+        histFilter.setValue(CIVector(cgRect: gray.extent), forKey: "inputExtent")
+        histFilter.setValue(NSNumber(value: 256), forKey: "inputCount")
+        histFilter.setValue(NSNumber(value: 1.0), forKey: "inputScale")
+
+        guard let histImage = histFilter.outputImage else { return 0.8 }
+
+        // Read the 256×1 histogram as float pixels.
+        let context = ciContext
+        var bins = [Float](repeating: 0, count: 256 * 4) // RGBA float
+        context.render(
+            histImage,
+            toBitmap: &bins,
+            rowBytes: 256 * 4 * MemoryLayout<Float>.size,
+            bounds: CGRect(x: 0, y: 0, width: 256, height: 1),
+            format: .RGBAf,
+            colorSpace: CGColorSpaceCreateDeviceRGB()
+        )
+
+        // Extract the red channel (luminance in grayscale) counts.
+        var luminanceBins = [Float](repeating: 0, count: 256)
+        for i in 0..<256 {
+            luminanceBins[i] = bins[i * 4] // R channel
+        }
+
+        let totalPixels = luminanceBins.reduce(0, +)
+        guard totalPixels > 0 else { return 0.8 }
+
+        // Fraction of pixels in shadow bin (0) and highlight bin (255).
+        let shadowFraction  = Double(luminanceBins[0]) / Double(totalPixels)
+        let highlightFraction = Double(luminanceBins[255]) / Double(totalPixels)
+
+        // Also check near-black (0–4) and near-white (251–255) for broader clipping.
+        let nearBlack = Double(luminanceBins[0...4].reduce(0, +)) / Double(totalPixels)
+        let nearWhite = Double(luminanceBins[251...255].reduce(0, +)) / Double(totalPixels)
+
+        let cfg = config
+
+        // Compute penalties only beyond the artistic tolerance thresholds.
+        let highlightExcess = max(0, highlightFraction - cfg.highlightClipFraction)
+        let shadowExcess    = max(0, shadowFraction - cfg.shadowClipFraction)
+
+        // Broader clipping is weighted at half rate (near-black/white bands).
+        let broadHighlightExcess = max(0, nearWhite - cfg.highlightClipFraction * 2)
+        let broadShadowExcess    = max(0, nearBlack - cfg.shadowClipFraction * 2)
+
+        let highlightPenalty = highlightExcess * cfg.highlightPenaltyRate
+                             + broadHighlightExcess * cfg.highlightPenaltyRate * 0.5
+        let shadowPenalty    = shadowExcess * cfg.shadowPenaltyRate
+                             + broadShadowExcess * cfg.shadowPenaltyRate * 0.5
+
+        let score = max(0.0, 1.0 - highlightPenalty - shadowPenalty)
+        return score
+    }
+
     // MARK: - Duplicate Detection
 
     private func generateFeaturePrint(from image: CGImage) -> VNFeaturePrintObservation? {
@@ -212,47 +448,250 @@ actor CullingService {
         }
     }
 
-    private func detectDuplicate(
-        assetId: UUID,
-        in prints: [UUID: VNFeaturePrintObservation]
-    ) -> Bool {
-        guard let mine = prints[assetId] else { return false }
-        for (otherId, other) in prints where otherId != assetId {
-            var distance: Float = 0
-            if (try? mine.computeDistance(&distance, to: other)) != nil,
-               distance < duplicateDistanceThreshold {
-                return true
+    /// Build duplicate groups from feature prints using pairwise distance.
+    /// Returns a dict mapping assetId → (groupId, isRepresentative).
+    /// Photos with no near-duplicates map to (nil, true).
+    private func buildDuplicateGroups(
+        prints: [UUID: VNFeaturePrintObservation],
+        scores: [UUID: (sharpness: Double, saliency: Double, exposure: Double)]
+    ) -> [UUID: (groupId: UUID?, isRepresentative: Bool)] {
+        // Union-Find: parent[id] = id means it's a root.
+        var parent: [UUID: UUID] = Dictionary(uniqueKeysWithValues: prints.keys.map { ($0, $0) })
+
+        func find(_ id: UUID) -> UUID {
+            // Pass 1: walk up to the root.
+            var root = id
+            while parent[root] != root { root = parent[root] ?? root }
+            // Pass 2: point every node on the path directly to root.
+            var node = id
+            while node != root {
+                let next = parent[node] ?? root
+                parent[node] = root
+                node = next
+            }
+            return root
+        }
+
+        func union(_ a: UUID, _ b: UUID) {
+            let ra = find(a), rb = find(b)
+            if ra != rb { parent[ra] = rb }
+        }
+
+        // Pairwise distance; O(n²) — acceptable for typical batch sizes.
+        let ids = Array(prints.keys)
+        for i in 0..<ids.count {
+            guard let pi = prints[ids[i]] else { continue }
+            for j in (i + 1)..<ids.count {
+                guard let pj = prints[ids[j]] else { continue }
+                var distance: Float = 0
+                if (try? pi.computeDistance(&distance, to: pj)) != nil,
+                   distance < config.duplicateDistanceThreshold {
+                    union(ids[i], ids[j])
+                }
             }
         }
-        return false
+
+        // Collect groups: root → [members]
+        var groups: [UUID: [UUID]] = [:]
+        for id in ids {
+            let root = find(id)
+            groups[root, default: []].append(id)
+        }
+
+        // Assign representative per group (highest combined score).
+        var result: [UUID: (groupId: UUID?, isRepresentative: Bool)] = [:]
+        for (_, members) in groups {
+            if members.count == 1 {
+                // Unique photo — not a duplicate.
+                result[members[0]] = (groupId: nil, isRepresentative: true)
+            } else {
+                let groupId = UUID()
+                let rep = members.max(by: { a, b in
+                    let cfg = CullingConfig.default
+                    let sa = (scores[a]?.sharpness ?? 0) * cfg.sharpnessWeight
+                           + (scores[a]?.saliency ?? 0)  * cfg.saliencyWeight
+                           + (scores[a]?.exposure ?? 0)   * cfg.exposureWeight
+                    let sb = (scores[b]?.sharpness ?? 0) * cfg.sharpnessWeight
+                           + (scores[b]?.saliency ?? 0)  * cfg.saliencyWeight
+                           + (scores[b]?.exposure ?? 0)   * cfg.exposureWeight
+                    return sa < sb
+                })
+                for member in members {
+                    result[member] = (groupId: groupId, isRepresentative: member == rep)
+                }
+            }
+        }
+        return result
+    }
+
+    /// Build duplicate groups with ranked members (1 = best in group).
+    /// Returns dict mapping assetId -> (groupId, rank, isRepresentative).
+    private func buildDuplicateGroupsWithRank(
+        prints: [UUID: VNFeaturePrintObservation],
+        scores: [UUID: (sharpness: Double, saliency: Double, exposure: Double)]
+    ) -> [UUID: (groupId: UUID?, rank: Int?, isRepresentative: Bool)] {
+        // Union-Find: same algorithm as buildDuplicateGroups.
+        var parent: [UUID: UUID] = Dictionary(uniqueKeysWithValues: prints.keys.map { ($0, $0) })
+
+        func find(_ id: UUID) -> UUID {
+            var root = id
+            while parent[root] != root { root = parent[root] ?? root }
+            var node = id
+            while node != root {
+                let next = parent[node] ?? root
+                parent[node] = root
+                node = next
+            }
+            return root
+        }
+
+        func union(_ a: UUID, _ b: UUID) {
+            let ra = find(a), rb = find(b)
+            if ra != rb { parent[ra] = rb }
+        }
+
+        let ids = Array(prints.keys)
+        for i in 0..<ids.count {
+            guard let pi = prints[ids[i]] else { continue }
+            for j in (i + 1)..<ids.count {
+                guard let pj = prints[ids[j]] else { continue }
+                var distance: Float = 0
+                if (try? pi.computeDistance(&distance, to: pj)) != nil,
+                   distance < config.duplicateDistanceThreshold {
+                    union(ids[i], ids[j])
+                }
+            }
+        }
+
+        var groups: [UUID: [UUID]] = [:]
+        for id in ids {
+            let root = find(id)
+            groups[root, default: []].append(id)
+        }
+
+        let cfg = CullingConfig.default
+        var result: [UUID: (groupId: UUID?, rank: Int?, isRepresentative: Bool)] = [:]
+
+        for (_, members) in groups {
+            if members.count == 1 {
+                result[members[0]] = (groupId: nil, rank: nil, isRepresentative: true)
+            } else {
+                let groupId = UUID()
+                // Sort by combined score descending to assign rank.
+                let sorted = members.sorted { a, b in
+                    let sa = (scores[a]?.sharpness ?? 0) * cfg.sharpnessWeight
+                           + (scores[a]?.saliency ?? 0)  * cfg.saliencyWeight
+                           + (scores[a]?.exposure ?? 0)   * cfg.exposureWeight
+                    let sb = (scores[b]?.sharpness ?? 0) * cfg.sharpnessWeight
+                           + (scores[b]?.saliency ?? 0)  * cfg.saliencyWeight
+                           + (scores[b]?.exposure ?? 0)   * cfg.exposureWeight
+                    return sa > sb
+                }
+                for (rank, member) in sorted.enumerated() {
+                    result[member] = (
+                        groupId: groupId,
+                        rank: rank + 1,  // 1-indexed
+                        isRepresentative: rank == 0
+                    )
+                }
+            }
+        }
+        return result
     }
 
     // MARK: - Score → Rating + Flag
 
-    private func computeFinalScore(
+    @available(*, deprecated, message: "Use buildAnalysis() instead")
+    nonisolated func computeFinalScore(
         sharpness: Double,
         saliency: Double,
-        isDuplicate: Bool
+        exposure: Double = 1.0,
+        groupId: UUID?,
+        isRepresentative: Bool
     ) -> CullingScore {
-        let combined = sharpness * 0.6 + saliency * 0.4
+        // Uses CullingConfig.default directly because this method is nonisolated
+        // and cannot access actor-isolated self.config. Safe because init is private
+        // and shared singleton always uses .default.
+        let cfg = CullingConfig.default
+        let combined = sharpness * cfg.sharpnessWeight
+                     + saliency  * cfg.saliencyWeight
+                     + exposure  * cfg.exposureWeight
+        let isNonRepDuplicate = groupId != nil && !isRepresentative
 
         let (rating, flag): (Int, Flag)
-        switch (isDuplicate, combined) {
-        case (true, _):      (rating, flag) = (0, .reject)
-        case (_, ..<0.20):   (rating, flag) = (0, .reject)
-        case (_, ..<0.40):   (rating, flag) = (1, .none)
-        case (_, ..<0.55):   (rating, flag) = (2, .none)
-        case (_, ..<0.70):   (rating, flag) = (3, .none)
-        case (_, ..<0.85):   (rating, flag) = (4, .pick)
-        default:             (rating, flag) = (5, .pick)
+        switch (isNonRepDuplicate, combined) {
+        case (true, _):               (rating, flag) = (0, .reject)
+        case (_, ..<cfg.rejectBelow):  (rating, flag) = (0, .reject)
+        case (_, ..<cfg.rating1Below): (rating, flag) = (1, .none)
+        case (_, ..<cfg.rating2Below): (rating, flag) = (2, .none)
+        case (_, ..<cfg.rating3Below): (rating, flag) = (3, .none)
+        case (_, ..<cfg.rating4Below): (rating, flag) = (4, .pick)
+        default:                       (rating, flag) = (5, .pick)
         }
 
         return CullingScore(
             sharpness: sharpness,
-            saliency: saliency,
-            isDuplicate: isDuplicate,
+            saliency:  saliency,
+            exposureScore: exposure,
+            duplicateGroupId: groupId,
+            isGroupRepresentative: isRepresentative,
             suggestedRating: rating,
-            suggestedFlag: flag
+            suggestedFlag:   flag
+        )
+    }
+
+    /// Build a full CullingAnalysis with rejection reasons derived from signal scores.
+    nonisolated func buildAnalysis(
+        sharpness: Double,
+        saliency: Double,
+        exposure: Double,
+        groupId: UUID?,
+        duplicateRank: Int?,
+        isRepresentative: Bool
+    ) -> CullingAnalysis {
+        // Uses CullingConfig.default directly because this method is nonisolated.
+        let cfg = CullingConfig.default
+        let combined = sharpness * cfg.sharpnessWeight
+                     + saliency  * cfg.saliencyWeight
+                     + exposure  * cfg.exposureWeight
+        let isNonRepDuplicate = groupId != nil && !isRepresentative
+
+        let (rating, flag): (Int, Flag)
+        switch (isNonRepDuplicate, combined) {
+        case (true, _):               (rating, flag) = (0, .reject)
+        case (_, ..<cfg.rejectBelow):  (rating, flag) = (0, .reject)
+        case (_, ..<cfg.rating1Below): (rating, flag) = (1, .none)
+        case (_, ..<cfg.rating2Below): (rating, flag) = (2, .none)
+        case (_, ..<cfg.rating3Below): (rating, flag) = (3, .none)
+        case (_, ..<cfg.rating4Below): (rating, flag) = (4, .pick)
+        default:                       (rating, flag) = (5, .pick)
+        }
+
+        var reasons: [String] = []
+        if isNonRepDuplicate {
+            reasons.append("duplicate_non_best")
+        }
+        if sharpness < cfg.blurryThreshold {
+            reasons.append("blurry")
+        }
+        if saliency < cfg.poorCompositionThreshold {
+            reasons.append("poor_composition")
+        }
+        if exposure < cfg.exposureClippedThreshold {
+            reasons.append("exposure_clipped")
+        }
+
+        return CullingAnalysis(
+            version: CullingAnalysis.currentVersion,
+            overallScore: combined,
+            sharpnessScore: sharpness,
+            saliencyScore: saliency,
+            exposureScore: exposure,
+            duplicateGroupId: groupId,
+            duplicateRank: duplicateRank,
+            suggestedRating: rating,
+            suggestedFlag: flag,
+            rejectedReasons: reasons
         )
     }
 }

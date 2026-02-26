@@ -9,10 +9,110 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - App renamed from rawctl to **Latent**
+
+## [1.6.0] - 2026-02-24
+
+### Added
+
+#### AI Colour Grading (Pro)
+- **GeminiColorService** (`Services/GeminiColorService.swift`): `@MainActor` service calling `POST api.latent-app.com/ai/color-grade` with rendered photo thumbnail (1024px JPEG, base64); supports `auto`, `mood`, and `reference` modes; 3 typed errors (`authenticationRequired`, `insufficientCredits`, `invalidResponse`); refreshes credits balance after success
+- **ColorGradeDelta** (`Models/EditRecipe.swift`): Optional-field struct for AI-suggested recipe changes; `applying(to:)` merges delta onto base `EditRecipe` with temperature/tint clamping; `diff(ai:final:)` computes user deviation for preference learning; `hasChanges` sentinel
+- **AIColorGradingPanel** (`Components/AIColorGradingPanel.swift`): Inspector panel with Auto/Mood mode picker, 7 mood presets (Cinematic, Airy, Moody, Warm Golden, Cool Urban, B&W Dramatic, Natural Vibrant), credits balance display, "Analyse & Apply" button, last-analysis text view; Pro gate with upgrade CTA
+- **InspectorConfig**: Added `.aiColorGrading` panel case (visible by default, icon `sparkle.magnifyingglass`)
+- **InspectorView**: AI Colour Grading section above AI Generation
+- **AppFeatures**: `aiColorGradingEnabled` flag (Pro-gated via `isProUser`)
+- **AppState**: `pendingAiSuggestion: PendingAISuggestion?`, `aiGradeAnalysis: String`; `applyColorGrade(_:mode:)` pushes undo history then applies delta; `recordAndClearPendingAISuggestion()` computes user preference diff and posts to backend
+
+#### Style Preference Learning
+- **AccountService**: `userStyleProfile: UserStyleProfile?`; `recordStylePreference(originalSuggestion:userModification:mode:mood:)` fire-and-forget POST to `/ai/style-preference`
+- **UserStyleProfile**: `Codable` struct accumulating `exposureBias`, `contrastBias`, `preferredMoods`, `avoidedMoods`, `sampleCount`; personalisation activates after ≥5 samples
+- **SidecarService** / **AppState**: Preference diff recorded when user switches photo after AI grade applied
+
+#### Backend (`rawctl-api` Cloudflare Worker — reconstructed + extended)
+- Reconstructed full TypeScript source at `/Users/chuisiufai/Projects/rawctl-api/` from deployed bundle
+- **POST `/ai/color-grade`**: Calls Gemini 2.0 Flash with JSON-mode response; builds `ColorGradeDelta` from schema; injects `UserStyleProfile` biases when ≥5 samples; 1 credit (auto/mood) or 2 credits (reference)
+- **POST `/ai/style-preference`**: Accumulates rolling-average bias profile in `user_style_profiles` D1 table; free endpoint
+- **D1 migration**: Created `user_style_profiles`, `analytics_sessions`, `analytics_events` tables
+
+#### AI Culling v1.1 — Scoring Hardening (E1)
+- **CullingConfig** (`Services/CullingService.swift`): Single source of truth for scoring weights (sharpness 0.45, saliency 0.30, exposure 0.25), rating boundaries, exposure clipping thresholds, and duplicate distance; replaces all hardcoded constants
+- **Exposure scoring** (`Services/CullingService.swift`): `scoreExposure(image:)` uses CIAreaHistogram (256-bin luminance) to detect highlight/shadow clipping; artistic tolerance band avoids over-penalizing intentional low-key/high-key images
+- **CullingScore.exposureScore**: New field carrying per-photo exposure quality (0–1)
+- **3-signal scoring formula**: `computeFinalScore` now combines sharpness + saliency + exposure using configurable weights
+- **Shared CIContext**: Reused across sharpness and exposure scoring for batch performance
+
+#### AI Culling v1.1 — Duplicate Grouping Upgrade (E2)
+- **CullingAnalysis** (`Services/CullingService.swift`): Rich Codable output struct replacing CullingScore — carries `version`, `overallScore`, all signal scores, `duplicateGroupId`, `duplicateRank` (1-indexed), `suggestedRating`, `suggestedFlag`, and `rejectedReasons` (e.g. "blurry", "duplicate_non_best", "exposure_clipped", "poor_composition")
+- **scoreWithAnalysis()**: New primary scoring API accepting pre-built `FeaturePrintIndex` prints to avoid duplicate feature print generation; returns `[UUID: CullingAnalysis]`
+- **buildDuplicateGroupsWithRank()**: Assigns 1-indexed rank within each duplicate group using 3-signal weighted sort (sharpness + saliency + exposure)
+- **FeaturePrintIndex reuse**: Culling pipeline shares the session-scoped feature print cache with SmartSync
+
+#### AI Culling v1.1 — Data Contract Persistence (E3)
+- **Sidecar schema v8**: `SidecarFile.cullingAnalysis: CullingAnalysis?` — optional field preserving full culling metadata across app restarts; backward compatible with v7 sidecars
+- **applyCullingResults()**: Now writes both legacy `rating/flag` and full `CullingAnalysis` to sidecar via `SidecarService`
+- **startAICulling()**: Uses `scoreWithAnalysis()` with `FeaturePrintIndex.shared.allPrints()` for cache reuse
+
+### Fixed
+- **GeminiColorService**: Decode response via `APIResponse<ColorGradeResponse>` wrapper (was decoding bare struct → key-not-found crash)
+- **GeminiColorService**: HTTP 401 → `.authenticationRequired`, 402 → `.insufficientCredits` (was generic `.invalidResponse`)
+- **ColorGradeResponse**: Changed conformance from `Decodable` to `Codable` to satisfy `APIResponse<T: Codable>` constraint
+- **AILayerStack.moveLayer()**: Fixed ternary with identical branches — after `remove(at:)`, when source < target the destination index must shift left by 1; drag-and-drop reorder now produces correct layer order
+- **ImagePipeline**: Missing AI layer/edit cache files now log a warning instead of silently skipping composite
+- **AppState**: Sidecar save failure (recipe+nodes+aiLayers) now shows "Failed to save AI layers" HUD instead of silent fallback
+- **CullingService**: Deprecated `buildDuplicateGroups()` representative selection now uses all 3 signals (sharpness + saliency + exposure), matching `buildDuplicateGroupsWithRank()`
+- **AIGenerationService**: Added local credit reservation (`reserveCredits`/`releaseCredits`) to prevent race condition when two generations are triggered simultaneously
+
+### Technical
+- New test file `rawctlTests/GeminiColorServiceTests.swift`: 17 tests covering `ColorGradeDelta.applying`, `diff`, `hasChanges`, `APIResponse<ColorGradeResponse>` JSON decoding, and `AppState.applyColorGrade`
+- `AppFeaturesProGatingTests`: Added `aiColorGradingEnabled` lockstep assertions; all 25 new + existing tests pass
+- 13 new culling tests: exposure scoring boundaries, calibration regression, synthetic fixture integration (overexposed/underexposed ordering)
+- 17 new culling tests (E2+E3): CullingAnalysis rejection reasons, Codable roundtrip, sidecar v8 backward compatibility, duplicate ranking, save-load idempotency
+- Deprecated: `CullingService.score()` and `computeFinalScore()` in favor of `scoreWithAnalysis()` and `buildAnalysis()`
+- **CullingConfig**: Rejection reason thresholds (`blurryThreshold: 0.25`, `poorCompositionThreshold: 0.20`, `exposureClippedThreshold: 0.40`) now configurable via CullingConfig instead of hardcoded in `buildAnalysis()`
+- New regression test `aiLayerStackMoveLayerReordersCorrectly()` in `LayerCompositingOrderTests`
+
+## [1.5.0] - 2026-02-24
+
+### Added
+
+#### AI Photo Culling (Pro)
+- **CullingService** (`Services/CullingService.swift`): Apple Vision-powered photo scoring — sharpness via Laplacian variance, saliency via `VNGenerateAttentionBasedSaliencyImageRequest`, duplicate detection via `VNGenerateImageFeaturePrintRequest`; ANE-accelerated, zero marginal cost
+- **Group-aware duplicate detection**: Union-Find with two-pass path compression identifies burst groups; keeps highest-scoring photo in each group, rejects the rest
+- **Pre-cull undo snapshot**: `AppState.lastPreCullSnapshot` captures all ratings/flags before culling runs; one-tap undo restores entire library state
+- **GridView**: "AI Cull" toolbar button + `ProgressView` overlay; progress via `AppState.cullingProgress`
+
+#### Scene-Aware Smart Sync (Pro)
+- **SmartSyncService** (`Services/SmartSyncService.swift`): `VNGenerateImageFeaturePrintRequest` scene-similarity indexing + `RecipeAdapter` for EV-normalised exposure transfer; clamped to ±3 EV
+- **FeaturePrintIndex**: in-memory cache of `VNFeaturePrintObservation` keyed by photo URL; invalidates on edit change
+- **SingleView**: "Smart Sync" button in inspector; confirmation sheet listing matched photos before applying adapted recipes
+
+#### AI Masking via Mobile-SAM (Pro)
+- **SAMService** (`Services/SAMService.swift`): Core ML actor wrapping Mobile-SAM; graceful nil when model absent; `SAMModelStatus` enum (`.notInstalled`, `.downloading(progress:)`, `.ready`, `.error`)
+- **AIGenerationPanel**: Pro gate on region masking mode — shows crown badge + upgrade prompt when not subscribed; mode picker restricted to `[.fullImage]` for free users
+
+#### Pro Subscription Gating
+- **AppFeatures**: All AI features (Culling, Smart Sync, Masking, Batch Processing) are Pro-only; `LATENT_PRO_OVERRIDE=1` env var for QA
+- **AccountService.isProUser**: checks `creditsBalance.subscription.plan` for "pro", "premium", or "yearly" substrings (case-insensitive); returns `false` when unauthenticated
+
+#### Account & Entitlement Reliability
+- **Checkout sync window**: 180-second polling loop starts automatically when browser checkout opens (subscription or credits); keeps Pro/credits state aligned after web payment
+- **Entitlement refresh throttle**: 8-second minimum between `/user/credits` calls prevents redundant API traffic on app focus
+- **Fallback plans**: `applyFallbackPlansIfNeeded()` ensures pricing UI is never blank when `/checkout/plans` is unreachable
+
+### Fixed
+- **NodeGraphTests**: Updated `schemaVersion` assertion from v6 → v7 (schema bumped when `aiLayers` was added in v1.4.x)
+
+### Technical
+- **Test suite** (`rawctlTests/`): 31 new tests across 3 new files
+  - `SAMServiceTests`: SAMModelStatus Equatable + isReady; graceful nil when model absent
+  - `AppFeaturesProGatingTests`: tier gating lockstep; isProUser false when unauthenticated
+  - `AccountServiceIsProUserTests`: plan-name variants, case-insensitivity, nil guards
+- **Sidecar schema v7**: `aiLayers` field added (backward compatible; v5/v6 sidecars load without it)
 - Sidecar format: `.rawctl.json` files silently migrated to `.latent.json` on first open
 - Camera profiles renamed: rawctl Neutral/Vivid/Portrait → Latent Neutral/Vivid/Portrait
 - Domain updated to latent-app.com (Sparkle, API, links)
 - Bundle identifier updated to `Shacoworkshop.latent`
+- Old release scripts and bin tools removed (superseded by `/rawctl-release` skill)
 
 ## [1.4.0] - 2026-01-14
 

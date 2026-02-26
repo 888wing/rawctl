@@ -95,7 +95,17 @@ final class AccountService: ObservableObject {
     @Published var plans: [PlanInfo] = []
     @Published var creditsPacks: [CreditPackInfo] = []
     @Published var errorMessage: String?
-    
+    @Published var userStyleProfile: UserStyleProfile?
+
+    // Entitlement sync control (used after browser-based checkout returns)
+    private var lastEntitlementRefreshAt: Date?
+    private var checkoutSyncTask: Task<Void, Never>?
+    private static let entitlementRefreshThrottleSeconds: TimeInterval = 8
+    private static let checkoutSyncWindowSeconds: TimeInterval = 180
+
+    // Local credit reservation for in-flight AI operations
+    private var reservedCredits: Int = 0
+
     // Token storage
     private var accessToken: String? {
         get { KeychainHelper.get(key: "rawctl_access_token") }
@@ -219,6 +229,9 @@ final class AccountService: ObservableObject {
     
     /// Sign out
     func signOut() {
+        checkoutSyncTask?.cancel()
+        checkoutSyncTask = nil
+        lastEntitlementRefreshAt = nil
         accessToken = nil
         refreshToken = nil
         currentUser = nil
@@ -256,12 +269,26 @@ final class AccountService: ObservableObject {
         }
     }
 
+    /// Reserve credits locally before API call. Returns false if insufficient.
+    func reserveCredits(_ amount: Int) -> Bool {
+        let available = (creditsBalance?.totalRemaining ?? 0) - reservedCredits
+        guard available >= amount else { return false }
+        reservedCredits += amount
+        return true
+    }
+
+    /// Release reserved credits (called after API response or on failure).
+    func releaseCredits(_ amount: Int) {
+        reservedCredits = max(0, reservedCredits - amount)
+    }
+
     func loadCreditsBalance() async {
         guard isAuthenticated else { return }
 
         do {
             let response: APIResponse<CreditsBalance> = try await get(endpoint: "/user/credits")
             creditsBalance = response.data
+            lastEntitlementRefreshAt = Date()
         } catch AccountError.unauthorized {
             // Token expired and refresh failed, sign out
             print("[AccountService] Unauthorized loading credits, signing out")
@@ -277,10 +304,14 @@ final class AccountService: ObservableObject {
             if let data = response.data {
                 plans = data.plans
                 creditsPacks = data.creditsPacks
+            } else {
+                applyFallbackPlansIfNeeded()
             }
         } catch {
             print("[AccountService] Failed to load plans: \(error)")
-            // Plans are public data, don't sign out on failure
+            // Plans are public data, don't sign out on failure.
+            // Keep a deterministic fallback so pricing UI is never empty.
+            applyFallbackPlansIfNeeded()
         }
     }
     
@@ -300,8 +331,9 @@ final class AccountService: ObservableObject {
         guard let data = response.data, let url = URL(string: data.url) else {
             throw AccountError.invalidResponse
         }
-        
+
         NSWorkspace.shared.open(url)
+        startCheckoutSyncWindow(reason: "subscription_checkout_opened")
     }
     
     /// Create credits pack checkout and open in browser
@@ -318,8 +350,9 @@ final class AccountService: ObservableObject {
         guard let data = response.data, let url = URL(string: data.url) else {
             throw AccountError.invalidResponse
         }
-        
+
         NSWorkspace.shared.open(url)
+        startCheckoutSyncWindow(reason: "credits_checkout_opened")
     }
     
     /// Open billing portal
@@ -336,12 +369,71 @@ final class AccountService: ObservableObject {
         guard let data = response.data, let url = URL(string: data.url) else {
             throw AccountError.invalidResponse
         }
-        
+
         NSWorkspace.shared.open(url)
+        startCheckoutSyncWindow(reason: "billing_portal_opened")
+    }
+
+    /// Refresh entitlements when app returns to foreground.
+    /// This keeps web/browser checkout and app-side Pro/credits state aligned.
+    func refreshEntitlementsIfNeeded(force: Bool = false, reason: String) async {
+        guard isAuthenticated else { return }
+
+        if !force,
+           let last = lastEntitlementRefreshAt,
+           Date().timeIntervalSince(last) < Self.entitlementRefreshThrottleSeconds {
+            return
+        }
+
+        lastEntitlementRefreshAt = Date()
+        await loadCreditsBalance()
+    }
+
+    /// Handle app deep links for post-checkout return URLs.
+    func handleIncomingURL(_ url: URL) async {
+        guard Self.isBillingReturnURL(url) else { return }
+        await refreshEntitlementsIfNeeded(force: true, reason: "billing_return_url")
+        startCheckoutSyncWindow(reason: "billing_return_url")
+    }
+
+    static func isBillingReturnURL(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(),
+              scheme == "latent" || scheme == "latent-app" else {
+            return false
+        }
+
+        let host = (url.host ?? "").lowercased()
+        let path = url.path.lowercased()
+        if host.contains("billing") || host.contains("checkout") {
+            return true
+        }
+        if path.contains("billing") || path.contains("checkout") {
+            return true
+        }
+
+        if let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+           let source = components.queryItems?.first(where: { $0.name.lowercased() == "source" })?.value?.lowercased(),
+           source.contains("billing") || source.contains("checkout") {
+            return true
+        }
+
+        return false
     }
     
+    // MARK: - Pro Subscription
+
+    /// True if the current user's subscription plan includes Pro AI features.
+    ///
+    /// Checks the `subscription.plan` field returned by `/user/credits`.
+    /// Non-authenticated and free-tier users both return `false`.
+    var isProUser: Bool {
+        guard isAuthenticated, let balance = creditsBalance else { return false }
+        let plan = balance.subscription.plan.lowercased()
+        return plan.contains("pro") || plan.contains("premium") || plan.contains("yearly")
+    }
+
     // MARK: - AI Operations
-    
+
     /// Check if user has enough credits
     func hasEnoughCredits(for operation: String) -> Bool {
         guard let balance = creditsBalance else { return false }
@@ -349,19 +441,100 @@ final class AccountService: ObservableObject {
         let cost: Int
         switch operation {
         case "nano_banana_1k": cost = 1
-        case "nano_banana_pro_2k": cost = 3
-        case "nano_banana_pro_4k": cost = 6
+        case "nano_banana_2k", "nano_banana_pro_2k": cost = 3
+        case "nano_banana_4k", "nano_banana_pro_4k": cost = 6
         default: cost = 1
         }
         
         return balance.totalRemaining >= cost
     }
     
+    /// Record that the user modified an AI colour-grading suggestion before saving.
+    /// Posts a fire-and-forget preference update to the backend.
+    /// Requires at least 5 samples before the backend starts influencing future AI suggestions.
+    func recordStylePreference(
+        originalSuggestion: ColorGradeDelta,
+        userModification: ColorGradeDelta,
+        mode: String,
+        mood: String? = nil
+    ) {
+        guard isAuthenticated else { return }
+        Task {
+            let body: [String: Any] = [
+                "mode": mode,
+                "mood": mood as Any,
+                "originalSuggestion": (try? JSONEncoder().encode(originalSuggestion))
+                    .flatMap { try? JSONSerialization.jsonObject(with: $0) } as Any,
+                "userModification": (try? JSONEncoder().encode(userModification))
+                    .flatMap { try? JSONSerialization.jsonObject(with: $0) } as Any
+            ]
+            let _: APIResponse<EmptyResponse> = (try? await post(
+                endpoint: "/ai/style-preference",
+                body: body,
+                authenticated: true
+            )) ?? APIResponse(success: false, data: nil, error: nil)
+        }
+    }
+
     // MARK: - Device ID
 
     /// Get or create persistent device identifier
     var deviceId: String {
         KeychainHelper.getOrCreateDeviceId()
+    }
+
+    // MARK: - Pricing Fallbacks
+
+    private func applyFallbackPlansIfNeeded() {
+        if plans.isEmpty {
+            plans = [
+                PlanInfo(name: "free", credits: 0, price: 0, priceFormatted: "$0"),
+                PlanInfo(name: "pro_monthly", credits: 0, price: 15, priceFormatted: "$15"),
+                PlanInfo(name: "pro_yearly", credits: 0, price: 120, priceFormatted: "$120")
+            ]
+        }
+    }
+
+    private func startCheckoutSyncWindow(reason: String) {
+        guard isAuthenticated else { return }
+        checkoutSyncTask?.cancel()
+
+        let baseline = creditsBalance
+        checkoutSyncTask = Task { [weak self] in
+            guard let self else { return }
+            let startedAt = Date()
+            var attempt = 0
+
+            while !Task.isCancelled && Date().timeIntervalSince(startedAt) < Self.checkoutSyncWindowSeconds {
+                attempt += 1
+
+                await self.refreshEntitlementsIfNeeded(force: true, reason: reason)
+
+                if Self.entitlementsChanged(from: baseline, to: self.creditsBalance) {
+                    return
+                }
+
+                let delaySeconds: TimeInterval = attempt <= 5 ? 2 : 5
+                try? await Task.sleep(nanoseconds: UInt64(delaySeconds * 1_000_000_000))
+            }
+        }
+    }
+
+    static func entitlementsChanged(from old: CreditsBalance?, to new: CreditsBalance?) -> Bool {
+        switch (old, new) {
+        case (nil, nil):
+            return false
+        case (nil, .some), (.some, nil):
+            return true
+        case (.some(let lhs), .some(let rhs)):
+            return lhs.subscription.plan != rhs.subscription.plan ||
+                lhs.subscription.total != rhs.subscription.total ||
+                lhs.subscription.used != rhs.subscription.used ||
+                lhs.subscription.remaining != rhs.subscription.remaining ||
+                lhs.purchased.total != rhs.purchased.total ||
+                lhs.purchased.remaining != rhs.purchased.remaining ||
+                lhs.totalRemaining != rhs.totalRemaining
+        }
     }
 
     // MARK: - Network Helpers
@@ -620,3 +793,20 @@ struct KeychainHelper {
 // MARK: - Empty Response
 
 struct EmptyResponse: Codable {}
+
+// MARK: - User Style Profile
+
+/// Accumulated colour-grading preference profile.
+/// Built from the rolling average of user corrections applied on top of AI suggestions.
+struct UserStyleProfile: Codable {
+    /// Number of AI grading cycles that have contributed to this profile.
+    var sampleCount: Int = 0
+    /// Rolling-average exposure correction the user applies after AI grading.
+    var exposureBias: Double = 0
+    /// Rolling-average contrast correction.
+    var contrastBias: Double = 0
+    /// Moods the user tends to request.
+    var preferredMoods: [String] = []
+    /// Moods the user rarely accepts.
+    var avoidedMoods: [String] = []
+}

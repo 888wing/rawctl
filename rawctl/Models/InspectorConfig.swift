@@ -25,6 +25,7 @@ enum InspectorPanel: String, CaseIterable, Identifiable, Codable {
     case transform = "Transform"
     case lensCorrections = "Lens Corrections"
     case calibration = "Calibration"
+    case aiColorGrading = "AI Colour Grading"
     case aiGeneration = "AI Generation"
     case aiLayers = "AI Layers"
     case localAdjustments = "Local Adjustments"
@@ -48,6 +49,7 @@ enum InspectorPanel: String, CaseIterable, Identifiable, Codable {
         case .transform: return "perspective"
         case .lensCorrections: return "camera.aperture"
         case .calibration: return "gearshape"
+        case .aiColorGrading: return "sparkle.magnifyingglass"
         case .aiGeneration: return "wand.and.stars"
         case .aiLayers: return "square.3.layers.3d"
         case .localAdjustments: return "circle.dashed.inset.filled"
@@ -57,7 +59,7 @@ enum InspectorPanel: String, CaseIterable, Identifiable, Codable {
     /// Default visibility for each panel
     var defaultVisible: Bool {
         switch self {
-        case .organization, .light, .toneCurve, .color, .hsl, .composition, .effects, .whiteBalance, .aiGeneration, .aiLayers, .localAdjustments:
+        case .organization, .light, .toneCurve, .color, .hsl, .composition, .effects, .whiteBalance, .aiColorGrading, .aiGeneration, .aiLayers, .localAdjustments:
             return true
         case .resize, .rgbCurves, .splitToning, .grain, .transform, .lensCorrections, .calibration:
             return false  // Advanced panels hidden by default

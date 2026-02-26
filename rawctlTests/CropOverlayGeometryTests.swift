@@ -4,7 +4,7 @@
 //
 
 import XCTest
-@testable import rawctl
+@testable import Latent
 
 final class CropOverlayGeometryTests: XCTestCase {
     func testImageDisplayRect_letterboxesVerticallyForWideImage() {

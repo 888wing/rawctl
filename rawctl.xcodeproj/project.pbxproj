@@ -30,7 +30,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		AB433D1C2EEF722400534A32 /* rawctl.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = rawctl.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AB433D1C2EEF722400534A32 /* rawctl.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = rawctl.app; path = Latent.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AB433D2F2EEF722500534A32 /* rawctlTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = rawctlTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AB433D392EEF722500534A32 /* rawctlUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = rawctlUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -420,6 +420,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Latent;
+				INFOPLIST_KEY_CFBundleName = Latent;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -428,7 +429,7 @@
 				);
 				MARKETING_VERSION = 1.4.0;
 				PRODUCT_BUNDLE_IDENTIFIER = Shacoworkshop.latent;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = Latent;
 				REGISTER_APP_GROUPS = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -450,6 +451,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Latent;
+				INFOPLIST_KEY_CFBundleName = Latent;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -458,7 +460,7 @@
 				);
 				MARKETING_VERSION = 1.4.0;
 				PRODUCT_BUNDLE_IDENTIFIER = Shacoworkshop.latent;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = Latent;
 				REGISTER_APP_GROUPS = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -479,7 +481,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/rawctl.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/rawctl";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Latent.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Latent";
 			};
 			name = Debug;
 		};
@@ -497,7 +499,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/rawctl.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/rawctl";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Latent.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Latent";
 			};
 			name = Release;
 		};

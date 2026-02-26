@@ -321,9 +321,17 @@ struct MainLayoutView: View {
             saveProjectStateSync()
         }
         .onChange(of: scenePhase) { _, newPhase in
-            guard newPhase == .inactive || newPhase == .background else { return }
-            Task {
-                await appState.flushPendingRecipeSaveAndWait()
+            switch newPhase {
+            case .active:
+                Task {
+                    await AccountService.shared.refreshEntitlementsIfNeeded(reason: "scene_active")
+                }
+            case .inactive, .background:
+                Task {
+                    await appState.flushPendingRecipeSaveAndWait()
+                }
+            @unknown default:
+                break
             }
         }
     }

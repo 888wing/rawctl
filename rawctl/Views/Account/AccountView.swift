@@ -97,7 +97,7 @@ struct AccountView: View {
                 } label: {
                     HStack {
                         Image(systemName: "plus.circle")
-                        Text("Buy Credits")
+                        Text("Buy AI Credits")
                         Spacer()
                         Image(systemName: "chevron.right")
                             .font(.caption)
@@ -217,10 +217,10 @@ struct AccountView: View {
                 .foregroundColor(.secondary)
             
             VStack(spacing: 4) {
-                Text("Sign in to rawctl")
+                Text("Sign in to Latent")
                     .font(.system(size: 14, weight: .semibold))
                 
-                Text("Get 10 free AI credits every month")
+                Text("Free includes unlimited manual editing. Upgrade to Pro for AI tools.")
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
             }

@@ -124,7 +124,7 @@ struct AboutView: View {
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
 
-                    Text("Open source under MIT License")
+                    Text("Source-available under BSL 1.1 (commercial use requires Pro license)")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }

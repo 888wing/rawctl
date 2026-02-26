@@ -118,29 +118,63 @@ struct AIGenerationPanel: View {
                 } else {
                     self.mode = .fullImage
                 }
+                ensureModeIsSupported()
             }
+        }
+        .onAppear {
+            ensureModeIsSupported()
+        }
+        .onChange(of: accountService.isAuthenticated) { _, _ in
+            ensureModeIsSupported()
+        }
+        .onChange(of: accountService.creditsBalance?.subscription.plan) { _, _ in
+            ensureModeIsSupported()
         }
     }
 
     // MARK: - Mode Selector
 
     private var modeSelector: some View {
-        HStack(spacing: 8) {
-            Text("Mode")
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("Mode")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
 
-            Spacer()
+                Spacer()
 
-            Picker("", selection: $mode) {
-                ForEach(AIGenerationMode.allCases) { m in
-                    Text(m.displayName).tag(m)
+                Picker("", selection: $mode) {
+                    ForEach(availableModes) { m in
+                        Text(m.displayName).tag(m)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .controlSize(.small)
+                .frame(width: 160)
+            }
+
+            if !AppFeatures.aiMaskingEnabled {
+                HStack(spacing: 6) {
+                    Image(systemName: "crown.fill")
+                        .font(.system(size: 10))
+                        .foregroundColor(.yellow)
+                    Text("Region masking is a Pro feature.")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Button("Upgrade") {
+                        appState.showAccountSheet = true
+                    }
+                    .font(.system(size: 10, weight: .medium))
+                    .buttonStyle(.plain)
+                    .foregroundColor(.accentColor)
                 }
             }
-            .pickerStyle(.segmented)
-            .controlSize(.small)
-            .frame(width: 160)
         }
+    }
+
+    private var availableModes: [AIGenerationMode] {
+        AppFeatures.aiMaskingEnabled ? AIGenerationMode.allCases : [.fullImage]
     }
 
     // MARK: - Type Selector
@@ -395,6 +429,7 @@ struct AIGenerationPanel: View {
 
         // Region mode requires a mask
         if mode == .region {
+            guard AppFeatures.aiMaskingEnabled else { return false }
             guard !appState.currentBrushMask.isEmpty else { return false }
         }
 
@@ -574,6 +609,12 @@ struct AIGenerationPanel: View {
             return
         }
 
+        if mode == .region && !AppFeatures.aiMaskingEnabled {
+            currentError = .generationFailed("AI masking is available on Pro.")
+            appState.showAccountSheet = true
+            return
+        }
+
         guard let asset = appState.selectedAsset else {
             currentError = .generationFailed("No photo selected")
             return
@@ -649,6 +690,12 @@ struct AIGenerationPanel: View {
         guard let asset = appState.selectedAsset,
               let request = lastFailedRequest else { return }
 
+        if request.mode == .region && !AppFeatures.aiMaskingEnabled {
+            currentError = .generationFailed("AI masking is available on Pro.")
+            appState.showAccountSheet = true
+            return
+        }
+
         isGenerating = true
         defer { isGenerating = false }
 
@@ -686,6 +733,15 @@ struct AIGenerationPanel: View {
             await MainActor.run {
                 self.currentError = .generationFailed(error.localizedDescription)
             }
+        }
+    }
+
+    private func ensureModeIsSupported() {
+        if !AppFeatures.aiMaskingEnabled && mode == .region {
+            mode = .fullImage
+        }
+        if !availableTypes.contains(selectedType) {
+            selectedType = mode == .region ? .inpaint : .transform
         }
     }
 

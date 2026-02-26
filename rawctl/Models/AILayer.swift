@@ -274,7 +274,7 @@ class AILayerStack: ObservableObject {
               sourceIndex != targetIndex else { return }
 
         let layer = layers.remove(at: sourceIndex)
-        let newIndex = sourceIndex < targetIndex ? targetIndex : targetIndex
+        let newIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex
         layers.insert(layer, at: newIndex)
     }
 

@@ -243,9 +243,18 @@ struct GridView: View {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundColor(.green)
                         .font(.caption)
-                    Text("AI Culled \(scored) photos — review ratings and flags")
+                    Text("AI Culled \(scored) photos")
                         .font(.caption2)
                         .foregroundColor(.secondary)
+                    Spacer()
+                    if appState.lastPreCullSnapshot != nil {
+                        Button("Undo") {
+                            appState.undoAICull()
+                        }
+                        .font(.caption2.weight(.medium))
+                        .buttonStyle(.plain)
+                        .foregroundColor(.accentColor)
+                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 6)
@@ -289,14 +298,30 @@ struct GridView: View {
                             .frame(width: 20, height: 16)
                     } else {
                         Button {
-                            Task { await appState.startAICulling() }
+                            if AppFeatures.aiCullingEnabled {
+                                Task { await appState.startAICulling() }
+                            } else {
+                                appState.showAccountSheet = true
+                                appState.showHUD("AI Cull is a Pro feature")
+                            }
                         } label: {
-                            Label("AI Cull", systemImage: "sparkles")
+                            HStack(spacing: 4) {
+                                Label("AI Cull", systemImage: "sparkles")
+                                if !AppFeatures.aiCullingEnabled {
+                                    Image(systemName: "crown.fill")
+                                        .font(.caption2)
+                                        .foregroundColor(.yellow)
+                                }
+                            }
                                 .font(.caption)
                         }
                         .buttonStyle(.borderless)
                         .disabled(appState.assets.isEmpty)
-                        .help("Score all photos for sharpness, composition, and duplicates")
+                        .help(
+                            AppFeatures.aiCullingEnabled
+                            ? "Score all photos for sharpness, composition, and duplicates"
+                            : "AI Cull is a Pro feature — upgrade to unlock"
+                        )
                     }
                 }
 
@@ -711,7 +736,9 @@ struct SelectionBar: View {
     }
     
     private var actionButtons: some View {
-        HStack(spacing: 12) {
+        let batchLocked = appState.selectionCount > 1 && !AppFeatures.batchProcessingEnabled
+
+        return HStack(spacing: 12) {
             Button { appState.selectAll() } label: {
                 Text("Select All").font(.caption)
             }
@@ -726,15 +753,31 @@ struct SelectionBar: View {
             
             Divider().frame(height: 16)
             
-            Button { showExportDialog = true } label: {
+            Button {
+                if batchLocked {
+                    appState.showAccountSheet = true
+                    appState.showHUD("Batch processing is a Pro feature")
+                } else {
+                    showExportDialog = true
+                }
+            } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "square.and.arrow.up")
                     Text("Export")
+                    if batchLocked {
+                        Image(systemName: "crown.fill")
+                            .font(.caption2)
+                    }
                 }
                 .font(.caption.bold())
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
+            .help(
+                batchLocked
+                ? "Batch export is a Pro feature — upgrade to unlock"
+                : "Export selected photos"
+            )
         }
     }
 }

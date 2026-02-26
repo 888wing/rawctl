@@ -60,6 +60,9 @@ struct AccountSheet: View {
         .sheet(isPresented: $showCredits) {
             CreditsDetailView()
         }
+        .task {
+            await accountService.refreshEntitlementsIfNeeded(force: true, reason: "account_sheet_open")
+        }
     }
     
     // MARK: - Authenticated Content
@@ -144,7 +147,7 @@ struct AccountSheet: View {
                     AccountSheetButton(
                         icon: "arrow.up.circle.fill",
                         title: "Upgrade Plan",
-                        subtitle: "Get more credits",
+                        subtitle: "Unlock Pro AI tools",
                         iconColor: .orange
                     ) {
                         showPlans = true
@@ -155,8 +158,8 @@ struct AccountSheet: View {
                 
                 AccountSheetButton(
                     icon: "plus.circle.fill",
-                    title: "Buy Credits",
-                    subtitle: "Credits never expire",
+                    title: "Buy AI Credits",
+                    subtitle: "For Nano Banana generation",
                     iconColor: .green
                 ) {
                     showPlans = true
@@ -203,10 +206,10 @@ struct AccountSheet: View {
                 .foregroundColor(.secondary)
             
             VStack(spacing: 8) {
-                Text("Sign in to rawctl")
+                Text("Sign in to Latent")
                     .font(.system(size: 16, weight: .semibold))
                 
-                Text("Get 10 free AI credits every month to power your photo editing with Nano Banana.")
+                Text("Free includes unlimited manual editing. Upgrade to Pro for AI Culling, Smart Sync, AI Masking, and batch processing.")
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)

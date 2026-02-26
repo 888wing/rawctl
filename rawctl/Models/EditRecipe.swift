@@ -191,6 +191,80 @@ struct EditRecipe: Codable, Equatable {
     }
 }
 
+// MARK: - AI Colour Grading Delta
+
+/// Partial recipe returned by the AI colour grading endpoint.
+/// Only non-nil fields are blended onto the existing recipe.
+struct ColorGradeDelta: Codable, Equatable {
+    var exposure: Double?
+    var contrast: Double?
+    var highlights: Double?
+    var shadows: Double?
+    var whites: Double?
+    var blacks: Double?
+    var vibrance: Double?
+    var saturation: Double?
+    /// Absolute white balance temperature to set (Kelvin, 2000-12000).
+    var temperature: Int?
+    /// Absolute tint offset to set (-150 to +150).
+    var tint: Int?
+    var clarity: Double?
+    var dehaze: Double?
+
+    /// Apply non-nil fields onto a base recipe, returning the merged result.
+    func applying(to base: EditRecipe) -> EditRecipe {
+        var r = base
+        if let v = exposure    { r.exposure    = v }
+        if let v = contrast    { r.contrast    = v }
+        if let v = highlights  { r.highlights  = v }
+        if let v = shadows     { r.shadows     = v }
+        if let v = whites      { r.whites      = v }
+        if let v = blacks      { r.blacks      = v }
+        if let v = vibrance    { r.vibrance    = v }
+        if let v = saturation  { r.saturation  = v }
+        if let k = temperature {
+            r.whiteBalance.temperature = max(2000, min(12000, k))
+            r.whiteBalance.preset = .custom
+        }
+        if let t = tint {
+            r.whiteBalance.tint = max(-150, min(150, t))
+            r.whiteBalance.preset = .custom
+        }
+        if let v = clarity  { r.clarity  = v }
+        if let v = dehaze   { r.dehaze   = v }
+        return r
+    }
+
+    /// Compute the user's modification delta (final recipe minus AI-suggested recipe).
+    /// Used to record user style preferences.
+    static func diff(ai: EditRecipe, final: EditRecipe) -> ColorGradeDelta {
+        var d = ColorGradeDelta()
+        let t = 0.5
+        if abs(final.exposure   - ai.exposure)   > 0.01 { d.exposure   = final.exposure   - ai.exposure   }
+        if abs(final.contrast   - ai.contrast)   > t    { d.contrast   = final.contrast   - ai.contrast   }
+        if abs(final.highlights - ai.highlights) > t    { d.highlights = final.highlights - ai.highlights }
+        if abs(final.shadows    - ai.shadows)    > t    { d.shadows    = final.shadows    - ai.shadows    }
+        if abs(final.whites     - ai.whites)     > t    { d.whites     = final.whites     - ai.whites     }
+        if abs(final.blacks     - ai.blacks)     > t    { d.blacks     = final.blacks     - ai.blacks     }
+        if abs(final.vibrance   - ai.vibrance)   > t    { d.vibrance   = final.vibrance   - ai.vibrance   }
+        if abs(final.saturation - ai.saturation) > t    { d.saturation = final.saturation - ai.saturation }
+        let tempDiff = final.whiteBalance.temperature - ai.whiteBalance.temperature
+        if abs(tempDiff) > 50 { d.temperature = final.whiteBalance.temperature }
+        let tintDiff = final.whiteBalance.tint - ai.whiteBalance.tint
+        if abs(tintDiff) > 5  { d.tint = final.whiteBalance.tint }
+        if abs(final.clarity - ai.clarity) > t { d.clarity = final.clarity - ai.clarity }
+        if abs(final.dehaze  - ai.dehaze)  > t { d.dehaze  = final.dehaze  - ai.dehaze  }
+        return d
+    }
+
+    /// True if at least one field is non-nil (i.e. AI suggested some change).
+    var hasChanges: Bool {
+        exposure != nil || contrast != nil || highlights != nil || shadows != nil ||
+        whites != nil || blacks != nil || vibrance != nil || saturation != nil ||
+        temperature != nil || tint != nil || clarity != nil || dehaze != nil
+    }
+}
+
 /// Color label for organization
 enum ColorLabel: String, Codable, CaseIterable {
     case none = "none"
@@ -674,7 +748,7 @@ struct RecipeSnapshot: Codable, Equatable, Identifiable {
 
 /// Complete sidecar file structure
 struct SidecarFile: Codable {
-    static let currentSchemaVersion = 7
+    static let currentSchemaVersion = 8  // v8: Added cullingAnalysis
 
     var schemaVersion: Int = SidecarFile.currentSchemaVersion // v7: Added aiLayers
     var asset: AssetInfo
@@ -683,6 +757,7 @@ struct SidecarFile: Codable {
     var aiEdits: [AIEdit] = []  // AI editing history (v3)
     var localNodes: [ColorNode]?  // v6: local adjustment nodes
     var aiLayers: [AILayer] = []  // v7: AI compositing layer stack
+    var cullingAnalysis: CullingAnalysis?  // v8: AI culling metadata
     var updatedAt: TimeInterval
 
     struct AssetInfo: Codable {
@@ -703,6 +778,7 @@ struct SidecarFile: Codable {
         self.aiEdits = []
         self.localNodes = nil
         self.aiLayers = []
+        self.cullingAnalysis = nil
         self.updatedAt = Date().timeIntervalSince1970
     }
 
@@ -718,6 +794,7 @@ struct SidecarFile: Codable {
         aiEdits = try container.decodeIfPresent([AIEdit].self, forKey: .aiEdits) ?? []  // v3
         localNodes = try container.decodeIfPresent([ColorNode].self, forKey: .localNodes)  // v6
         aiLayers = try container.decodeIfPresent([AILayer].self, forKey: .aiLayers) ?? []  // v7
+        cullingAnalysis = try container.decodeIfPresent(CullingAnalysis.self, forKey: .cullingAnalysis)  // v8
         updatedAt = try container.decode(TimeInterval.self, forKey: .updatedAt)
     }
 
@@ -733,11 +810,12 @@ struct SidecarFile: Codable {
         try container.encode(aiEdits, forKey: .aiEdits)
         try container.encodeIfPresent(localNodes, forKey: .localNodes)
         try container.encode(aiLayers, forKey: .aiLayers)
+        try container.encodeIfPresent(cullingAnalysis, forKey: .cullingAnalysis)
         try container.encode(updatedAt, forKey: .updatedAt)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, asset, edit, snapshots, aiEdits, localNodes, aiLayers, updatedAt
+        case schemaVersion, asset, edit, snapshots, aiEdits, localNodes, aiLayers, cullingAnalysis, updatedAt
     }
 }
 
