@@ -2000,6 +2000,7 @@ actor ImagePipeline {
                 assetFingerprint: assetFingerprint,
                 targetExtent: result.extent
             ) else {
+                print("[ImagePipeline] ⚠️ AI edit result '\(edit.resultPath)' cache file missing — skipping composite")
                 continue
             }
 
@@ -2042,6 +2043,7 @@ actor ImagePipeline {
                 assetFingerprint: assetFingerprint,
                 targetExtent: result.extent
             ) else {
+                print("[ImagePipeline] ⚠️ AI layer '\(layer.prompt.prefix(30))' (id: \(layer.id)) cache file missing — skipping composite")
                 continue
             }
 
