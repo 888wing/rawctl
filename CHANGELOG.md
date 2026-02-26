@@ -56,6 +56,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **GeminiColorService**: Decode response via `APIResponse<ColorGradeResponse>` wrapper (was decoding bare struct → key-not-found crash)
 - **GeminiColorService**: HTTP 401 → `.authenticationRequired`, 402 → `.insufficientCredits` (was generic `.invalidResponse`)
 - **ColorGradeResponse**: Changed conformance from `Decodable` to `Codable` to satisfy `APIResponse<T: Codable>` constraint
+- **AILayerStack.moveLayer()**: Fixed ternary with identical branches — after `remove(at:)`, when source < target the destination index must shift left by 1; drag-and-drop reorder now produces correct layer order
+- **ImagePipeline**: Missing AI layer/edit cache files now log a warning instead of silently skipping composite
+- **AppState**: Sidecar save failure (recipe+nodes+aiLayers) now shows "Failed to save AI layers" HUD instead of silent fallback
+- **CullingService**: Deprecated `buildDuplicateGroups()` representative selection now uses all 3 signals (sharpness + saliency + exposure), matching `buildDuplicateGroupsWithRank()`
+- **AIGenerationService**: Added local credit reservation (`reserveCredits`/`releaseCredits`) to prevent race condition when two generations are triggered simultaneously
 
 ### Technical
 - New test file `rawctlTests/GeminiColorServiceTests.swift`: 17 tests covering `ColorGradeDelta.applying`, `diff`, `hasChanges`, `APIResponse<ColorGradeResponse>` JSON decoding, and `AppState.applyColorGrade`
@@ -63,6 +68,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 13 new culling tests: exposure scoring boundaries, calibration regression, synthetic fixture integration (overexposed/underexposed ordering)
 - 17 new culling tests (E2+E3): CullingAnalysis rejection reasons, Codable roundtrip, sidecar v8 backward compatibility, duplicate ranking, save-load idempotency
 - Deprecated: `CullingService.score()` and `computeFinalScore()` in favor of `scoreWithAnalysis()` and `buildAnalysis()`
+- **CullingConfig**: Rejection reason thresholds (`blurryThreshold: 0.25`, `poorCompositionThreshold: 0.20`, `exposureClippedThreshold: 0.40`) now configurable via CullingConfig instead of hardcoded in `buildAnalysis()`
+- New regression test `aiLayerStackMoveLayerReordersCorrectly()` in `LayerCompositingOrderTests`
 
 ## [1.5.0] - 2026-02-24
 
