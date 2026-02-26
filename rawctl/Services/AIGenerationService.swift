@@ -129,9 +129,9 @@ final class AIGenerationService: ObservableObject {
             throw error
         }
 
-        // Check credits
+        // Check and reserve credits locally to prevent race conditions
         let requiredCredits = request.estimatedCredits
-        guard (AccountService.shared.creditsBalance?.totalRemaining ?? 0) >= requiredCredits else {
+        guard AccountService.shared.reserveCredits(requiredCredits) else {
             throw AIGenerationError.insufficientCredits
         }
 
@@ -181,8 +181,9 @@ final class AIGenerationService: ObservableObject {
                 layerId: layerId
             )
 
-            // Refresh credits
+            // Refresh credits and release reservation
             await AccountService.shared.loadCreditsBalance()
+            AccountService.shared.releaseCredits(requiredCredits)
 
             // Create AILayer
             let layer = AILayer(
@@ -201,6 +202,7 @@ final class AIGenerationService: ObservableObject {
             return layer
 
         } catch {
+            AccountService.shared.releaseCredits(requiredCredits)
             if let aiError = error as? AIGenerationError {
                 throw aiError
             }

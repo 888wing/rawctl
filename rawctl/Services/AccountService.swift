@@ -102,7 +102,10 @@ final class AccountService: ObservableObject {
     private var checkoutSyncTask: Task<Void, Never>?
     private static let entitlementRefreshThrottleSeconds: TimeInterval = 8
     private static let checkoutSyncWindowSeconds: TimeInterval = 180
-    
+
+    // Local credit reservation for in-flight AI operations
+    private var reservedCredits: Int = 0
+
     // Token storage
     private var accessToken: String? {
         get { KeychainHelper.get(key: "rawctl_access_token") }
@@ -264,6 +267,19 @@ final class AccountService: ObservableObject {
             print("[AccountService] Failed to load user profile: \(error)")
             // Don't sign out on network errors, user might be offline
         }
+    }
+
+    /// Reserve credits locally before API call. Returns false if insufficient.
+    func reserveCredits(_ amount: Int) -> Bool {
+        let available = (creditsBalance?.totalRemaining ?? 0) - reservedCredits
+        guard available >= amount else { return false }
+        reservedCredits += amount
+        return true
+    }
+
+    /// Release reserved credits (called after API response or on failure).
+    func releaseCredits(_ amount: Int) {
+        reservedCredits = max(0, reservedCredits - amount)
     }
 
     func loadCreditsBalance() async {
