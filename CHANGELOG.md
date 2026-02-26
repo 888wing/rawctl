@@ -70,6 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Deprecated: `CullingService.score()` and `computeFinalScore()` in favor of `scoreWithAnalysis()` and `buildAnalysis()`
 - **CullingConfig**: Rejection reason thresholds (`blurryThreshold: 0.25`, `poorCompositionThreshold: 0.20`, `exposureClippedThreshold: 0.40`) now configurable via CullingConfig instead of hardcoded in `buildAnalysis()`
 - New regression test `aiLayerStackMoveLayerReordersCorrectly()` in `LayerCompositingOrderTests`
+- New test file `rawctlTests/BillingProviderTests.swift`: 17 tests covering BillingProvider channel routing (direct/MAS), StoreKit error paths for unknown products, DirectBillingProvider no-ops, credit reservation/release logic, and account deletion email mismatch + unauthorized guards
 
 ## [1.5.0] - 2026-02-24
 
