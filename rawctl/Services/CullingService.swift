@@ -501,8 +501,10 @@ actor CullingService {
                     let cfg = CullingConfig.default
                     let sa = (scores[a]?.sharpness ?? 0) * cfg.sharpnessWeight
                            + (scores[a]?.saliency ?? 0)  * cfg.saliencyWeight
+                           + (scores[a]?.exposure ?? 0)   * cfg.exposureWeight
                     let sb = (scores[b]?.sharpness ?? 0) * cfg.sharpnessWeight
                            + (scores[b]?.saliency ?? 0)  * cfg.saliencyWeight
+                           + (scores[b]?.exposure ?? 0)   * cfg.exposureWeight
                     return sa < sb
                 })
                 for member in members {
