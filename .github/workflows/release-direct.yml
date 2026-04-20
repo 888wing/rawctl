@@ -31,7 +31,7 @@ jobs:
           DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           xcodebuild -project rawctl.xcodeproj \
-            -scheme rawctl \
+            -scheme latent-direct \
             -configuration Release \
             -archivePath direct.xcarchive \
             archive \
@@ -43,7 +43,7 @@ jobs:
         run: |
           xcodebuild -exportArchive \
             -archivePath direct.xcarchive \
-            -exportOptionsPlist exportOptions.plist \
+            -exportOptionsPlist scripts/ExportOptions.plist \
             -exportPath ./export-direct
 
       - name: Upload Direct artifact

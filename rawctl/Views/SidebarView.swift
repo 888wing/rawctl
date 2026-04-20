@@ -58,9 +58,6 @@ struct SidebarView: View {
                 loadingOverlay
             }
         }
-        .onAppear {
-            loadDefaultFolderIfNeeded()
-        }
     }
 
     // MARK: - Legacy Folder Section
@@ -143,46 +140,12 @@ struct SidebarView: View {
     // MARK: - Folder Actions
 
     private func loadFolder(_ source: FolderSource) {
-        guard folderManager.startAccessingFolder(source) else {
-            print("[SidebarView] Cannot access folder: \(source.url.path)")
-            return
-        }
-        
-        appState.selectedFolder = source.url
-        appState.isLoading = true
-        appState.loadingMessage = "Scanning folder…"
-        
         Task {
-            do {
-                let assets = try await FileSystemService.scanFolder(source.url)
-                await MainActor.run {
-                    appState.assets = assets
-                    appState.isLoading = false
-                    appState.recipes = [:]
-                    folderManager.updateFolderState(source.id, isLoaded: true, assetCount: assets.count)
-                    // Select first photo immediately for responsive UI
-                    if let first = appState.assets.first {
-                        appState.select(first, switchToSingleView: false)
-                    }
-                }
-                // Load recipes in background (non-blocking)
-                Task {
-                    await appState.loadAllRecipes()
-                }
-            } catch {
-                await MainActor.run {
-                    appState.isLoading = false
-                }
+            let didOpen = await appState.openFolder(at: source.url, registerInFolderHistory: true)
+            guard didOpen else {
+                print("[SidebarView] Cannot access folder: \(source.url.path)")
+                return
             }
-        }
-    }
-    
-    private func loadDefaultFolderIfNeeded() {
-        // Only load if no folder is currently selected and there's a default
-        guard appState.selectedFolder == nil else { return }
-        
-        if let defaultSource = folderManager.getDefaultFolder() {
-            loadFolder(defaultSource)
         }
     }
     

@@ -133,10 +133,10 @@ final class AppState: ObservableObject {
     private var recipeLoadTask: Task<Void, Never>?
     private var thumbnailPreloadTask: Task<Void, Never>?
     private var thumbnailAutoHideTask: Task<Void, Never>?
+    private var stagedFolderScanTask: Task<Void, Never>?
     private var sidecarWriteMetricsTask: Task<Void, Never>?
     private var pendingRecipeSaveTask: Task<Void, Never>?
     private var pendingRecipeSavePayloads: [UUID: RecipeSavePayload] = [:]
-    private let thumbnailWarmupDelayNs: UInt64 = 120_000_000
     private let e2eSidecarMetricsPollIntervalNs: UInt64 = 300_000_000
     private lazy var selectionCoordinator = SelectionCoordinator(appState: self)
     private lazy var editStateCoordinator = EditStateCoordinator(appState: self)
@@ -212,13 +212,21 @@ final class AppState: ObservableObject {
         }
     }
 
-    func cancelBackgroundAssetLoading(resetThumbnailProgress: Bool = false) {
+    func cancelBackgroundAssetLoading(
+        resetThumbnailProgress: Bool = false,
+        cancelStagedScan: Bool = false
+    ) {
         recipeLoadTask?.cancel()
         recipeLoadTask = nil
         thumbnailPreloadTask?.cancel()
         thumbnailPreloadTask = nil
         thumbnailAutoHideTask?.cancel()
         thumbnailAutoHideTask = nil
+        if cancelStagedScan {
+            stagedFolderScanTask?.cancel()
+            stagedFolderScanTask = nil
+            isFolderScanInProgress = false
+        }
         if e2eSidecarLoadState == "running" {
             e2eSidecarLoadState = "cancelled"
         }
@@ -233,17 +241,25 @@ final class AppState: ObservableObject {
     func schedulePostScanBackgroundWork(expectedFolder: URL? = nil) {
         let expectedFolderPath = expectedFolder?.standardizedFileURL.path
         cancelBackgroundAssetLoading(resetThumbnailProgress: false)
+        let assetCount = assets.count
+        let isRemovableVolume = expectedFolder.map { Self.isRemovableVolume($0) } ?? false
+        let warmupDelayNs = Self.thumbnailWarmupDelayNs(
+            forAssetCount: assetCount,
+            isRemovableVolume: isRemovableVolume
+        )
         recipeLoadTask = Task {
             await primeSelectedAssetSidecar(expectedFolderPath: expectedFolderPath)
             guard !Task.isCancelled else { return }
             guard isAssetLoadContextValid(expectedFolderPath: expectedFolderPath) else { return }
+            guard await yieldBackgroundWorkIfNeeded(expectedFolderPath: expectedFolderPath) else { return }
             await loadAllRecipes(expectedFolderPath: expectedFolderPath, excludingAssetId: selectedAssetId)
             guard !Task.isCancelled else { return }
             guard isAssetLoadContextValid(expectedFolderPath: expectedFolderPath) else { return }
             // Let first-selection UI settle before thumbnail fan-out to reduce contention.
-            try? await Task.sleep(nanoseconds: thumbnailWarmupDelayNs)
+            try? await Task.sleep(nanoseconds: warmupDelayNs)
             guard !Task.isCancelled else { return }
             guard isAssetLoadContextValid(expectedFolderPath: expectedFolderPath) else { return }
+            guard await yieldBackgroundWorkIfNeeded(expectedFolderPath: expectedFolderPath) else { return }
             preloadThumbnails(expectedFolderPath: expectedFolderPath)
         }
     }
@@ -251,6 +267,19 @@ final class AppState: ObservableObject {
     private func isAssetLoadContextValid(expectedFolderPath: String?) -> Bool {
         guard let expectedFolderPath else { return true }
         return selectedFolder?.standardizedFileURL.path == expectedFolderPath
+    }
+
+    private func yieldBackgroundWorkIfNeeded(expectedFolderPath: String?) async -> Bool {
+        while !Task.isCancelled {
+            guard isAssetLoadContextValid(expectedFolderPath: expectedFolderPath) else {
+                return false
+            }
+            guard isInteractivePreviewActive else {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 40_000_000)
+        }
+        return false
     }
 
     private func primeSelectedAssetSidecar(expectedFolderPath: String?) async {
@@ -272,6 +301,8 @@ final class AppState: ObservableObject {
 
     private func resetE2EPhaseMetrics() {
         e2eScanPhaseMs = 0
+        e2eFolderScanCompletionMs = 0
+        e2eInitialVisibleAssetCount = 0
         e2eSidecarLoadState = "idle"
         e2eSidecarLoadedCount = 0
         e2eSidecarLoadMs = 0
@@ -314,6 +345,8 @@ final class AppState: ObservableObject {
     @Published var e2eSliderStressState: String = "idle"
     @Published var e2eFirstSelectionLatencyMs: Int = 0
     @Published var e2eScanPhaseMs: Int = 0
+    @Published var e2eFolderScanCompletionMs: Int = 0
+    @Published var e2eInitialVisibleAssetCount: Int = 0
     @Published var e2eSidecarLoadState: String = "idle"
     @Published var e2eSidecarLoadedCount: Int = 0
     @Published var e2eSidecarLoadMs: Int = 0
@@ -361,7 +394,7 @@ final class AppState: ObservableObject {
     func selectProject(_ project: Project) async {
         selectedProject = project
         activeSmartCollection = nil
-        cancelBackgroundAssetLoading(resetThumbnailProgress: true)
+        cancelBackgroundAssetLoading(resetThumbnailProgress: true, cancelStagedScan: true)
         resetE2EPhaseMetrics()
 
         // Clear existing assets before loading
@@ -441,6 +474,8 @@ final class AppState: ObservableObject {
     }
     @Published var comparisonMode: ComparisonMode = .none
     @Published var isZoomed: Bool = false
+    @Published var isFolderScanInProgress: Bool = false
+    @Published var isInteractivePreviewActive: Bool = false
     
     // MARK: - Multi-Selection
     
@@ -1491,6 +1526,7 @@ final class AppState: ObservableObject {
     /// Load all recipes from sidecars for current folder (parallel with concurrency limit)
     func loadAllRecipes(expectedFolderPath: String? = nil, excludingAssetId: UUID? = nil) async {
         guard isAssetLoadContextValid(expectedFolderPath: expectedFolderPath) else { return }
+        guard await yieldBackgroundWorkIfNeeded(expectedFolderPath: expectedFolderPath) else { return }
         let clock = ContinuousClock()
         let phaseStart = clock.now
         let signpostId = PerformanceSignposts.signposter.makeSignpostID()
@@ -1593,11 +1629,21 @@ final class AppState: ObservableObject {
                     group.cancelAll()
                     break
                 }
+                guard await yieldBackgroundWorkIfNeeded(expectedFolderPath: expectedFolderPath) else {
+                    shouldAbort = true
+                    group.cancelAll()
+                    break
+                }
 
                 // If at max concurrency, wait for one to finish
                 if pending >= maxConcurrent {
                     if let result = await group.next() {
                         if Task.isCancelled || !isAssetLoadContextValid(expectedFolderPath: expectedFolderPath) {
+                            shouldAbort = true
+                            group.cancelAll()
+                            break
+                        }
+                        guard await yieldBackgroundWorkIfNeeded(expectedFolderPath: expectedFolderPath) else {
                             shouldAbort = true
                             group.cancelAll()
                             break
@@ -1627,6 +1673,11 @@ final class AppState: ObservableObject {
                 // Collect remaining results
                 for await result in group {
                     if Task.isCancelled || !isAssetLoadContextValid(expectedFolderPath: expectedFolderPath) {
+                        shouldAbort = true
+                        group.cancelAll()
+                        break
+                    }
+                    guard await yieldBackgroundWorkIfNeeded(expectedFolderPath: expectedFolderPath) else {
                         shouldAbort = true
                         group.cancelAll()
                         break
@@ -1664,12 +1715,18 @@ final class AppState: ObservableObject {
     /// Prefetch adjacent photos for faster navigation
     func prefetchAdjacent() {
         guard let currentIndex = selectedIndex else { return }
+        guard !isInteractivePreviewActive else { return }
 
         // Prefetch N-1, N+1, N+2 in background
         let indicesToPrefetch = [currentIndex - 1, currentIndex + 1, currentIndex + 2]
 
         Task {
             for index in indicesToPrefetch {
+                guard !Task.isCancelled else { return }
+                let shouldPause = await MainActor.run { self.isInteractivePreviewActive }
+                if shouldPause {
+                    return
+                }
                 guard let asset = await MainActor.run(body: { self.assets[safe: index] }) else { continue }
                 let recipe = await MainActor.run(body: { self.recipes[asset.id] ?? EditRecipe() })
                 let renderContext = await MainActor.run {
@@ -1763,19 +1820,25 @@ final class AppState: ObservableObject {
         // before we switch folder context and cancel background loaders.
         await flushPendingRecipeSaveAndWait()
 
-        cancelBackgroundAssetLoading(resetThumbnailProgress: true)
+        cancelBackgroundAssetLoading(resetThumbnailProgress: true, cancelStagedScan: true)
         resetE2EPhaseMetrics()
         selectedFolder = url
         isLoading = true
+        isFolderScanInProgress = false
         loadingMessage = "Scanning folder..."
+        let isRemovableVolume = Self.isRemovableVolume(url)
         
         do {
             let scanStart = clock.now
-            let scannedAssets = try await FileSystemService.scanFolder(url)
+            let scanSession = try await FileSystemService.makeScanSession(url)
+            let initialLimit = Self.stagedScanInitialBatchSize(isRemovableVolume: isRemovableVolume)
+            let initialAssets = try await scanSession.nextBatch(limit: initialLimit)
+            let initialMetrics = await scanSession.metrics()
             e2eScanPhaseMs = durationMilliseconds(scanStart.duration(to: clock.now))
+            e2eInitialVisibleAssetCount = initialAssets.count
             PerformanceSignposts.end("folderScanPhase", scanSignpostState)
             didFinishScanSignpost = true
-            assets = scannedAssets
+            assets = initialAssets
             recipes = [:]
             snapshots = [:]
             localNodes = [:]
@@ -1783,7 +1846,7 @@ final class AppState: ObservableObject {
             aiEditsByURL = [:]
 
             // Select the first asset immediately so view switching/shortcuts work while edits load.
-            if let first = scannedAssets.first {
+            if let first = initialAssets.first {
                 select(first, switchToSingleView: false, loadSidecarImmediately: false)
                 e2eFirstSelectionLatencyMs = durationMilliseconds(start.duration(to: clock.now))
             } else {
@@ -1793,20 +1856,68 @@ final class AppState: ObservableObject {
             didFinishFirstSelectionSignpost = true
             isLoading = false
             loadingMessage = ""
-            
-            // Save folder state for incremental scanning
-            let state = FileSystemService.buildFolderState(for: url, assets: scannedAssets)
-            FileSystemService.saveFolderState(state, for: url)
+            isFolderScanInProgress = !initialMetrics.isFinished
+
+            if initialMetrics.isFinished {
+                e2eFolderScanCompletionMs = e2eScanPhaseMs
+            }
 
             if let source = folderManager.source(for: url) {
-                folderManager.updateFolderState(source.id, isLoaded: true, assetCount: scannedAssets.count)
+                let visibleCount = initialMetrics.isFinished ? initialAssets.count : max(initialAssets.count, 1)
+                folderManager.updateFolderState(source.id, isLoaded: true, assetCount: visibleCount)
             }
 
             // Continue sidecar/thumbnails in cancellable background tasks.
             schedulePostScanBackgroundWork(expectedFolder: url)
+
+            if initialMetrics.isFinished {
+                let state = FileSystemService.buildFolderState(for: url, assets: initialAssets)
+                FileSystemService.saveFolderState(state, for: url)
+                return true
+            }
+
+            let batchLimit = Self.stagedScanBatchSize(isRemovableVolume: isRemovableVolume)
+            let expectedFolderPath = url.standardizedFileURL.path
+            stagedFolderScanTask = Task { [weak self] in
+                guard let self else { return }
+                defer { self.stagedFolderScanTask = nil }
+                var stagedAssets = initialAssets
+
+                do {
+                    while !Task.isCancelled {
+                        guard await self.yieldBackgroundWorkIfNeeded(expectedFolderPath: expectedFolderPath) else {
+                            return
+                        }
+
+                        let batch = try await scanSession.nextBatch(limit: batchLimit)
+                        guard !batch.isEmpty else { break }
+                        guard self.isAssetLoadContextValid(expectedFolderPath: expectedFolderPath) else { return }
+
+                        stagedAssets.append(contentsOf: batch)
+                        stagedAssets.sort { $0.filename.localizedStandardCompare($1.filename) == .orderedAscending }
+                        self.assets = stagedAssets
+                    }
+
+                    guard !Task.isCancelled else { return }
+                    guard self.isAssetLoadContextValid(expectedFolderPath: expectedFolderPath) else { return }
+
+                    self.isFolderScanInProgress = false
+                    self.e2eFolderScanCompletionMs = self.durationMilliseconds(start.duration(to: clock.now))
+                    let finalState = FileSystemService.buildFolderState(for: url, assets: stagedAssets)
+                    FileSystemService.saveFolderState(finalState, for: url)
+                    if let source = self.folderManager.source(for: url) {
+                        self.folderManager.updateFolderState(source.id, isLoaded: true, assetCount: stagedAssets.count)
+                    }
+                } catch {
+                    guard self.isAssetLoadContextValid(expectedFolderPath: expectedFolderPath) else { return }
+                    self.isFolderScanInProgress = false
+                    print("[AppState] Error during staged scan: \(error)")
+                }
+            }
             return true
         } catch {
             e2eScanPhaseMs = 0
+            isFolderScanInProgress = false
             isLoading = false
             loadingMessage = ""
             print("[AppState] Error scanning: \(error)")
@@ -2015,55 +2126,87 @@ final class AppState: ObservableObject {
         return Int(secondsUs + attoUs)
     }
 
+    static func stagedScanInitialBatchSize(isRemovableVolume: Bool) -> Int {
+        isRemovableVolume ? 48 : 72
+    }
+
+    static func stagedScanBatchSize(isRemovableVolume: Bool) -> Int {
+        isRemovableVolume ? 96 : 160
+    }
+
+    static func thumbnailWarmupDelayNs(
+        forAssetCount assetCount: Int,
+        isRemovableVolume: Bool
+    ) -> UInt64 {
+        if isRemovableVolume && assetCount >= 800 {
+            return 650_000_000
+        }
+        if isRemovableVolume && assetCount >= 240 {
+            return 380_000_000
+        }
+        if assetCount >= 1_500 {
+            return 320_000_000
+        }
+        if assetCount >= 500 {
+            return 220_000_000
+        }
+        return 120_000_000
+    }
+
+    static func isRemovableVolume(_ url: URL) -> Bool {
+        let values = try? url.resourceValues(forKeys: [.volumeIsRemovableKey])
+        return values?.volumeIsRemovable ?? false
+    }
+
     static func sidecarLoadConcurrency(forAssetCount assetCount: Int) -> Int {
         switch assetCount {
-        case ..<180:
-            return 8
-        case ..<700:
+        case ..<120:
             return 6
-        case ..<2_400:
+        case ..<500:
             return 4
-        default:
+        case ..<1_500:
             return 3
+        default:
+            return 2
         }
     }
 
     static func thumbnailPreloadConcurrency(forAssetCount assetCount: Int) -> Int {
         switch assetCount {
-        case ..<220:
-            return 6
-        case ..<900:
+        case ..<150:
             return 5
-        case ..<2_800:
+        case ..<600:
             return 4
-        default:
+        case ..<2_000:
             return 3
+        default:
+            return 2
         }
     }
 
     static func sidecarPriorityWindowSize(forAssetCount assetCount: Int) -> Int {
         switch assetCount {
-        case ..<320:
+        case ..<180:
             return assetCount
-        case ..<1_200:
-            return 420
-        case ..<3_200:
-            return 280
+        case ..<800:
+            return 160
+        case ..<2_200:
+            return 96
         default:
-            return 180
+            return 72
         }
     }
 
     static func thumbnailPreloadWindowSize(forAssetCount assetCount: Int) -> Int {
         switch assetCount {
-        case ..<320:
+        case ..<180:
             return assetCount
-        case ..<1_200:
-            return 360
-        case ..<3_200:
-            return 240
+        case ..<800:
+            return 180
+        case ..<2_200:
+            return 120
         default:
-            return 160
+            return 84
         }
     }
 
@@ -2203,7 +2346,7 @@ final class AppState: ObservableObject {
     func refreshCurrentFolder() async {
         guard let url = selectedFolder else { return }
 
-        cancelBackgroundAssetLoading(resetThumbnailProgress: false)
+        cancelBackgroundAssetLoading(resetThumbnailProgress: false, cancelStagedScan: true)
         isLoading = true
         loadingMessage = "Checking file changes..."
         
@@ -2344,6 +2487,11 @@ final class AppState: ObservableObject {
                     inFlight -= 1
 
                     if Task.isCancelled || !isAssetLoadContextValid(expectedFolderPath: expectedFolderPath) {
+                        phaseStatus = "cancelled"
+                        group.cancelAll()
+                        return
+                    }
+                    guard await self.yieldBackgroundWorkIfNeeded(expectedFolderPath: expectedFolderPath) else {
                         phaseStatus = "cancelled"
                         group.cancelAll()
                         return

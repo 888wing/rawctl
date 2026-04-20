@@ -9,7 +9,7 @@ import Foundation
 import UniformTypeIdentifiers
 
 /// Represents a single photo file in the working directory
-struct PhotoAsset: Identifiable, Hashable {
+struct PhotoAsset: Identifiable, Hashable, Sendable {
     let id: UUID
     let url: URL
     let fingerprint: String
@@ -129,7 +129,7 @@ struct PhotoAsset: Identifiable, Hashable {
 }
 
 /// Basic image metadata from EXIF
-struct ImageMetadata: Hashable, Codable {
+struct ImageMetadata: Hashable, Codable, Sendable {
     var width: Int?
     var height: Int?
     var cameraMake: String?

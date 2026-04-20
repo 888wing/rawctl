@@ -17,7 +17,7 @@ xcodebuild -project rawctl.xcodeproj -scheme rawctl-e2e -destination 'platform=m
 
 echo ""
 echo "2) Golden correctness gates (preview/export parity + layer ordering)"
-xcodebuild -project rawctl.xcodeproj -scheme rawctl -destination 'platform=macOS' test \
+xcodebuild -project rawctl.xcodeproj -scheme latent-direct -destination 'platform=macOS' test \
   -only-testing:rawctlTests/RenderContextBuilderTests \
   -only-testing:rawctlTests/LayerCompositingOrderTests \
   -only-testing:rawctlTests/ImagePipelineRegressionTests/renderContextPreviewAndExportAreAligned \
@@ -26,7 +26,7 @@ xcodebuild -project rawctl.xcodeproj -scheme rawctl -destination 'platform=macOS
 
 echo ""
 echo "3) Sidecar migration + state hygiene gates"
-xcodebuild -project rawctl.xcodeproj -scheme rawctl -destination 'platform=macOS' test \
+xcodebuild -project rawctl.xcodeproj -scheme latent-direct -destination 'platform=macOS' test \
   -only-testing:rawctlTests/SidecarMigrationTests \
   -only-testing:rawctlTests/FileSystemServiceCacheMigrationTests \
   -only-testing:rawctlTests/SidecarServiceTests \
@@ -35,7 +35,7 @@ xcodebuild -project rawctl.xcodeproj -scheme rawctl -destination 'platform=macOS
 
 echo ""
 echo "4) Upgrade regression gates (cache eviction + smart collection capture date)"
-xcodebuild -project rawctl.xcodeproj -scheme rawctl -destination 'platform=macOS' test \
+xcodebuild -project rawctl.xcodeproj -scheme latent-direct -destination 'platform=macOS' test \
   -only-testing:rawctlTests/CacheEvictionTests \
   -only-testing:rawctlTests/SmartCollectionTests \
   -only-testing:rawctlTests/AppStateCatalogTests \

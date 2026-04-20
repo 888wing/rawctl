@@ -63,7 +63,7 @@ jobs:
         run: |
           set -euo pipefail
           xcodebuild -project rawctl.xcodeproj \
-            -scheme rawctl \
+            -scheme latent-direct \
             -configuration Release \
             -archivePath latent.xcarchive \
             archive \
@@ -76,7 +76,7 @@ jobs:
           set -euo pipefail
           xcodebuild -exportArchive \
             -archivePath latent.xcarchive \
-            -exportOptionsPlist exportOptions.plist \
+            -exportOptionsPlist scripts/ExportOptions.plist \
             -exportPath ./export
 
       - name: Create release DMG
@@ -124,7 +124,7 @@ jobs:
         id: sparkle_sign
         run: |
           set -euo pipefail
-          SIGNATURE="$(./bin/sign_update "releases/latent-${VERSION}.dmg" 2>&1 | sed -n 's/.*sparkle:edSignature=\"\\([^\"]*\\)\".*/\\1/p')"
+          SIGNATURE="$(./bin/sign_update "releases/latent-${VERSION}.dmg" 2>&1 | perl -ne 'print "$1\n" if /sparkle:edSignature=\"([^\"]+)\"/')"
           test -n "${SIGNATURE}" || { echo "Failed to generate Sparkle signature"; exit 1; }
           echo "signature=${SIGNATURE}" >> "$GITHUB_OUTPUT"
 

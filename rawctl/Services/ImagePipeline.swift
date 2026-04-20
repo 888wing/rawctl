@@ -235,11 +235,12 @@ actor ImagePipeline {
         for asset: PhotoAsset,
         context renderContext: RenderContext,
         maxSize: CGFloat = 1600,
-        fastMode: Bool = false
+        fastMode: Bool = false,
+        interactivePreview: Bool = false
     ) async -> NSImage? {
-        let cacheKey = asset.fingerprint
         let ext = asset.url.pathExtension.lowercased()
         let isRaw = PhotoAsset.rawExtensions.contains(ext)
+        let cacheKey = previewCacheKey(for: asset, maxSize: maxSize, isRaw: isRaw)
 
         let signpostId = PerformanceSignposts.signposter.makeSignpostID()
         let signpostState = PerformanceSignposts.begin("renderPreview", id: signpostId)
@@ -262,7 +263,8 @@ actor ImagePipeline {
                 renderContext: renderContext,
                 cacheKey: cacheKey,
                 maxSize: maxSize,
-                fastMode: fastMode
+                fastMode: fastMode,
+                interactivePreview: interactivePreview
             )
         }
 
@@ -272,8 +274,18 @@ actor ImagePipeline {
             renderContext: renderContext,
             cacheKey: cacheKey,
             maxSize: maxSize,
-            fastMode: fastMode
+            fastMode: fastMode,
+            interactivePreview: interactivePreview
         )
+    }
+
+    private func previewCacheKey(
+        for asset: PhotoAsset,
+        maxSize: CGFloat,
+        isRaw: Bool
+    ) -> String {
+        guard !isRaw else { return asset.fingerprint }
+        return "\(asset.fingerprint)-preview-\(Int(maxSize.rounded()))"
     }
 
     /// Benchmark stage-level timings for preview rendering.
@@ -399,7 +411,8 @@ actor ImagePipeline {
         renderContext: RenderContext,
         cacheKey: String,
         maxSize: CGFloat,
-        fastMode: Bool = false
+        fastMode: Bool = false,
+        interactivePreview: Bool = false
     ) async -> NSImage? {
         let recipe = renderContext.recipe
 
@@ -442,14 +455,25 @@ actor ImagePipeline {
 
         var stages: [PipelineStage] = [
             PipelineStage(name: "postRAWRecipe") { image in
-                self.applyPostRAWRecipe(recipe, to: image, fastMode: fastMode)
+                self.applyPostRAWRecipe(
+                    recipe,
+                    to: image,
+                    fastMode: fastMode,
+                    interactivePreview: interactivePreview
+                )
             }
         ]
 
         if !renderContext.localNodes.isEmpty {
             stages.append(
                 PipelineStage(name: "localNodes") { [nodes = renderContext.localNodes] image in
-                    await self.renderLocalNodes(nodes, baseImage: image, originalImage: image, fastMode: fastMode)
+                    await self.renderLocalNodes(
+                        nodes,
+                        baseImage: image,
+                        originalImage: image,
+                        fastMode: fastMode,
+                        interactivePreview: interactivePreview
+                    )
                 }
             )
         }
@@ -480,7 +504,8 @@ actor ImagePipeline {
         renderContext: RenderContext,
         cacheKey: String,
         maxSize: CGFloat,
-        fastMode: Bool = false
+        fastMode: Bool = false,
+        interactivePreview: Bool = false
     ) async -> NSImage? {
         let recipe = renderContext.recipe
 
@@ -499,14 +524,25 @@ actor ImagePipeline {
 
         var stages: [PipelineStage] = [
             PipelineStage(name: "globalRecipe") { image in
-                self.applyFullRecipe(recipe, to: image, fastMode: fastMode)
+                self.applyFullRecipe(
+                    recipe,
+                    to: image,
+                    fastMode: fastMode,
+                    interactivePreview: interactivePreview
+                )
             }
         ]
 
         if !renderContext.localNodes.isEmpty {
             stages.append(
                 PipelineStage(name: "localNodes") { [nodes = renderContext.localNodes, originalImage = baseImage] image in
-                    await self.renderLocalNodes(nodes, baseImage: image, originalImage: originalImage, fastMode: fastMode)
+                    await self.renderLocalNodes(
+                        nodes,
+                        baseImage: image,
+                        originalImage: originalImage,
+                        fastMode: fastMode,
+                        interactivePreview: interactivePreview
+                    )
                 }
             )
         }
@@ -566,8 +602,14 @@ actor ImagePipeline {
     ///   - recipe: Edit recipe to apply
     ///   - image: Input CIImage
     ///   - fastMode: Skip expensive filters for responsive scrubbing
-    private func applyPostRAWRecipe(_ recipe: EditRecipe, to image: CIImage, fastMode: Bool = false) -> CIImage {
+    private func applyPostRAWRecipe(
+        _ recipe: EditRecipe,
+        to image: CIImage,
+        fastMode: Bool = false,
+        interactivePreview: Bool = false
+    ) -> CIImage {
         var result = image
+        let shouldSkipFastPathEffects = fastMode || interactivePreview
 
         // Apply camera profile (v1.2) - base look BEFORE user adjustments
         // Pipeline order: RAW Decode → Camera Profile → User Adjustments → Display Transform
@@ -620,27 +662,27 @@ actor ImagePipeline {
         result = applyCrop(recipe.crop, to: result)
 
         // Tone Curve (luminance curve)
-        if recipe.toneCurve.hasEdits {
+        if recipe.toneCurve.hasEdits && !interactivePreview {
             result = applyToneCurve(recipe.toneCurve, to: result)
         }
 
         // RGB Curves (per-channel)
-        if recipe.rgbCurves.hasEdits {
+        if recipe.rgbCurves.hasEdits && !interactivePreview {
             result = applyRGBCurves(recipe.rgbCurves, to: result)
         }
 
-        // Vignette - skip in fast mode
-        if recipe.vignette.hasEffect && !fastMode {
+        // Vignette - skip in reduced-quality preview modes
+        if recipe.vignette.hasEffect && !shouldSkipFastPathEffects {
             result = applyVignette(recipe.vignette, to: result)
         }
 
         // Split Toning
-        if recipe.splitToning.hasEffect {
+        if recipe.splitToning.hasEffect && !interactivePreview {
             result = applySplitToning(recipe.splitToning, to: result)
         }
 
         // Sharpness
-        if recipe.sharpness > 0 {
+        if recipe.sharpness > 0 && !interactivePreview {
             let filter = CIFilter.sharpenLuminance()
             filter.inputImage = result
             filter.sharpness = Float(recipe.sharpness / 100.0 * 2.0)
@@ -648,7 +690,7 @@ actor ImagePipeline {
         }
 
         // Noise Reduction - skip in fast mode (expensive)
-        if recipe.noiseReduction > 0 && !fastMode {
+        if recipe.noiseReduction > 0 && !shouldSkipFastPathEffects {
             let filter = CIFilter.noiseReduction()
             filter.inputImage = result
             filter.noiseLevel = Float(recipe.noiseReduction / 100.0 * 0.05)
@@ -657,42 +699,42 @@ actor ImagePipeline {
         }
 
         // HSL Adjustment - skip in fast mode (expensive)
-        if recipe.hsl.hasEdits && !fastMode {
+        if recipe.hsl.hasEdits && !shouldSkipFastPathEffects {
             result = applyHSL(recipe.hsl, to: result)
         }
 
         // Clarity - skip in fast mode (very expensive)
-        if recipe.clarity != 0 && !fastMode {
+        if recipe.clarity != 0 && !shouldSkipFastPathEffects {
             result = applyClarity(recipe.clarity, to: result)
         }
 
         // Dehaze - skip in fast mode (very expensive)
-        if recipe.dehaze != 0 && !fastMode {
+        if recipe.dehaze != 0 && !shouldSkipFastPathEffects {
             result = applyDehaze(recipe.dehaze, to: result)
         }
 
         // Texture - skip in fast mode (expensive)
-        if recipe.texture != 0 && !fastMode {
+        if recipe.texture != 0 && !shouldSkipFastPathEffects {
             result = applyTexture(recipe.texture, to: result)
         }
 
-        // Grain - skip in fast mode
-        if recipe.grain.hasEffect && !fastMode {
+        // Grain - skip in reduced-quality preview modes
+        if recipe.grain.hasEffect && !shouldSkipFastPathEffects {
             result = applyGrain(recipe.grain, to: result)
         }
 
         // Chromatic Aberration Fix
-        if recipe.chromaticAberration.hasEffect {
+        if recipe.chromaticAberration.hasEffect && !interactivePreview {
             result = fixChromaticAberration(recipe.chromaticAberration, to: result)
         }
 
         // Perspective Correction (Transform)
-        if recipe.perspective.hasEdits {
+        if recipe.perspective.hasEdits && !interactivePreview {
             result = applyPerspective(recipe.perspective, to: result)
         }
 
         // Camera Calibration
-        if recipe.calibration.hasEdits {
+        if recipe.calibration.hasEdits && !interactivePreview {
             result = applyCalibration(recipe.calibration, to: result)
         }
 
@@ -838,8 +880,14 @@ actor ImagePipeline {
     }
 
     /// Full recipe for non-RAW images
-    private func applyFullRecipe(_ recipe: EditRecipe, to image: CIImage, fastMode: Bool = false) -> CIImage {
+    private func applyFullRecipe(
+        _ recipe: EditRecipe,
+        to image: CIImage,
+        fastMode: Bool = false,
+        interactivePreview: Bool = false
+    ) -> CIImage {
         var result = image
+        let shouldSkipFastPathEffects = fastMode || interactivePreview
 
         // Apply camera profile (v1.2) - base look BEFORE user adjustments
         // Pipeline order: Camera Profile → User Adjustments → Display Transform
@@ -917,27 +965,27 @@ actor ImagePipeline {
         // === P0 ADVANCED EFFECTS ===
         
         // Tone Curve (luminance curve)
-        if recipe.toneCurve.hasEdits {
+        if recipe.toneCurve.hasEdits && !interactivePreview {
             result = applyToneCurve(recipe.toneCurve, to: result)
         }
         
         // RGB Curves (per-channel)
-        if recipe.rgbCurves.hasEdits {
+        if recipe.rgbCurves.hasEdits && !interactivePreview {
             result = applyRGBCurves(recipe.rgbCurves, to: result)
         }
         
-        // Vignette - skip in fast mode
-        if recipe.vignette.hasEffect && !fastMode {
+        // Vignette - skip in reduced-quality preview modes
+        if recipe.vignette.hasEffect && !shouldSkipFastPathEffects {
             result = applyVignette(recipe.vignette, to: result)
         }
         
         // Split Toning
-        if recipe.splitToning.hasEffect {
+        if recipe.splitToning.hasEffect && !interactivePreview {
             result = applySplitToning(recipe.splitToning, to: result)
         }
         
         // Sharpness
-        if recipe.sharpness > 0 {
+        if recipe.sharpness > 0 && !interactivePreview {
             let filter = CIFilter.sharpenLuminance()
             filter.inputImage = result
             filter.sharpness = Float(recipe.sharpness / 100.0 * 2.0)
@@ -945,7 +993,7 @@ actor ImagePipeline {
         }
         
         // Noise Reduction - skip in fast mode (expensive)
-        if recipe.noiseReduction > 0 && !fastMode {
+        if recipe.noiseReduction > 0 && !shouldSkipFastPathEffects {
             let filter = CIFilter.noiseReduction()
             filter.inputImage = result
             filter.noiseLevel = Float(recipe.noiseReduction / 100.0 * 0.05)
@@ -956,44 +1004,44 @@ actor ImagePipeline {
         // === PROFESSIONAL COLOR GRADING ===
         
         // HSL Adjustment - skip in fast mode (expensive)
-        if recipe.hsl.hasEdits && !fastMode {
+        if recipe.hsl.hasEdits && !shouldSkipFastPathEffects {
             result = applyHSL(recipe.hsl, to: result)
         }
         
         // Clarity - skip in fast mode (very expensive)
-        if recipe.clarity != 0 && !fastMode {
+        if recipe.clarity != 0 && !shouldSkipFastPathEffects {
             result = applyClarity(recipe.clarity, to: result)
         }
         
         // Dehaze - skip in fast mode (very expensive)
-        if recipe.dehaze != 0 && !fastMode {
+        if recipe.dehaze != 0 && !shouldSkipFastPathEffects {
             result = applyDehaze(recipe.dehaze, to: result)
         }
         
         // Texture - skip in fast mode (expensive)
-        if recipe.texture != 0 && !fastMode {
+        if recipe.texture != 0 && !shouldSkipFastPathEffects {
             result = applyTexture(recipe.texture, to: result)
         }
         
         // === NEW LIGHTROOM-COMPATIBLE EFFECTS ===
         
-        // Grain - skip in fast mode
-        if recipe.grain.hasEffect && !fastMode {
+        // Grain - skip in reduced-quality preview modes
+        if recipe.grain.hasEffect && !shouldSkipFastPathEffects {
             result = applyGrain(recipe.grain, to: result)
         }
         
         // Chromatic Aberration Fix
-        if recipe.chromaticAberration.hasEffect {
+        if recipe.chromaticAberration.hasEffect && !interactivePreview {
             result = fixChromaticAberration(recipe.chromaticAberration, to: result)
         }
         
         // Perspective Correction
-        if recipe.perspective.hasEdits {
+        if recipe.perspective.hasEdits && !interactivePreview {
             result = applyPerspective(recipe.perspective, to: result)
         }
         
         // Camera Calibration
-        if recipe.calibration.hasEdits {
+        if recipe.calibration.hasEdits && !interactivePreview {
             result = applyCalibration(recipe.calibration, to: result)
         }
         
@@ -2185,7 +2233,8 @@ actor ImagePipeline {
         _ nodes: [ColorNode],
         baseImage: CIImage,
         originalImage: CIImage,
-        fastMode: Bool = false
+        fastMode: Bool = false,
+        interactivePreview: Bool = false
     ) async -> CIImage {
         var result = baseImage
 
@@ -2200,7 +2249,12 @@ actor ImagePipeline {
             // still applying all slider adjustments (exposure, contrast, etc.).
             var localRecipe = node.adjustments
             localRecipe.profileId = BuiltInProfile.neutral.rawValue
-            let adjusted = applyFullRecipe(localRecipe, to: originalImage, fastMode: fastMode)
+            let adjusted = applyFullRecipe(
+                localRecipe,
+                to: originalImage,
+                fastMode: fastMode,
+                interactivePreview: interactivePreview
+            )
 
             // 2. Build mask image
             var maskImage: CIImage

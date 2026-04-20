@@ -907,27 +907,30 @@ struct InspectorView: View {
             syncLocalRecipeFromContext()
         }
         .onChange(of: appState.localNodes) { _, _ in
-            if isLocalNodeMode {
+            if isLocalNodeMode, !appState.isInteractivePreviewActive {
                 syncLocalRecipeFromContext()
             }
         }
         .onChange(of: localRecipe) { oldRecipe, newRecipe in
             guard let id = appState.selectedAssetId else { return }
+            let committedRecipe = appState.isInteractivePreviewActive
+                ? newRecipe.quantizedForInteractivePreview()
+                : newRecipe
 
             if isLocalNodeMode,
                let nodeId = appState.editingMaskId,
                let index = appState.currentLocalNodes.firstIndex(where: { $0.id == nodeId }) {
                 var node = appState.currentLocalNodes[index]
-                if node.adjustments == newRecipe {
+                if node.adjustments == committedRecipe {
                     return
                 }
-                node.adjustments = newRecipe
+                node.adjustments = committedRecipe
                 appState.updateLocalNode(node)
                 return
             }
 
             // Skip if the recipe hasn't actually changed (prevents feedback loops)
-            if appState.recipes[id] == newRecipe {
+            if appState.recipes[id] == committedRecipe {
                 return
             }
 
@@ -935,8 +938,13 @@ struct InspectorView: View {
             if oldRecipe.profileId != newRecipe.profileId {
                 print("[Inspector] Profile changed: \(oldRecipe.profileId) → \(newRecipe.profileId)")
             }
-            appState.recipes[id] = newRecipe
+            appState.recipes[id] = committedRecipe
             appState.saveCurrentRecipeDebounced()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .sliderDragStateChanged)) { notification in
+            guard let isDragging = notification.object as? Bool else { return }
+            guard !isDragging else { return }
+            commitExactLocalRecipe()
         }
         .onAppear {
             syncLocalRecipeFromContext()
@@ -1032,6 +1040,24 @@ struct InspectorView: View {
         } else {
             localRecipe = EditRecipe()
         }
+    }
+
+    private func commitExactLocalRecipe() {
+        guard let id = appState.selectedAssetId else { return }
+
+        if isLocalNodeMode,
+           let nodeId = appState.editingMaskId,
+           let index = appState.currentLocalNodes.firstIndex(where: { $0.id == nodeId }) {
+            var node = appState.currentLocalNodes[index]
+            guard node.adjustments != localRecipe else { return }
+            node.adjustments = localRecipe
+            appState.updateLocalNode(node)
+            return
+        }
+
+        guard appState.recipes[id] != localRecipe else { return }
+        appState.recipes[id] = localRecipe
+        appState.saveCurrentRecipeDebounced()
     }
     
     /// Import Lightroom XMP preset

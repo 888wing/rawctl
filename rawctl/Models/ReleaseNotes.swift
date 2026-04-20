@@ -43,6 +43,43 @@ struct ReleaseSection: Identifiable, Codable, Hashable {
 struct ReleaseHistory {
     static let notes: [ReleaseNote] = [
         ReleaseNote(
+            id: "1.6.0",
+            version: "1.6.0",
+            date: dateFrom("2026-04-20"),
+            title: "AI Suite & Performance",
+            highlights: [
+                "AI Cull scores every photo by sharpness, saliency, and exposure — duplicates ranked and rejected automatically",
+                "AI Colour Grade applies a complete graded edit from a mood description or scene analysis",
+                "Smart Sync transfers your edit to similar scenes across the library",
+                "Large memory cards open sooner and live colour adjustments feel dramatically faster"
+            ],
+            sections: [
+                ReleaseSection(title: "Added", items: [
+                    "AI Cull (Pro): Apple Vision scores sharpness, saliency, and exposure; group-aware duplicate detection with ranked rejection; one-tap undo restores the full library state",
+                    "AI Colour Grade (Pro): Gemini 2.0 Flash analyses your photo and applies a graded edit; Auto mode or seven mood presets — Cinematic, Airy, Moody, Warm Golden, Cool Urban, B&W Dramatic, Natural Vibrant",
+                    "Style Learning: Latent adapts colour grade suggestions to your editing preferences after five sessions",
+                    "Smart Sync (Pro): scene-similarity matching transfers an adapted recipe to photos that share the same light and composition",
+                    "AI Mask (Pro): Mobile-SAM point-click subject masking; works alongside local adjustment nodes",
+                    "Latent Pro subscription: monthly and yearly plans unlock all AI features; credits balance shown in Inspector"
+                ]),
+                ReleaseSection(title: "Improved", items: [
+                    "Large folder and SD card imports now use staged scanning so the first batch becomes usable before the full library pass completes",
+                    "Interactive slider drags now run through a lighter preview path with reduced background contention for faster feedback",
+                    "AI Cull scoring now includes an exposure signal — luminance histogram detects highlight and shadow clipping",
+                    "Duplicate groups now carry a rank; the highest-scoring photo in each burst is kept automatically",
+                    "Culling analysis persists in sidecar (schema v8) so results survive app restarts",
+                    "Checkout sync window keeps Pro status aligned after web payment without manual refresh"
+                ]),
+                ReleaseSection(title: "Fixed", items: [
+                    "Layer drag-and-drop reorder now produces the correct final order",
+                    "Missing AI layer files log a warning instead of silently skipping the composite",
+                    "Simultaneous AI generation requests no longer cause a credit balance race condition",
+                    "Sidecar files previously saved as .rawctl.json are silently migrated to .latent.json on first open",
+                    "Legacy sidecars missing tone curve point identifiers or straighten angle now decode cleanly"
+                ])
+            ]
+        ),
+        ReleaseNote(
             id: "1.4.0",
             version: "1.4.0",
             date: dateFrom("2026-02-19"),

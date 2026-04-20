@@ -45,13 +45,26 @@ struct AppStatePreloadTuningTests {
     }
 
     @Test func backpressureConcurrencyTiersShrinkForHugeLibraries() async throws {
-        #expect(AppState.sidecarLoadConcurrency(forAssetCount: 120) == 8)
-        #expect(AppState.sidecarLoadConcurrency(forAssetCount: 900) == 4)
-        #expect(AppState.sidecarLoadConcurrency(forAssetCount: 5_000) == 3)
+        #expect(AppState.sidecarLoadConcurrency(forAssetCount: 80) == 6)
+        #expect(AppState.sidecarLoadConcurrency(forAssetCount: 900) == 3)
+        #expect(AppState.sidecarLoadConcurrency(forAssetCount: 5_000) == 2)
 
-        #expect(AppState.thumbnailPreloadConcurrency(forAssetCount: 120) == 6)
-        #expect(AppState.thumbnailPreloadConcurrency(forAssetCount: 1_200) == 4)
-        #expect(AppState.thumbnailPreloadConcurrency(forAssetCount: 5_000) == 3)
+        #expect(AppState.thumbnailPreloadConcurrency(forAssetCount: 120) == 5)
+        #expect(AppState.thumbnailPreloadConcurrency(forAssetCount: 1_200) == 3)
+        #expect(AppState.thumbnailPreloadConcurrency(forAssetCount: 5_000) == 2)
+    }
+
+    @Test func stagedScanUsesSmallerInitialWindowsForRemovableVolumes() async throws {
+        #expect(AppState.stagedScanInitialBatchSize(isRemovableVolume: true) == 48)
+        #expect(AppState.stagedScanInitialBatchSize(isRemovableVolume: false) == 72)
+        #expect(AppState.stagedScanBatchSize(isRemovableVolume: true) == 96)
+        #expect(AppState.stagedScanBatchSize(isRemovableVolume: false) == 160)
+    }
+
+    @Test func thumbnailWarmupDelayIncreasesForLargeRemovableLibraries() async throws {
+        #expect(AppState.thumbnailWarmupDelayNs(forAssetCount: 120, isRemovableVolume: false) == 120_000_000)
+        #expect(AppState.thumbnailWarmupDelayNs(forAssetCount: 900, isRemovableVolume: true) == 650_000_000)
+        #expect(AppState.thumbnailWarmupDelayNs(forAssetCount: 1_800, isRemovableVolume: false) == 320_000_000)
     }
 
     private func makeAssets(count: Int) -> [PhotoAsset] {

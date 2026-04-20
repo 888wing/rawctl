@@ -45,6 +45,59 @@ struct SidecarMigrationTests {
         #expect(roundtrip.aiLayers == decodedLegacy.aiLayers)
     }
 
+    @Test func legacyToneCurvePointsWithoutIDsDecodeAndUpgrade() throws {
+        let data = try makeLegacySidecarData(
+            assetFilename: "legacy-curve.jpg",
+            exposure: 0.4,
+            schemaVersion: 5,
+            toneCurvePoints: [
+                (0.0, 0.0),
+                (0.25, 0.2),
+                (0.5, 0.55),
+                (0.75, 0.85),
+                (1.0, 1.0)
+            ]
+        )
+
+        let decoded = try JSONDecoder().decode(SidecarFile.self, from: data)
+        #expect(decoded.edit.toneCurve.points.count == 5)
+        #expect(Set(decoded.edit.toneCurve.points.map(\.id)).count == 5)
+
+        let roundtripData = try JSONEncoder().encode(decoded)
+        let roundtripObject = try JSONSerialization.jsonObject(with: roundtripData) as? [String: Any]
+        let edit = roundtripObject?["edit"] as? [String: Any]
+        let toneCurve = edit?["toneCurve"] as? [String: Any]
+        let points = toneCurve?["points"] as? [[String: Any]]
+
+        #expect(points?.allSatisfy { $0["id"] != nil } == true)
+    }
+
+    @Test func legacyCropWithoutStraightenAngleDecodesWithDefault() throws {
+        let data = try makeLegacySidecarData(
+            assetFilename: "legacy-crop.jpg",
+            exposure: 0.4,
+            schemaVersion: 5,
+            cropPayload: [
+                "isEnabled": true,
+                "aspect": "free",
+                "rect": [
+                    "x": 0.1,
+                    "y": 0.2,
+                    "w": 0.7,
+                    "h": 0.6
+                ],
+                "rotationDegrees": 90,
+                "flipHorizontal": true
+            ]
+        )
+
+        let decoded = try JSONDecoder().decode(SidecarFile.self, from: data)
+        #expect(decoded.edit.crop.isEnabled)
+        #expect(decoded.edit.crop.rotationDegrees == 90)
+        #expect(decoded.edit.crop.flipHorizontal)
+        #expect(decoded.edit.crop.straightenAngle == 0)
+    }
+
     @Test func saveRecipeOnlyUpgradesLegacySchemaOnWrite() async throws {
         let fm = FileManager.default
         let dir = fm.temporaryDirectory.appendingPathComponent("latent-sidecar-migrate-\(UUID().uuidString)", isDirectory: true)
@@ -104,17 +157,36 @@ struct SidecarMigrationTests {
     private func makeLegacySidecarData(
         assetFilename: String,
         exposure: Double,
-        schemaVersion: Int?
+        schemaVersion: Int?,
+        toneCurvePoints: [(Double, Double)]? = nil,
+        cropPayload: [String: Any]? = nil
     ) throws -> Data {
+        var edit: [String: Any] = [
+            "exposure": exposure
+        ]
+
+        if let toneCurvePoints {
+            edit["toneCurve"] = [
+                "points": toneCurvePoints.map { point in
+                    [
+                        "x": point.0,
+                        "y": point.1
+                    ]
+                }
+            ]
+        }
+
+        if let cropPayload {
+            edit["crop"] = cropPayload
+        }
+
         var payload: [String: Any] = [
             "asset": [
                 "originalFilename": assetFilename,
                 "fileSize": 1024,
                 "modifiedTime": 0
             ],
-            "edit": [
-                "exposure": exposure
-            ],
+            "edit": edit,
             "updatedAt": 1_234_567_890.0
         ]
         if let schemaVersion {

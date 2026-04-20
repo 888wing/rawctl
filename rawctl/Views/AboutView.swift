@@ -40,10 +40,17 @@ struct AboutView: View {
                     }
 
                     // Description
-                    Text("Professional RAW photo editor for macOS")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
+                    VStack(spacing: 6) {
+                        Text("Professional RAW photo editor for macOS")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+
+                        Text("Local-first · Non-destructive · AI-powered")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .multilineTextAlignment(.center)
+                    }
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
@@ -72,8 +79,12 @@ struct AboutView: View {
                     Label("Website", systemImage: "globe")
                 }
 
-                Link(destination: URL(string: "https://github.com/888wing/rawctl")!) {
+                Link(destination: URL(string: "https://github.com/888wing/latent")!) {
                     Label("GitHub Repository", systemImage: "chevron.left.forwardslash.chevron.right")
+                }
+
+                Link(destination: URL(string: "https://latent-app.com/support")!) {
+                    Label("Support", systemImage: "questionmark.circle")
                 }
 
                 Link(destination: URL(string: "https://latent-app.com/#pricing")!) {
@@ -103,10 +114,11 @@ struct AboutView: View {
                         .font(.caption)
                         .foregroundStyle(.tertiary)
 
-                    HStack(spacing: 16) {
+                    HStack(spacing: 10) {
                         TechBadge(name: "SwiftUI", color: .blue)
                         TechBadge(name: "Core Image", color: .purple)
-                        TechBadge(name: "CIRAWFilter", color: .orange)
+                        TechBadge(name: "Core ML", color: .green)
+                        TechBadge(name: "Vision", color: .indigo)
                     }
                 }
                 .padding(.vertical, 4)
@@ -120,7 +132,7 @@ struct AboutView: View {
                     Text("Latent")
                         .font(.caption.bold())
 
-                    Text("Copyright 2024-2025 Nicholas Lee")
+                    Text("Copyright 2024-2026 Siu Fai Chui")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
 

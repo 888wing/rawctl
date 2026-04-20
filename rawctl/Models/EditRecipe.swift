@@ -59,7 +59,7 @@ struct EditRecipe: Codable, Equatable {
     var flag: Flag = .none
     var tags: [String] = []
     
-    // MARK: - Explicit Memberwise Init
+    // MARK: - Explicit Default Init
     /// Required because we have a custom init(from decoder:)
     init() {}
     
@@ -188,6 +188,40 @@ struct EditRecipe: Codable, Equatable {
         case hsl, clarity, dehaze, texture, calibration
         case profileId  // v1.2
         case rating, colorLabel, flag, tags
+    }
+
+    /// Reduce value churn while sliders are actively dragging so preview renders
+    /// can reuse more intermediate work and avoid over-scheduling near-identical frames.
+    func quantizedForInteractivePreview() -> EditRecipe {
+        var recipe = self
+
+        func quantize(_ value: Double, step: Double) -> Double {
+            guard step > 0 else { return value }
+            return (value / step).rounded() * step
+        }
+
+        recipe.exposure = quantize(recipe.exposure, step: 0.05)
+        recipe.contrast = quantize(recipe.contrast, step: 1)
+        recipe.highlights = quantize(recipe.highlights, step: 1)
+        recipe.shadows = quantize(recipe.shadows, step: 1)
+        recipe.whites = quantize(recipe.whites, step: 1)
+        recipe.blacks = quantize(recipe.blacks, step: 1)
+        recipe.vibrance = quantize(recipe.vibrance, step: 1)
+        recipe.saturation = quantize(recipe.saturation, step: 1)
+        recipe.clarity = quantize(recipe.clarity, step: 1)
+        recipe.dehaze = quantize(recipe.dehaze, step: 1)
+        recipe.texture = quantize(recipe.texture, step: 1)
+        recipe.sharpness = quantize(recipe.sharpness, step: 2)
+        recipe.noiseReduction = quantize(recipe.noiseReduction, step: 2)
+        recipe.whiteBalance.temperature = Int((Double(recipe.whiteBalance.temperature) / 50).rounded() * 50)
+        recipe.whiteBalance.tint = Int((Double(recipe.whiteBalance.tint) / 2).rounded() * 2)
+        recipe.crop.straightenAngle = quantize(recipe.crop.straightenAngle, step: 0.25)
+        recipe.perspective.vertical = quantize(recipe.perspective.vertical, step: 1)
+        recipe.perspective.horizontal = quantize(recipe.perspective.horizontal, step: 1)
+        recipe.perspective.rotate = quantize(recipe.perspective.rotate, step: 0.25)
+        recipe.perspective.scale = quantize(recipe.perspective.scale, step: 1)
+
+        return recipe
     }
 }
 
@@ -324,6 +358,56 @@ struct Crop: Codable, Equatable {
     var straightenAngle: Double = 0        // -45° to +45° continuous
     var flipHorizontal: Bool = false
     var flipVertical: Bool = false
+
+    private enum CodingKeys: String, CodingKey {
+        case isEnabled
+        case aspect
+        case rect
+        case rotationDegrees
+        case straightenAngle
+        case flipHorizontal
+        case flipVertical
+    }
+
+    init(
+        isEnabled: Bool = false,
+        aspect: Aspect = .free,
+        rect: CropRect = CropRect(),
+        rotationDegrees: Int = 0,
+        straightenAngle: Double = 0,
+        flipHorizontal: Bool = false,
+        flipVertical: Bool = false
+    ) {
+        self.isEnabled = isEnabled
+        self.aspect = aspect
+        self.rect = rect
+        self.rotationDegrees = rotationDegrees
+        self.straightenAngle = straightenAngle
+        self.flipHorizontal = flipHorizontal
+        self.flipVertical = flipVertical
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
+        aspect = try container.decodeIfPresent(Aspect.self, forKey: .aspect) ?? .free
+        rect = try container.decodeIfPresent(CropRect.self, forKey: .rect) ?? CropRect()
+        rotationDegrees = try container.decodeIfPresent(Int.self, forKey: .rotationDegrees) ?? 0
+        straightenAngle = try container.decodeIfPresent(Double.self, forKey: .straightenAngle) ?? 0
+        flipHorizontal = try container.decodeIfPresent(Bool.self, forKey: .flipHorizontal) ?? false
+        flipVertical = try container.decodeIfPresent(Bool.self, forKey: .flipVertical) ?? false
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(isEnabled, forKey: .isEnabled)
+        try container.encode(aspect, forKey: .aspect)
+        try container.encode(rect, forKey: .rect)
+        try container.encode(rotationDegrees, forKey: .rotationDegrees)
+        try container.encode(straightenAngle, forKey: .straightenAngle)
+        try container.encode(flipHorizontal, forKey: .flipHorizontal)
+        try container.encode(flipVertical, forKey: .flipVertical)
+    }
 
     enum Aspect: String, Codable, CaseIterable, Identifiable {
         case free = "free"
@@ -613,11 +697,31 @@ struct CurvePoint: Codable, Equatable, Hashable, Identifiable {
     let id: UUID
     var x: Double  // 0-1 input
     var y: Double  // 0-1 output
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case x
+        case y
+    }
     
     init(id: UUID = UUID(), x: Double, y: Double) {
         self.id = id
         self.x = x
         self.y = y
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        x = try container.decode(Double.self, forKey: .x)
+        y = try container.decode(Double.self, forKey: .y)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(x, forKey: .x)
+        try container.encode(y, forKey: .y)
     }
     
     static func == (lhs: CurvePoint, rhs: CurvePoint) -> Bool {

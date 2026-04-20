@@ -1,0 +1,38 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-background text-foreground font-body antialiased;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-display uppercase tracking-art-deco;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply px-8 py-4 border-2 border-gold text-gold font-display uppercase tracking-art-deco-wide
+           transition-all duration-300 hover:bg-gold hover:text-background hover:shadow-gold-glow-lg;
+  }
+
+  .btn-solid {
+    @apply px-8 py-4 bg-gold text-background font-display uppercase tracking-art-deco-wide
+           transition-all duration-300 hover:bg-gold-light hover:shadow-gold-glow-lg;
+  }
+
+  .card-deco {
+    @apply bg-card border border-gold/30 relative
+           transition-all duration-500 hover:border-gold hover:-translate-y-2 hover:shadow-gold-glow;
+  }
+
+  .section-title {
+    @apply text-4xl md:text-5xl lg:text-6xl text-gold font-display uppercase tracking-art-deco-wide text-center;
+  }
+
+  .section-subtitle {
+    @apply text-lg md:text-xl text-foreground/80 text-center mt-4;
+  }
+}

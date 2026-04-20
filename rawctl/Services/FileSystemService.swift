@@ -8,6 +8,92 @@
 import Foundation
 import AppKit
 
+struct FolderScanMetrics: Sendable, Equatable {
+    var scannedCount: Int
+    var discoveredAssetCount: Int
+    var skippedExtensions: [String]
+    var isFinished: Bool
+}
+
+actor FolderScanSession {
+    private let enumerator: FileManager.DirectoryEnumerator
+    private var skippedExtensions: Set<String> = []
+    private var scannedCount = 0
+    private var discoveredAssetCount = 0
+    private var isFinished = false
+
+    init(url: URL) throws {
+        guard let enumerator = FileManager.default.enumerator(
+            at: url,
+            includingPropertiesForKeys: [.isRegularFileKey, .creationDateKey, .contentModificationDateKey, .fileSizeKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else {
+            throw FileSystemError.cannotEnumerateFolder
+        }
+        self.enumerator = enumerator
+    }
+
+    func nextBatch(limit: Int) throws -> [PhotoAsset] {
+        guard !isFinished, limit > 0 else { return [] }
+
+        var batch: [PhotoAsset] = []
+        batch.reserveCapacity(limit)
+
+        while batch.count < limit {
+            guard let fileURL = enumerator.nextObject() as? URL else {
+                isFinished = true
+                break
+            }
+
+            scannedCount += 1
+
+            guard let resourceValues = try? fileURL.resourceValues(
+                forKeys: [.isRegularFileKey, .creationDateKey, .contentModificationDateKey, .fileSizeKey]
+            ),
+            resourceValues.isRegularFile == true else {
+                continue
+            }
+
+            let ext = fileURL.pathExtension.lowercased()
+            guard PhotoAsset.supportedExtensions.contains(ext) else {
+                skippedExtensions.insert(ext)
+                continue
+            }
+
+            let fileSize = Int64(resourceValues.fileSize ?? 0)
+            let creationDate = resourceValues.creationDate
+            let modificationDate = resourceValues.contentModificationDate
+            let fingerprint = PhotoAsset.createFingerprint(fileSize: fileSize, modificationDate: modificationDate)
+            batch.append(
+                PhotoAsset(
+                    url: fileURL,
+                    fileSize: fileSize,
+                    creationDate: creationDate,
+                    modificationDate: modificationDate,
+                    fingerprint: fingerprint
+                )
+            )
+            discoveredAssetCount += 1
+        }
+
+        if batch.isEmpty, isFinished {
+            return []
+        }
+
+        batch.sort { $0.filename.localizedStandardCompare($1.filename) == .orderedAscending }
+        return batch
+    }
+
+    func metrics() -> FolderScanMetrics {
+        FolderScanMetrics(
+            scannedCount: scannedCount,
+            discoveredAssetCount: discoveredAssetCount,
+            skippedExtensions: skippedExtensions.sorted(),
+            isFinished: isFinished
+        )
+    }
+}
+
 /// Service for file system operations
 actor FileSystemService {
     
@@ -24,72 +110,38 @@ actor FileSystemService {
         guard panel.runModal() == .OK else { return nil }
         return panel.url
     }
+
+    static func makeScanSession(_ url: URL) async throws -> FolderScanSession {
+        print("[FileSystem] Scanning folder: \(url.path)")
+        return try FolderScanSession(url: url)
+    }
     
     /// Scan a folder for supported image files
     static func scanFolder(_ url: URL) async throws -> [PhotoAsset] {
-        let fileManager = FileManager.default
-
         let signpostId = PerformanceSignposts.signposter.makeSignpostID()
         let signpostState = PerformanceSignposts.begin("scanFolder", id: signpostId)
-        var scannedCount = 0
-        var assets: [PhotoAsset] = []
         defer {
             PerformanceSignposts.end("scanFolder", signpostState)
         }
-        
-        print("[FileSystem] Scanning folder: \(url.path)")
-        
-        guard let enumerator = fileManager.enumerator(
-            at: url,
-            includingPropertiesForKeys: [.isRegularFileKey, .creationDateKey, .contentModificationDateKey, .fileSizeKey],
-            options: [.skipsHiddenFiles, .skipsPackageDescendants]
-        ) else {
-            print("[FileSystem] Cannot enumerate folder")
-            throw FileSystemError.cannotEnumerateFolder
-        }
-        
-        var skippedExtensions: Set<String> = []
-        
-        // Avoid `DirectoryEnumerator` Sequence iteration in async context (Swift 6 `noasync`).
-        while let fileURL = enumerator.nextObject() as? URL {
-            scannedCount += 1
-            
-            // Check if it's a regular file
-            guard let resourceValues = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .creationDateKey, .contentModificationDateKey, .fileSizeKey]),
-                  resourceValues.isRegularFile == true else {
-                continue
-            }
-            
-            // Check extension
-            let ext = fileURL.pathExtension.lowercased()
-            guard PhotoAsset.supportedExtensions.contains(ext) else {
-                skippedExtensions.insert(ext)
-                continue
-            }
 
-            let fileSize = Int64(resourceValues.fileSize ?? 0)
-            let creationDate = resourceValues.creationDate
-            let modificationDate = resourceValues.contentModificationDate
-            let fingerprint = PhotoAsset.createFingerprint(fileSize: fileSize, modificationDate: modificationDate)
-            assets.append(
-                PhotoAsset(
-                    url: fileURL,
-                    fileSize: fileSize,
-                    creationDate: creationDate,
-                    modificationDate: modificationDate,
-                    fingerprint: fingerprint
-                )
-            )
+        let session = try await makeScanSession(url)
+        var assets: [PhotoAsset] = []
+        let batchSize = 256
+
+        while true {
+            let batch = try await session.nextBatch(limit: batchSize)
+            guard !batch.isEmpty else { break }
+            assets.append(contentsOf: batch)
         }
-        
-        print("[FileSystem] Scanned \(scannedCount) items, found \(assets.count) supported images")
-        if !skippedExtensions.isEmpty {
-            print("[FileSystem] Skipped extensions: \(skippedExtensions.sorted().joined(separator: ", "))")
-        }
-        
-        // Sort by filename
+
         assets.sort { $0.filename.localizedStandardCompare($1.filename) == .orderedAscending }
-        
+
+        let metrics = await session.metrics()
+        print("[FileSystem] Scanned \(metrics.scannedCount) items, found \(metrics.discoveredAssetCount) supported images")
+        if !metrics.skippedExtensions.isEmpty {
+            print("[FileSystem] Skipped extensions: \(metrics.skippedExtensions.joined(separator: ", "))")
+        }
+
         return assets
     }
     

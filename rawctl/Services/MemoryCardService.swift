@@ -197,36 +197,11 @@ final class MemoryCardService {
             print("[MemoryCard] No DCIM folder found, scanning root: \(url.path)")
         }
 
-        appState.cancelBackgroundAssetLoading(resetThumbnailProgress: true)
-        appState.selectedFolder = scanURL
-        appState.isLoading = true
-        appState.loadingMessage = "Scanning memory card..."
-        
-        do {
-            let assets = try await FileSystemService.scanFolder(scanURL)
-            print("[MemoryCard] Found \(assets.count) photos")
-            
-            appState.assets = assets
-            appState.recipes = [:]
-            appState.snapshots = [:]
-            appState.localNodes = [:]
-            appState.aiLayerStacks = [:]
-            appState.aiEditsByURL = [:]
-            appState.isLoading = false
-
-            // Select first photo immediately for responsive UI
-            if let first = appState.assets.first {
-                appState.select(first, switchToSingleView: false)
-                print("[MemoryCard] Selected first asset: \(first.filename)")
-            } else {
-                print("[MemoryCard] No assets found!")
-            }
-
-            // Load recipes + thumbnails through cancellable background pipeline.
-            appState.schedulePostScanBackgroundWork(expectedFolder: scanURL)
-        } catch {
-            print("[MemoryCard] Error scanning: \(error)")
-            appState.isLoading = false
+        let didOpen = await appState.openFolder(at: scanURL, registerInFolderHistory: false)
+        if didOpen {
+            print("[MemoryCard] Opened camera card via staged scan")
+        } else {
+            print("[MemoryCard] Failed to open camera card at \(scanURL.path)")
         }
     }
 }

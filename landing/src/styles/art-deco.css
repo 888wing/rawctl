@@ -1,0 +1,84 @@
+/* Diagonal crosshatch background pattern */
+.bg-crosshatch {
+  background-image:
+    repeating-linear-gradient(
+      45deg,
+      transparent,
+      transparent 10px,
+      rgba(212, 175, 55, 0.03) 10px,
+      rgba(212, 175, 55, 0.03) 11px
+    ),
+    repeating-linear-gradient(
+      -45deg,
+      transparent,
+      transparent 10px,
+      rgba(212, 175, 55, 0.03) 10px,
+      rgba(212, 175, 55, 0.03) 11px
+    );
+}
+
+/* Sunburst radial gradient */
+.bg-sunburst {
+  background: radial-gradient(
+    ellipse at center,
+    rgba(212, 175, 55, 0.15) 0%,
+    rgba(212, 175, 55, 0.05) 30%,
+    transparent 70%
+  );
+}
+
+/* Corner decorations */
+.corner-deco::before,
+.corner-deco::after {
+  content: '';
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border-color: #D4AF37;
+  opacity: 0.5;
+  transition: opacity 0.3s ease;
+}
+
+.corner-deco::before {
+  top: 8px;
+  left: 8px;
+  border-top: 2px solid;
+  border-left: 2px solid;
+}
+
+.corner-deco::after {
+  bottom: 8px;
+  right: 8px;
+  border-bottom: 2px solid;
+  border-right: 2px solid;
+}
+
+.corner-deco:hover::before,
+.corner-deco:hover::after {
+  opacity: 1;
+}
+
+/* Diamond container */
+.diamond {
+  transform: rotate(45deg);
+}
+
+.diamond-content {
+  transform: rotate(-45deg);
+}
+
+/* Gold divider line */
+.divider-gold {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+}
+
+.divider-gold::before,
+.divider-gold::after {
+  content: '';
+  height: 1px;
+  width: 60px;
+  background: linear-gradient(90deg, transparent, #D4AF37, transparent);
+}

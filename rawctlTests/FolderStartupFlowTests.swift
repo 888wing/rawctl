@@ -120,6 +120,9 @@ struct FolderStartupFlowTests {
         #expect(manager.source(for: folder) != nil)
         #expect(manager.recentFolders.first?.path == folder.standardizedFileURL.path)
         #expect(defaults.string(forKey: "latent.lastOpenedFolder") == folder.path)
+
+        appState.cancelBackgroundAssetLoading(resetThumbnailProgress: true, cancelStagedScan: true)
+        try? await Task.sleep(nanoseconds: 100_000_000)
     }
 }
 

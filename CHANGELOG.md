@@ -5,250 +5,30 @@ All notable changes to Latent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Changed
-- App renamed from rawctl to **Latent**
-
-## [1.6.0] - 2026-02-24
+## [1.6.0] - 2026-04-20
 
 ### Added
 
-#### AI Colour Grading (Pro)
-- **GeminiColorService** (`Services/GeminiColorService.swift`): `@MainActor` service calling `POST api.latent-app.com/ai/color-grade` with rendered photo thumbnail (1024px JPEG, base64); supports `auto`, `mood`, and `reference` modes; 3 typed errors (`authenticationRequired`, `insufficientCredits`, `invalidResponse`); refreshes credits balance after success
-- **ColorGradeDelta** (`Models/EditRecipe.swift`): Optional-field struct for AI-suggested recipe changes; `applying(to:)` merges delta onto base `EditRecipe` with temperature/tint clamping; `diff(ai:final:)` computes user deviation for preference learning; `hasChanges` sentinel
-- **AIColorGradingPanel** (`Components/AIColorGradingPanel.swift`): Inspector panel with Auto/Mood mode picker, 7 mood presets (Cinematic, Airy, Moody, Warm Golden, Cool Urban, B&W Dramatic, Natural Vibrant), credits balance display, "Analyse & Apply" button, last-analysis text view; Pro gate with upgrade CTA
-- **InspectorConfig**: Added `.aiColorGrading` panel case (visible by default, icon `sparkle.magnifyingglass`)
-- **InspectorView**: AI Colour Grading section above AI Generation
-- **AppFeatures**: `aiColorGradingEnabled` flag (Pro-gated via `isProUser`)
-- **AppState**: `pendingAiSuggestion: PendingAISuggestion?`, `aiGradeAnalysis: String`; `applyColorGrade(_:mode:)` pushes undo history then applies delta; `recordAndClearPendingAISuggestion()` computes user preference diff and posts to backend
+- **AI Cull (Pro)**: Apple Vision scores sharpness, saliency, and exposure, then ranks duplicate groups so the best frame is kept automatically
+- **AI Colour Grade (Pro)**: Generate a complete starting grade from scene analysis or a mood prompt
+- **Smart Sync (Pro)**: Transfer an adapted recipe to visually similar scenes across the current library
+- **AI Mask (Pro)**: Point-click subject masking powered by Mobile-SAM
+- **Latent Pro plans and credits**: Monthly/yearly subscription support plus one-off credit packs for AI workflows
 
-#### Style Preference Learning
-- **AccountService**: `userStyleProfile: UserStyleProfile?`; `recordStylePreference(originalSuggestion:userModification:mode:mood:)` fire-and-forget POST to `/ai/style-preference`
-- **UserStyleProfile**: `Codable` struct accumulating `exposureBias`, `contrastBias`, `preferredMoods`, `avoidedMoods`, `sampleCount`; personalisation activates after ≥5 samples
-- **SidecarService** / **AppState**: Preference diff recorded when user switches photo after AI grade applied
+### Improved
 
-#### Backend (`rawctl-api` Cloudflare Worker — reconstructed + extended)
-- Reconstructed full TypeScript source at `/Users/chuisiufai/Projects/rawctl-api/` from deployed bundle
-- **POST `/ai/color-grade`**: Calls Gemini 2.0 Flash with JSON-mode response; builds `ColorGradeDelta` from schema; injects `UserStyleProfile` biases when ≥5 samples; 1 credit (auto/mood) or 2 credits (reference)
-- **POST `/ai/style-preference`**: Accumulates rolling-average bias profile in `user_style_profiles` D1 table; free endpoint
-- **D1 migration**: Created `user_style_profiles`, `analytics_sessions`, `analytics_events` tables
-
-#### AI Culling v1.1 — Scoring Hardening (E1)
-- **CullingConfig** (`Services/CullingService.swift`): Single source of truth for scoring weights (sharpness 0.45, saliency 0.30, exposure 0.25), rating boundaries, exposure clipping thresholds, and duplicate distance; replaces all hardcoded constants
-- **Exposure scoring** (`Services/CullingService.swift`): `scoreExposure(image:)` uses CIAreaHistogram (256-bin luminance) to detect highlight/shadow clipping; artistic tolerance band avoids over-penalizing intentional low-key/high-key images
-- **CullingScore.exposureScore**: New field carrying per-photo exposure quality (0–1)
-- **3-signal scoring formula**: `computeFinalScore` now combines sharpness + saliency + exposure using configurable weights
-- **Shared CIContext**: Reused across sharpness and exposure scoring for batch performance
-
-#### AI Culling v1.1 — Duplicate Grouping Upgrade (E2)
-- **CullingAnalysis** (`Services/CullingService.swift`): Rich Codable output struct replacing CullingScore — carries `version`, `overallScore`, all signal scores, `duplicateGroupId`, `duplicateRank` (1-indexed), `suggestedRating`, `suggestedFlag`, and `rejectedReasons` (e.g. "blurry", "duplicate_non_best", "exposure_clipped", "poor_composition")
-- **scoreWithAnalysis()**: New primary scoring API accepting pre-built `FeaturePrintIndex` prints to avoid duplicate feature print generation; returns `[UUID: CullingAnalysis]`
-- **buildDuplicateGroupsWithRank()**: Assigns 1-indexed rank within each duplicate group using 3-signal weighted sort (sharpness + saliency + exposure)
-- **FeaturePrintIndex reuse**: Culling pipeline shares the session-scoped feature print cache with SmartSync
-
-#### AI Culling v1.1 — Data Contract Persistence (E3)
-- **Sidecar schema v8**: `SidecarFile.cullingAnalysis: CullingAnalysis?` — optional field preserving full culling metadata across app restarts; backward compatible with v7 sidecars
-- **applyCullingResults()**: Now writes both legacy `rating/flag` and full `CullingAnalysis` to sidecar via `SidecarService`
-- **startAICulling()**: Uses `scoreWithAnalysis()` with `FeaturePrintIndex.shared.allPrints()` for cache reuse
-
-### Fixed
-- **GeminiColorService**: Decode response via `APIResponse<ColorGradeResponse>` wrapper (was decoding bare struct → key-not-found crash)
-- **GeminiColorService**: HTTP 401 → `.authenticationRequired`, 402 → `.insufficientCredits` (was generic `.invalidResponse`)
-- **ColorGradeResponse**: Changed conformance from `Decodable` to `Codable` to satisfy `APIResponse<T: Codable>` constraint
-- **AILayerStack.moveLayer()**: Fixed ternary with identical branches — after `remove(at:)`, when source < target the destination index must shift left by 1; drag-and-drop reorder now produces correct layer order
-- **ImagePipeline**: Missing AI layer/edit cache files now log a warning instead of silently skipping composite
-- **AppState**: Sidecar save failure (recipe+nodes+aiLayers) now shows "Failed to save AI layers" HUD instead of silent fallback
-- **CullingService**: Deprecated `buildDuplicateGroups()` representative selection now uses all 3 signals (sharpness + saliency + exposure), matching `buildDuplicateGroupsWithRank()`
-- **AIGenerationService**: Added local credit reservation (`reserveCredits`/`releaseCredits`) to prevent race condition when two generations are triggered simultaneously
-
-### Technical
-- New test file `rawctlTests/GeminiColorServiceTests.swift`: 17 tests covering `ColorGradeDelta.applying`, `diff`, `hasChanges`, `APIResponse<ColorGradeResponse>` JSON decoding, and `AppState.applyColorGrade`
-- `AppFeaturesProGatingTests`: Added `aiColorGradingEnabled` lockstep assertions; all 25 new + existing tests pass
-- 13 new culling tests: exposure scoring boundaries, calibration regression, synthetic fixture integration (overexposed/underexposed ordering)
-- 17 new culling tests (E2+E3): CullingAnalysis rejection reasons, Codable roundtrip, sidecar v8 backward compatibility, duplicate ranking, save-load idempotency
-- Deprecated: `CullingService.score()` and `computeFinalScore()` in favor of `scoreWithAnalysis()` and `buildAnalysis()`
-- **CullingConfig**: Rejection reason thresholds (`blurryThreshold: 0.25`, `poorCompositionThreshold: 0.20`, `exposureClippedThreshold: 0.40`) now configurable via CullingConfig instead of hardcoded in `buildAnalysis()`
-- New regression test `aiLayerStackMoveLayerReordersCorrectly()` in `LayerCompositingOrderTests`
-- New test file `rawctlTests/BillingProviderTests.swift`: 17 tests covering BillingProvider channel routing (direct/MAS), StoreKit error paths for unknown products, DirectBillingProvider no-ops, credit reservation/release logic, and account deletion email mismatch + unauthorized guards
-
-## [1.5.0] - 2026-02-24
-
-### Added
-
-#### AI Photo Culling (Pro)
-- **CullingService** (`Services/CullingService.swift`): Apple Vision-powered photo scoring — sharpness via Laplacian variance, saliency via `VNGenerateAttentionBasedSaliencyImageRequest`, duplicate detection via `VNGenerateImageFeaturePrintRequest`; ANE-accelerated, zero marginal cost
-- **Group-aware duplicate detection**: Union-Find with two-pass path compression identifies burst groups; keeps highest-scoring photo in each group, rejects the rest
-- **Pre-cull undo snapshot**: `AppState.lastPreCullSnapshot` captures all ratings/flags before culling runs; one-tap undo restores entire library state
-- **GridView**: "AI Cull" toolbar button + `ProgressView` overlay; progress via `AppState.cullingProgress`
-
-#### Scene-Aware Smart Sync (Pro)
-- **SmartSyncService** (`Services/SmartSyncService.swift`): `VNGenerateImageFeaturePrintRequest` scene-similarity indexing + `RecipeAdapter` for EV-normalised exposure transfer; clamped to ±3 EV
-- **FeaturePrintIndex**: in-memory cache of `VNFeaturePrintObservation` keyed by photo URL; invalidates on edit change
-- **SingleView**: "Smart Sync" button in inspector; confirmation sheet listing matched photos before applying adapted recipes
-
-#### AI Masking via Mobile-SAM (Pro)
-- **SAMService** (`Services/SAMService.swift`): Core ML actor wrapping Mobile-SAM; graceful nil when model absent; `SAMModelStatus` enum (`.notInstalled`, `.downloading(progress:)`, `.ready`, `.error`)
-- **AIGenerationPanel**: Pro gate on region masking mode — shows crown badge + upgrade prompt when not subscribed; mode picker restricted to `[.fullImage]` for free users
-
-#### Pro Subscription Gating
-- **AppFeatures**: All AI features (Culling, Smart Sync, Masking, Batch Processing) are Pro-only; `LATENT_PRO_OVERRIDE=1` env var for QA
-- **AccountService.isProUser**: checks `creditsBalance.subscription.plan` for "pro", "premium", or "yearly" substrings (case-insensitive); returns `false` when unauthenticated
-
-#### Account & Entitlement Reliability
-- **Checkout sync window**: 180-second polling loop starts automatically when browser checkout opens (subscription or credits); keeps Pro/credits state aligned after web payment
-- **Entitlement refresh throttle**: 8-second minimum between `/user/credits` calls prevents redundant API traffic on app focus
-- **Fallback plans**: `applyFallbackPlansIfNeeded()` ensures pricing UI is never blank when `/checkout/plans` is unreachable
-
-### Fixed
-- **NodeGraphTests**: Updated `schemaVersion` assertion from v6 → v7 (schema bumped when `aiLayers` was added in v1.4.x)
-
-### Technical
-- **Test suite** (`rawctlTests/`): 31 new tests across 3 new files
-  - `SAMServiceTests`: SAMModelStatus Equatable + isReady; graceful nil when model absent
-  - `AppFeaturesProGatingTests`: tier gating lockstep; isProUser false when unauthenticated
-  - `AccountServiceIsProUserTests`: plan-name variants, case-insensitivity, nil guards
-- **Sidecar schema v7**: `aiLayers` field added (backward compatible; v5/v6 sidecars load without it)
-- Sidecar format: `.rawctl.json` files silently migrated to `.latent.json` on first open
-- Camera profiles renamed: rawctl Neutral/Vivid/Portrait → Latent Neutral/Vivid/Portrait
-- Domain updated to latent-app.com (Sparkle, API, links)
-- Bundle identifier updated to `Shacoworkshop.latent`
-- Old release scripts and bin tools removed (superseded by `/rawctl-release` skill)
-
-## [1.4.0] - 2026-01-14
-
-### Added
-
-#### Local Adjustments (Phase 1)
-- **Local adjustment nodes**: Radial and linear gradient masks with exposure, contrast, and other adjustments per-region
-- **MaskingPanel**: Inspector panel for adding, removing, and enabling/disabling local adjustment nodes
-- **LocalAdjustmentRow**: Component with mask type display, enable toggle, edit mask button, and delete action
-- **RadialMaskEditor**: Overlay in SingleView with draggable center handle and radius handle for interactive radial mask editing
-- **LinearMaskEditor**: Overlay in SingleView with draggable position handle for interactive linear gradient mask editing
-- **MaskEditingToolbar**: Toolbar for entering and exiting mask editing mode with overlay toggle
-- **AppState.localNodes**: Persistent local adjustment state keyed by photo URL; wired to `currentLocalNodes` computed property
-- **SidecarService v6 schema**: `localNodes` saved alongside recipe in sidecar JSON; v5 sidecars load without local nodes (backward compatible)
-- **ImagePipeline.renderLocalNodes**: Applies per-node mask density and invert support; uses `CIBlendWithMask` to composite local adjustments onto the base image
-
-#### Local Adjustments (Phase 2)
-- Brush mask: paint-based local adjustment masks with `BrushMask` + `BrushMaskEditor`
-- `.brush(data:)` MaskType case stores PNG bitmap in sidecar via `BrushMaskBitmap`
-- Interactive brush canvas (`MaskCanvasView`) with eraser, undo, clear, size control
-- Keyboard shortcut `M` toggles mask overlay during mask editing
-- Blend mode and opacity controls per local adjustment node (UI, pipeline support future)
-- Performance: brush mask renders capped at 2048px long edge to keep main thread responsive
-- Stroke history capped at 200 to prevent unbounded memory growth
-
-#### Crop System Optimization
-- **Draw new crop area**: Drag on dark region outside existing crop frame to draw a completely new crop area
-- **Aspect ratio constraint while drawing**: New crop areas respect locked aspect ratios during drawing
-- **Instant aspect ratio application**: Crop frame immediately adjusts when selecting new aspect ratio (animated)
-- **CropPreviewThumbnail**: New component in right panel Composition section shows preview with crop overlay
-- **Edit Crop button**: Quick entry to transform mode from right panel
-- **Minimum size threshold**: Prevents accidental clicks from creating tiny crop areas (2% minimum)
-
-#### Enhanced Zoom Controls (SingleView)
-- **Scroll wheel zoom**: Smooth zoom in/out at cursor position with proper anchor point calculation
-- **Pinch gesture zoom**: Two-finger trackpad pinch for intuitive zoom control
-- **Extended zoom range**: 25% to 800% zoom (previously only Fit and 100%)
-- **New zoom level buttons**: Fit, 50%, 100%, 200% quick access buttons
-- **Live zoom percentage indicator**: Shows current zoom level in bottom-right corner
-- **Smart pan bounds clamping**: Prevents panning beyond image edges when zoomed
-- **Zoom anchor point**: Zooming centers on cursor position, not view center
-
-#### Lightroom-Style Crop Toolbar (CropToolbar.swift)
-- **Aspect ratio picker**: Quick access to all aspect ratios (Free, Original, 1:1, 4:3, 3:2, 16:9, 5:4, 7:5)
-- **Grid overlay picker**: Multiple composition guides for better framing
-- **Straighten slider**: Fine-tune image rotation from -45° to +45°
-- **Flip buttons**: Horizontal and vertical flip with visual state indicators
-- **Rotate 90° buttons**: Quick left/right rotation
-- **Action buttons**: Confirm (checkmark), Cancel (X), Reset (arrow) with keyboard shortcuts
-
-#### Crop Grid Overlay Options (CropOverlayView)
-- **Rule of Thirds**: Classic 3x3 grid for balanced composition
-- **Golden Ratio (Phi)**: Lines at φ (1.618) positions for natural proportions
-- **Diagonal**: Corner-to-corner diagonal lines
-- **Golden Triangle**: Diagonal with perpendicular lines from corners
-- **Golden Spiral**: Fibonacci spiral overlay for dynamic composition
-- **None**: Clean view without overlay lines
-
-#### Improved Crop Interaction
-- **Lightroom-style image drag**: Dragging inside crop frame moves the image under the fixed frame (inverted from previous behavior)
-- **Auto-enable crop**: Crop automatically enables when user modifies the crop rectangle
-- **Real-time preview**: Crop changes reflected immediately in the preview
+- **Large card opening**: Folder and SD card scans now stage the first visible batch so 1000+ RAW imports become usable sooner instead of blocking on a full-card pass
+- **Interactive preview**: Slider drags now use a lighter-weight preview path, lower interactive resolution, and reduced background contention for much faster colour adjustment feedback
+- **Background work scheduling**: Sidecar flush, thumbnail prefetch, and preload windows yield more aggressively while the user is actively editing
+- **Checkout sync**: Pro status and credits refresh more reliably after web or StoreKit checkout flows
 
 ### Fixed
 
-#### Installation
-- **Fixed macOS 15.1 users unable to install**: Deployment target was incorrectly set to 15.4 instead of 14.0, preventing users on earlier macOS versions from installing
-
-#### Crop System
-- **Fixed crop region deviating from user selection**: Crop selection was displaced because of coordinate system mismatch
-  - Root cause: SwiftUI uses top-left origin (Y increases downward) but CIImage uses bottom-left origin (Y increases upward)
-  - Fixed by inverting Y coordinate in ImagePipeline.swift: `y = 1 - crop.rect.y - crop.rect.h`
-  - Applied fix to both RAW and non-RAW rendering pipelines (lines 439 and 650)
-
-#### View Switching
-- **Fixed Filmstrip bar not visible in SingleView**: The filmstrip thumbnail strip was hidden at the bottom of SingleView
-  - Root cause: Main preview ZStack used fixed `.frame(width:height:)` consuming 100% of GeometryReader height
-  - Changed to `.frame(maxWidth: .infinity, maxHeight: .infinity)` to allow VStack to properly allocate space for Filmstrip
-
-#### Performance
-- **Fixed severe performance degradation when loading 800+ images**: Loading large folders caused long thumbnail loading times and system slowdown
-  - Root cause: Each GridThumbnail cell spawned independent async task with no concurrency limit
-  - 800 images = 800 concurrent I/O operations (file reads, image decoding) overwhelming system
-  - Added concurrency limiting to ThumbnailService (max 8 concurrent thumbnail generations)
-  - Uses async semaphore pattern with waiting queue for excess requests
-  - Note: Color management pipeline is NOT involved - ThumbnailService uses ImageIO directly
-
-#### Camera Profiles
-- **Fixed camera profiles not applying to JPG/PNG images**: ProfilePicker changes had no visible effect on non-RAW images
-  - Root cause: `applyFullRecipe()` (non-RAW pipeline) was missing `applyCameraProfile()` call
-  - Camera profiles now apply to all image types, not just RAW files
-
-### Technical
-
-#### SingleView.swift (Zoom)
-- Main preview ZStack frame: `.frame(width:height:)` → `.frame(maxWidth:maxHeight:)` to allow Filmstrip visibility
-- Added `MagnifyGesture` for trackpad pinch zoom with `lastMagnifyScale` state tracking
-- Added `onScrollWheel` custom modifier using `NSViewRepresentable` to capture scroll events
-- `handleScrollWheelZoom()`: Calculates zoom anchor point from cursor position for smooth zoom-to-cursor
-- `clampOffset()`: Keeps pan offset within scaled image bounds
-- `ZoomButton`: Reusable zoom level button component
-- Zoom constants: `minZoomScale = 0.25`, `maxZoomScale = 8.0`
-- New state: `cropGridOverlay: GridOverlay` for crop overlay type
-
-#### CropToolbar.swift (New)
-- `CropToolbar`: Main toolbar with aspect picker, grid picker, straighten slider, flip/rotate buttons
-- `AspectPicker`: Menu-based aspect ratio selection
-- `GridOverlayPicker`: Menu-based grid overlay type selection
-- `StraightenSlider`: Slider component for -45° to +45° rotation
-- `GridOverlay` enum: `.none`, `.thirds`, `.phi`, `.diagonal`, `.triangle`, `.spiral`
-
-#### CropOverlayView.swift (Grid Overlays)
-- Added `gridOverlay: GridOverlay` parameter with default `.thirds`
-- `drawGridOverlay()`: Router function for grid type drawing
-- `drawThirdsGrid()`: Rule of thirds implementation
-- `drawPhiGrid()`: Golden ratio (φ = 1.618) grid
-- `drawDiagonalGrid()`: Corner-to-corner diagonals
-- `drawGoldenTriangle()`: Diagonal with perpendicular lines
-- `drawGoldenSpiral()`: Fibonacci spiral with phi-based arcs
-- `handleCenterDrag()`: Inverted delta direction for Lightroom-style image drag
-- Auto-enable crop: Sets `crop.isEnabled = true` when rect modified from default
-
-#### ThumbnailService.swift
-- Added concurrency limiting with async semaphore pattern:
-  - `maxConcurrentGenerations = 8`: Limits simultaneous thumbnail generation
-  - `activeGenerations`: Counter tracking current in-flight operations
-  - `waitingContinuations`: Queue of suspended tasks waiting for slots
-  - `acquireGenerationSlot()`: Async wait if at capacity
-  - `releaseGenerationSlot()`: Resumes next waiting task
-
-#### ImagePipeline.swift
-- `applyFullRecipe()`: Added `applyCameraProfile()` call at start of non-RAW pipeline
-  - Profile applied before user adjustments (same order as RAW pipeline)
-
----
+- **Sidecar migration**: Legacy `.rawctl.json` files now migrate cleanly to `.latent.json`
+- **Legacy recipe compatibility**: Older sidecars missing `toneCurve.points[].id` or `crop.straightenAngle` now decode without warnings
+- **Layer ordering**: Drag-and-drop reorder now produces the correct final stack order
+- **AI credits race**: Concurrent AI requests no longer desynchronize local credit reservations
+- **Missing AI layer assets**: Missing generated files now log a warning instead of silently skipping the composite
 
 ## [1.2.0] - 2026-01-10
 
@@ -332,9 +112,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Camera Profiles (Color Foundation v1.2)
 - **4-stage color pipeline**: RAW Decode → Camera Profile → User Adjustments → Display Transform
 - **3 built-in camera profiles**:
-  - **Latent Neutral**: Identity matrix with filmic neutral tone curve - faithful color reproduction
-  - **Latent Vivid**: Enhanced saturation/contrast with vivid tone curve - punchy colors
-  - **Latent Portrait**: Skin-optimized matrix with soft tone curve - flattering skin tones
+  - **rawctl Neutral**: Identity matrix with filmic neutral tone curve - faithful color reproduction
+  - **rawctl Vivid**: Enhanced saturation/contrast with vivid tone curve - punchy colors
+  - **rawctl Portrait**: Skin-optimized matrix with soft tone curve - flattering skin tones
 - **ProfilePicker UI** in Light panel for quick profile switching
 - **Filmic tone curves**: 6-point curves for natural highlight roll-off
 - **Highlight shoulder**: Soft clipping to prevent blown highlights
@@ -399,13 +179,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - All download buttons now use centralized config URL
 
 #### Data Collection API (Cloudflare Workers + R2)
-- **API endpoints** at `api.latent-app.com`:
+- **API endpoints** at `api.rawctl.app`:
   - `POST /api/subscribe`: Newsletter email collection
   - `POST /api/feature-request`: Feature voting submission
   - `POST /api/feedback`: Bug reports, suggestions, praise
   - `GET /api/stats`: Aggregate statistics
   - `GET /api/export/*`: Data export (emails, features, feedback)
-- **R2 storage**: All data persisted in Cloudflare R2 bucket (`latent-data`)
+- **R2 storage**: All data persisted in Cloudflare R2 bucket (`rawctl-data`)
 - **Scheduled digest**: Cron-triggered daily summary via Resend email API
 - **Notification options documented**:
   - Email digest via Resend (recommended)
@@ -451,7 +231,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SidecarService.pendingSaves`: Pending data for flush on quit
 - `SidecarService.flushAllPendingSaves()`: Immediate save of all pending data
 - `SidecarService.saveRecipeOnly()`: Safe API preserving existing snapshots
-- `LatentApp.scenePhase`: Monitors app lifecycle for `.inactive` flush trigger
+- `rawctlApp.scenePhase`: Monitors app lifecycle for `.inactive` flush trigger
 
 #### Project & Catalog
 - `SavedFilterState`: Codable filter state separate from UI-only FilterState
@@ -604,7 +384,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Comparison with Lightroom
 
-| Feature | Latent | Lightroom |
+| Feature | rawctl | Lightroom |
 |---------|--------|-----------|
 | **Price** | Free | $10/month |
 | **Catalog** | Folder-based | Proprietary |

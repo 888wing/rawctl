@@ -84,6 +84,8 @@ struct MainLayoutView: View {
         .withErrorHandling()
         .focusedSceneValue(\.rawctlAppState, appState)
         .task {
+            // Let the initial SwiftUI update cycle settle before startup loaders publish.
+            await Task.yield()
             let env = ProcessInfo.processInfo.environment
 
             // E2E / UI test harness (sandbox-safe): ask the app to generate fixtures inside its own container.

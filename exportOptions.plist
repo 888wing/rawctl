@@ -4,7 +4,13 @@
 <dict>
 	<key>method</key>
 	<string>developer-id</string>
+	<key>destination</key>
+	<string>export</string>
+	<key>signingCertificate</key>
+	<string>Developer ID Application</string>
+	<key>signingStyle</key>
+	<string>manual</string>
 	<key>teamID</key>
-	<string>YOUR_TEAM_ID_HERE</string>
+	<string>DTR8DL89SD</string>
 </dict>
 </plist>

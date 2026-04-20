@@ -17,13 +17,13 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Resolve Swift packages
-        run: xcodebuild -project rawctl.xcodeproj -scheme rawctl -resolvePackageDependencies
+        run: xcodebuild -project rawctl.xcodeproj -scheme latent-direct -resolvePackageDependencies
 
       - name: Run render parity suite
         run: |
           xcodebuild \
             -project rawctl.xcodeproj \
-            -scheme rawctl \
+            -scheme latent-direct \
             -destination 'platform=macOS' \
             test \
             -only-testing:rawctlTests/RenderContextBuilderTests \
@@ -40,13 +40,13 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Resolve Swift packages
-        run: xcodebuild -project rawctl.xcodeproj -scheme rawctl -resolvePackageDependencies
+        run: xcodebuild -project rawctl.xcodeproj -scheme latent-direct -resolvePackageDependencies
 
       - name: Run sidecar migration suite
         run: |
           xcodebuild \
             -project rawctl.xcodeproj \
-            -scheme rawctl \
+            -scheme latent-direct \
             -destination 'platform=macOS' \
             test \
             -only-testing:rawctlTests/SidecarMigrationTests \

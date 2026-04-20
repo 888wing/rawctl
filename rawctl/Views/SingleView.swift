@@ -252,6 +252,9 @@ struct SingleView: View {
                 // Prefetch adjacent photos for faster navigation
                 appState.prefetchAdjacent()
             }
+            .onDisappear {
+                appState.isInteractivePreviewActive = false
+            }
             .onChange(of: appState.comparisonMode) { _, newMode in
                 // Load original only when comparison mode is activated
                 if newMode != .none && originalImage == nil {
@@ -288,6 +291,7 @@ struct SingleView: View {
                 // Switch preview quality based on slider drag state
                 if let isDragging = notification.object as? Bool {
                     isSliderDragging = isDragging
+                    appState.isInteractivePreviewActive = isDragging
                     let targetQuality: AppState.PreviewQuality = isDragging ? .fast : .full
                     if appState.previewQuality != targetQuality {
                         appState.previewQuality = targetQuality
@@ -1015,6 +1019,10 @@ struct SingleView: View {
         if appState.transformMode {
             previewRecipe.crop.isEnabled = false
         }
+
+        if isSliderDragging {
+            previewRecipe = previewRecipe.quantizedForInteractivePreview()
+        }
         
         // ===== P1: TWO-STAGE LOADING =====
         
@@ -1043,9 +1051,10 @@ struct SingleView: View {
         if needsFullRender {
             // Use quality-aware resolution
             let isFastMode = appState.previewQuality == .fast || isSliderDragging
+            let isInteractivePreview = isSliderDragging
             // While scrubbing sliders, prefer lower-resolution preview to keep interactions responsive.
             let maxSize: CGFloat = isFastMode
-                ? min(appState.previewQuality.maxSize, 720)
+                ? min(appState.previewQuality.maxSize, 576)
                 : appState.previewQuality.maxSize
             let sliderSignpostId = PerformanceSignposts.signposter.makeSignpostID()
             let sliderSignpostState = isSliderDragging
@@ -1063,7 +1072,8 @@ struct SingleView: View {
                 for: asset,
                 context: renderContext,
                 maxSize: maxSize,
-                fastMode: isFastMode
+                fastMode: isFastMode,
+                interactivePreview: isInteractivePreview
             )
 
             guard !Task.isCancelled else { return }
