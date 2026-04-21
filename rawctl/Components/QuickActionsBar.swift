@@ -12,6 +12,7 @@ struct QuickActionsBar: View {
     @Binding var localRecipe: EditRecipe
     @Binding var copiedRecipe: EditRecipe?
     @ObservedObject var appState: AppState
+    var usesQuietDarkroomStyle: Bool = false
     
     let onUndo: () -> Void
     let onRedo: () -> Void
@@ -52,7 +53,7 @@ struct QuickActionsBar: View {
                     )
                 }
                 .padding(2)
-                .background(Color(white: 0.15))
+                .background(usesQuietDarkroomStyle ? QDColor.elevatedSurface : Color(white: 0.15))
                 .cornerRadius(6)
                 
                 Spacer()
@@ -70,6 +71,7 @@ struct QuickActionsBar: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+                .tint(usesQuietDarkroomStyle ? QDColor.elevatedSurface : nil)
                 .help("Auto-adjust exposure and colors")
                 
                 // Reset button
@@ -85,7 +87,7 @@ struct QuickActionsBar: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-                .tint(localRecipe.hasEdits ? .orange : nil)
+                .tint(localRecipe.hasEdits ? .orange : (usesQuietDarkroomStyle ? QDColor.elevatedSurface : nil))
                 .disabled(!localRecipe.hasEdits)
                 .help("Reset all adjustments")
             }
@@ -125,73 +127,75 @@ struct QuickActionsBar: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-                .tint(isComparing ? .accentColor : nil)
+                .tint(isComparing ? .accentColor : (usesQuietDarkroomStyle ? QDColor.elevatedSurface : nil))
                 .help("Before/After comparison (\\)")
             }
             
             // Row 3: Nano Banana AI
-            HStack(spacing: 6) {
-                Button {
-                    if accountService.isAuthenticated {
-                        showNanoBananaPopover = true
-                    } else {
-                        onBuyCredits()
-                    }
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 12))
-                            .foregroundColor(.yellow)
-                        Text("Nano Banana")
-                            .font(.system(size: 11, weight: .medium))
-
-                        Spacer()
-
+            if !usesQuietDarkroomStyle {
+                HStack(spacing: 6) {
+                    Button {
                         if accountService.isAuthenticated {
-                            HStack(spacing: 3) {
-                                Image(systemName: "sparkle")
-                                    .font(.system(size: 8))
-                                Text("\(accountService.creditsBalance?.totalRemaining ?? 0)")
-                                    .font(.system(size: 10, weight: .medium, design: .rounded))
-                            }
-                            .foregroundColor(.secondary)
+                            showNanoBananaPopover = true
                         } else {
-                            Text("Sign In")
-                                .font(.system(size: 10))
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                }
-                .buttonStyle(.plain)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(
-                            LinearGradient(
-                                colors: [Color.orange.opacity(0.15), Color.yellow.opacity(0.1)],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(Color.orange.opacity(0.3), lineWidth: 1)
-                        )
-                )
-                .popover(isPresented: $showNanoBananaPopover) {
-                    NanoBananaResolutionPicker(
-                        onSelect: { resolution in
-                            showNanoBananaPopover = false
-                            onNanoBanana(resolution)
-                        },
-                        onBuyCredits: {
-                            showNanoBananaPopover = false
                             onBuyCredits()
                         }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 12))
+                                .foregroundColor(.yellow)
+                            Text("Nano Banana")
+                                .font(.system(size: 11, weight: .medium))
+
+                            Spacer()
+
+                            if accountService.isAuthenticated {
+                                HStack(spacing: 3) {
+                                    Image(systemName: "sparkle")
+                                        .font(.system(size: 8))
+                                    Text("\(accountService.creditsBalance?.totalRemaining ?? 0)")
+                                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                                }
+                                .foregroundColor(.secondary)
+                            } else {
+                                Text("Sign In")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                    }
+                    .buttonStyle(.plain)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(
+                                LinearGradient(
+                                    colors: [Color.orange.opacity(0.15), Color.yellow.opacity(0.1)],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(Color.orange.opacity(0.3), lineWidth: 1)
+                            )
                     )
+                    .popover(isPresented: $showNanoBananaPopover) {
+                        NanoBananaResolutionPicker(
+                            onSelect: { resolution in
+                                showNanoBananaPopover = false
+                                onNanoBanana(resolution)
+                            },
+                            onBuyCredits: {
+                                showNanoBananaPopover = false
+                                onBuyCredits()
+                            }
+                        )
+                    }
+                    .help("AI-powered photo enhancement")
                 }
-                .help("AI-powered photo enhancement")
             }
         }
     }
@@ -204,6 +208,7 @@ private struct ActionButton: View {
     let action: () -> Void
     var isDisabled: Bool = false
     var help: String = ""
+    @AppStorage("latent.ui.quietDarkroom") private var quietDarkroomEnabled = true
     
     var body: some View {
         Button(action: action) {
@@ -219,8 +224,8 @@ private struct ActionButton: View {
             .padding(.vertical, 4)
         }
         .buttonStyle(.plain)
-        .foregroundColor(isDisabled ? .secondary.opacity(0.5) : .primary)
-        .background(Color(white: 0.18))
+        .foregroundColor(isDisabled ? .secondary.opacity(0.5) : (quietDarkroomEnabled ? QDColor.textSecondary : .primary))
+        .background(quietDarkroomEnabled ? QDColor.elevatedSurface : Color(white: 0.18))
         .cornerRadius(4)
         .disabled(isDisabled)
         .help(help)

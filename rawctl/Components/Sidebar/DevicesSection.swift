@@ -12,6 +12,7 @@ struct DevicesSection: View {
     @ObservedObject var appState: AppState
     @State private var isExpanded = true
     @State private var detectedCards: [DetectedCard] = []
+    @AppStorage("latent.ui.quietDarkroom") private var quietDarkroomEnabled = true
 
     struct DetectedCard: Identifiable {
         let id = UUID()
@@ -39,7 +40,7 @@ struct DevicesSection: View {
 
     var body: some View {
         if AppFeatures.devicesEntryPointsEnabled && !detectedCards.isEmpty {
-            DisclosureGroup("Devices", isExpanded: $isExpanded) {
+            DisclosureGroup(isExpanded: $isExpanded) {
                 VStack(spacing: 2) {
                     ForEach(detectedCards) { card in
                         DeviceRow(
@@ -53,6 +54,14 @@ struct DevicesSection: View {
                     }
                 }
                 .padding(.vertical, 4)
+            } label: {
+                HStack {
+                    Text("Devices")
+                        .font(quietDarkroomEnabled ? QDFont.sectionLabel : .caption.bold())
+                        .foregroundColor(quietDarkroomEnabled ? QDColor.textTertiary : .secondary)
+                        .textCase(quietDarkroomEnabled ? .uppercase : nil)
+                    Spacer()
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -116,29 +125,30 @@ struct DeviceRow: View {
     let onImport: () -> Void
 
     @State private var isHovering = false
+    @AppStorage("latent.ui.quietDarkroom") private var quietDarkroomEnabled = true
 
     var body: some View {
         Button(action: onImport) {
             HStack(spacing: 8) {
                 Image(systemName: card.cardType.icon)
                     .font(.system(size: 12))
-                    .foregroundColor(.orange)
+                    .foregroundColor(quietDarkroomEnabled ? QDColor.ratingMuted : .orange)
                     .frame(width: 16)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(card.name)
                         .font(.system(size: 11))
-                        .foregroundColor(.primary)
+                        .foregroundColor(quietDarkroomEnabled ? QDColor.textSecondary : .primary)
                         .lineLimit(1)
 
                     if card.photoCount > 0 {
                         Text("\(card.photoCount) photos")
                             .font(.system(size: 9))
-                            .foregroundColor(.secondary)
+                            .foregroundColor(quietDarkroomEnabled ? QDColor.textTertiary : .secondary)
                     } else {
                         Text("Ready to import")
                             .font(.system(size: 9))
-                            .foregroundColor(.secondary)
+                            .foregroundColor(quietDarkroomEnabled ? QDColor.textTertiary : .secondary)
                     }
                 }
 
@@ -147,12 +157,12 @@ struct DeviceRow: View {
                 if isHovering {
                     Image(systemName: "arrow.down.circle.fill")
                         .font(.system(size: 14))
-                        .foregroundColor(.accentColor)
+                        .foregroundColor(quietDarkroomEnabled ? QDColor.accent : .accentColor)
                 }
             }
             .padding(.vertical, 6)
             .padding(.horizontal, 8)
-            .background(isHovering ? Color.accentColor.opacity(0.1) : Color.clear)
+            .background(isHovering ? (quietDarkroomEnabled ? QDColor.hoverSurface : Color.accentColor.opacity(0.1)) : Color.clear)
             .cornerRadius(6)
         }
         .buttonStyle(.plain)

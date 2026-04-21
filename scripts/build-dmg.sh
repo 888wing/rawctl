@@ -12,6 +12,7 @@ ARCHIVE_PATH="build/${ARTIFACT_PREFIX}.xcarchive"
 EXPORT_PATH="build/export"
 DMG_PATH="build/${ARTIFACT_PREFIX}-${VERSION}.dmg"
 RELEASE_DIR="releases"
+DMG_BACKGROUND="scripts/dmg-background.png"
 
 echo "🔨 Building ${APP_NAME} v${VERSION}..."
 
@@ -39,16 +40,23 @@ xcodebuild -exportArchive \
 # Create DMG
 echo "💿 Creating DMG..."
 if command -v create-dmg &> /dev/null; then
+  CREATE_DMG_ARGS=(
+    --volname "${APP_NAME} Installer"
+    --volicon "rawctl/Assets.xcassets/AppIcon.appiconset/icon_512x512.png"
+    --window-pos 200 120
+    --window-size 800 400
+    --icon-size 100
+    --icon "${APP_NAME}.app" 150 190
+    --hide-extension "${APP_NAME}.app"
+    --app-drop-link 450 185
+  )
+
+  if [[ -f "${DMG_BACKGROUND}" ]]; then
+    CREATE_DMG_ARGS+=(--background "${DMG_BACKGROUND}")
+  fi
+
   create-dmg \
-    --volname "${APP_NAME} Installer" \
-    --volicon "rawctl/Assets.xcassets/AppIcon.appiconset/icon_512x512.png" \
-    --window-pos 200 120 \
-    --window-size 800 400 \
-    --icon-size 100 \
-    --icon "${APP_NAME}.app" 150 190 \
-    --hide-extension "${APP_NAME}.app" \
-    --app-drop-link 450 185 \
-    --background "scripts/dmg-background.png" \
+    "${CREATE_DMG_ARGS[@]}" \
     "${DMG_PATH}" \
     "${EXPORT_PATH}/${APP_NAME}.app"
 else
@@ -74,8 +82,9 @@ cp "${DMG_PATH}" "${RELEASE_DIR}/"
 
 # Generate checksum
 echo "🔢 Generating checksum..."
-shasum -a 256 "${DMG_PATH}" > "${RELEASE_DIR}/${APP_NAME}-${VERSION}.dmg.sha256"
+CHECKSUM_PATH="${RELEASE_DIR}/$(basename "${DMG_PATH}").sha256"
+shasum -a 256 "${DMG_PATH}" > "${CHECKSUM_PATH}"
 
 echo "✅ Build complete!"
 echo "   DMG: ${RELEASE_DIR}/$(basename "${DMG_PATH}")"
-echo "   SHA256: $(cut -d' ' -f1 "${RELEASE_DIR}/${APP_NAME}-${VERSION}.dmg.sha256")"
+echo "   SHA256: $(cut -d' ' -f1 "${CHECKSUM_PATH}")"

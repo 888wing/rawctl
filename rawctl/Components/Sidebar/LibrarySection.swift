@@ -11,9 +11,10 @@ import SwiftUI
 struct LibrarySection: View {
     @ObservedObject var appState: AppState
     @State private var isExpanded = true
+    @AppStorage("latent.ui.quietDarkroom") private var quietDarkroomEnabled = true
 
     var body: some View {
-        DisclosureGroup("Library", isExpanded: $isExpanded) {
+        DisclosureGroup(isExpanded: $isExpanded) {
             VStack(spacing: 2) {
                 // All Photos
                 LibraryRow(
@@ -48,9 +49,22 @@ struct LibrarySection: View {
                 }
             }
             .padding(.vertical, 4)
+        } label: {
+            sidebarSectionLabel("Library")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private func sidebarSectionLabel(_ title: String) -> some View {
+        HStack {
+            Text(title)
+                .font(quietDarkroomEnabled ? QDFont.sectionLabel : .caption.bold())
+                .foregroundColor(quietDarkroomEnabled ? QDColor.textTertiary : .secondary)
+                .textCase(quietDarkroomEnabled ? .uppercase : nil)
+            Spacer()
+        }
     }
 
     private var recentImportsCount: Int {
@@ -81,32 +95,33 @@ struct LibraryRow: View {
     let count: Int
     let isSelected: Bool
     let action: () -> Void
+    @AppStorage("latent.ui.quietDarkroom") private var quietDarkroomEnabled = true
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 8) {
                 Image(systemName: icon)
                     .font(.system(size: 12))
-                    .foregroundColor(isSelected ? .accentColor : .secondary)
+                    .foregroundColor(isSelected ? (quietDarkroomEnabled ? QDColor.accent : .accentColor) : (quietDarkroomEnabled ? QDColor.textSecondary : .secondary))
                     .frame(width: 16)
 
                 Text(title)
-                    .font(.system(size: 12))
-                    .foregroundColor(isSelected ? .accentColor : .primary)
+                    .font(quietDarkroomEnabled ? QDFont.sidebarRow : .system(size: 12))
+                    .foregroundColor(isSelected ? (quietDarkroomEnabled ? QDColor.textPrimary : .accentColor) : (quietDarkroomEnabled ? QDColor.textSecondary : .primary))
 
                 Spacer()
 
                 Text("\(count)")
                     .font(.system(size: 10))
-                    .foregroundColor(.secondary)
+                    .foregroundColor(quietDarkroomEnabled ? QDColor.textTertiary : .secondary)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(Color(white: 0.2))
+                    .background(quietDarkroomEnabled ? QDColor.elevatedSurface : Color(white: 0.2))
                     .cornerRadius(4)
             }
             .padding(.vertical, 6)
             .padding(.horizontal, 8)
-            .background(isSelected ? Color.accentColor.opacity(0.15) : Color.clear)
+            .background(isSelected ? (quietDarkroomEnabled ? QDColor.selectedSurface : Color.accentColor.opacity(0.15)) : Color.clear)
             .cornerRadius(6)
         }
         .buttonStyle(.plain)

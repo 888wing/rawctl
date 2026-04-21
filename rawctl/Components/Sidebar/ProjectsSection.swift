@@ -13,9 +13,10 @@ struct ProjectsSection: View {
     @State private var isExpanded = true
     @State private var expandedMonths: Set<String> = []
     @State private var showCreateProject = false
+    @AppStorage("latent.ui.quietDarkroom") private var quietDarkroomEnabled = true
 
     var body: some View {
-        DisclosureGroup("Projects", isExpanded: $isExpanded) {
+        DisclosureGroup(isExpanded: $isExpanded) {
             VStack(spacing: 4) {
                 if let catalog = appState.catalog {
                     ForEach(catalog.projectsByMonth, id: \.month) { group in
@@ -60,6 +61,14 @@ struct ProjectsSection: View {
                 .buttonStyle(.plain)
             }
             .padding(.vertical, 4)
+        } label: {
+            HStack {
+                Text("Projects")
+                    .font(quietDarkroomEnabled ? QDFont.sectionLabel : .caption.bold())
+                    .foregroundColor(quietDarkroomEnabled ? QDColor.textTertiary : .secondary)
+                    .textCase(quietDarkroomEnabled ? .uppercase : nil)
+                Spacer()
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -109,6 +118,7 @@ struct MonthGroup: View {
     let onToggle: () -> Void
     let onSelect: (Project) -> Void
     var onUpdateStatus: ((Project, ProjectStatus) -> Void)?
+    @AppStorage("latent.ui.quietDarkroom") private var quietDarkroomEnabled = true
 
     var body: some View {
         VStack(spacing: 2) {
@@ -117,18 +127,18 @@ struct MonthGroup: View {
                 HStack(spacing: 6) {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(.secondary)
+                        .foregroundColor(quietDarkroomEnabled ? QDColor.textTertiary : .secondary)
                         .frame(width: 12)
 
                     Text(formattedMonth)
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.secondary)
+                        .foregroundColor(quietDarkroomEnabled ? QDColor.textSecondary : .secondary)
 
                     Spacer()
 
                     Text("\(projects.count)")
                         .font(.system(size: 9))
-                        .foregroundColor(.secondary.opacity(0.7))
+                        .foregroundColor(quietDarkroomEnabled ? QDColor.textTertiary : .secondary.opacity(0.7))
                 }
                 .padding(.vertical, 4)
                 .padding(.horizontal, 4)
@@ -166,25 +176,26 @@ struct ProjectRow: View {
     let isSelected: Bool
     let onSelect: () -> Void
     var onUpdateStatus: ((Project, ProjectStatus) -> Void)?
+    @AppStorage("latent.ui.quietDarkroom") private var quietDarkroomEnabled = true
 
     var body: some View {
         Button(action: onSelect) {
             HStack(spacing: 8) {
                 Image(systemName: project.projectType.icon)
                     .font(.system(size: 11))
-                    .foregroundColor(isSelected ? .accentColor : .secondary)
+                    .foregroundColor(isSelected ? (quietDarkroomEnabled ? QDColor.accent : .accentColor) : (quietDarkroomEnabled ? QDColor.textTertiary : .secondary))
                     .frame(width: 14)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(project.name)
                         .font(.system(size: 11))
-                        .foregroundColor(isSelected ? .accentColor : .primary)
+                        .foregroundColor(isSelected ? (quietDarkroomEnabled ? QDColor.textPrimary : .accentColor) : (quietDarkroomEnabled ? QDColor.textSecondary : .primary))
                         .lineLimit(1)
 
                     HStack(spacing: 4) {
                         Text("\(project.totalPhotos) photos")
                             .font(.system(size: 9))
-                            .foregroundColor(.secondary)
+                            .foregroundColor(quietDarkroomEnabled ? QDColor.textTertiary : .secondary)
 
                         Circle()
                             .fill(Color(
@@ -201,7 +212,7 @@ struct ProjectRow: View {
             .padding(.vertical, 5)
             .padding(.horizontal, 8)
             .padding(.leading, 16)
-            .background(isSelected ? Color.accentColor.opacity(0.15) : Color.clear)
+            .background(isSelected ? (quietDarkroomEnabled ? QDColor.selectedSurface : Color.accentColor.opacity(0.15)) : Color.clear)
             .cornerRadius(6)
         }
         .buttonStyle(.plain)

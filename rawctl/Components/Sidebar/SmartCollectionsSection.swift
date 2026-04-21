@@ -15,9 +15,10 @@ struct SmartCollectionsSection: View {
     @State private var collectionToEdit: SmartCollection?
     @State private var showDeleteConfirmation = false
     @State private var collectionToDelete: SmartCollection?
+    @AppStorage("latent.ui.quietDarkroom") private var quietDarkroomEnabled = true
 
     var body: some View {
-        DisclosureGroup("Smart Collections", isExpanded: $isExpanded) {
+        DisclosureGroup(isExpanded: $isExpanded) {
             VStack(spacing: 2) {
                 ForEach(collections) { collection in
                     SmartCollectionRow(
@@ -55,6 +56,14 @@ struct SmartCollectionsSection: View {
                 .buttonStyle(.plain)
             }
             .padding(.vertical, 4)
+        } label: {
+            HStack {
+                Text("Smart Collections")
+                    .font(quietDarkroomEnabled ? QDFont.sectionLabel : .caption.bold())
+                    .foregroundColor(quietDarkroomEnabled ? QDColor.textTertiary : .secondary)
+                    .textCase(quietDarkroomEnabled ? .uppercase : nil)
+                Spacer()
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -126,6 +135,7 @@ struct SmartCollectionRow: View {
     let onSelect: () -> Void
     var onEdit: (() -> Void)?
     var onDelete: (() -> Void)?
+    @AppStorage("latent.ui.quietDarkroom") private var quietDarkroomEnabled = true
 
     var body: some View {
         Button(action: onSelect) {
@@ -137,21 +147,21 @@ struct SmartCollectionRow: View {
 
                 Text(collection.name)
                     .font(.system(size: 11))
-                    .foregroundColor(isSelected ? .accentColor : .primary)
+                    .foregroundColor(isSelected ? (quietDarkroomEnabled ? QDColor.textPrimary : .accentColor) : (quietDarkroomEnabled ? QDColor.textSecondary : .primary))
 
                 Spacer()
 
                 Text("\(count)")
                     .font(.system(size: 10))
-                    .foregroundColor(.secondary)
+                    .foregroundColor(quietDarkroomEnabled ? QDColor.textTertiary : .secondary)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(Color(white: 0.2))
+                    .background(quietDarkroomEnabled ? QDColor.elevatedSurface : Color(white: 0.2))
                     .cornerRadius(4)
             }
             .padding(.vertical, 5)
             .padding(.horizontal, 8)
-            .background(isSelected ? Color.accentColor.opacity(0.15) : Color.clear)
+            .background(isSelected ? (quietDarkroomEnabled ? QDColor.selectedSurface : Color.accentColor.opacity(0.15)) : Color.clear)
             .cornerRadius(6)
         }
         .buttonStyle(.plain)
@@ -171,14 +181,14 @@ struct SmartCollectionRow: View {
     }
 
     private var iconColor: Color {
-        if isSelected { return .accentColor }
+        if isSelected { return quietDarkroomEnabled ? QDColor.accent : .accentColor }
 
         // Special colors for specific collections
         switch collection.name {
-        case "5 Stars": return .yellow
-        case "Picks": return .green
-        case "Rejects": return .red
-        default: return .secondary
+        case "5 Stars": return quietDarkroomEnabled ? QDColor.ratingMuted : .yellow
+        case "Picks": return quietDarkroomEnabled ? QDColor.successMuted : .green
+        case "Rejects": return quietDarkroomEnabled ? QDColor.dangerMuted : .red
+        default: return quietDarkroomEnabled ? QDColor.textTertiary : .secondary
         }
     }
 }

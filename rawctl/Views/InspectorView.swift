@@ -12,27 +12,29 @@ import UniformTypeIdentifiers
 struct InspectorView: View {
     @ObservedObject var appState: AppState
     @ObservedObject var panelConfig = InspectorConfig.shared
+    var quietMode: QuietMode? = nil
     var isCompact: Bool = false  // Compact mode for narrow windows
-    
+    @AppStorage("latent.ui.quietDarkroom") private var quietDarkroomEnabled = true
+
     @State private var lightExpanded = true
     @State private var toneCurveExpanded = false
     @State private var colorExpanded = true
     @State private var compositionExpanded = true
-    
+
     // Local recipe state that syncs with AppState
     @State private var localRecipe = EditRecipe()
-    
+
     @State private var whiteBalanceExpanded = true
     @State private var showEXIFViewer = false
     @State private var showImportPreset = false
     @State private var showCustomizeSheet = false
     @State private var importError: String?
     @State private var copiedRecipe: EditRecipe?
-    
+
     // Nano Banana state
     @StateObject private var nanoBananaService = NanoBananaService.shared
     @State private var showNanoBananaProgress = false
-    
+
     // Spacing based on compact mode
     private var sectionSpacing: CGFloat { isCompact ? 12 : 16 }
     private var controlSpacing: CGFloat { isCompact ? 6 : 8 }
@@ -45,7 +47,11 @@ struct InspectorView: View {
     private var isLocalNodeMode: Bool {
         editingLocalNode != nil
     }
-    
+
+    private var effectiveQuietMode: QuietMode {
+        quietMode ?? (appState.viewMode == .single ? .edit : .library)
+    }
+
     var body: some View {
         ScrollViewReader { proxy in
         ScrollView {
@@ -68,10 +74,10 @@ struct InspectorView: View {
                     .buttonStyle(.plain)
                     .help("Customize visible panels")
                 }
-                
+
                 // Real Histogram using AppState's preview image
                 HistogramView(image: appState.currentPreviewImage, appState: appState)
-                
+
                 Divider()
 
                 if isLocalNodeMode, let node = editingLocalNode {
@@ -105,6 +111,7 @@ struct InspectorView: View {
                         localRecipe: $localRecipe,
                         copiedRecipe: $copiedRecipe,
                         appState: appState,
+                        usesQuietDarkroomStyle: quietDarkroomEnabled,
                         onUndo: { appState.undo() },
                         onRedo: { appState.redo() },
                         onAuto: {
@@ -155,7 +162,7 @@ struct InspectorView: View {
                         hasCopied: copiedRecipe != nil,
                         isComparing: appState.comparisonMode == .sideBySide
                     )
-                    
+
                     // Import Preset button
                     HStack {
                         Button {
@@ -170,142 +177,147 @@ struct InspectorView: View {
                     }
 
                     // Smart Sync button
-                    HStack {
-                        Group {
-                            if appState.smartSyncState.isRunning {
-                                HStack(spacing: 6) {
-                                    ProgressView().scaleEffect(0.6).frame(width: 16, height: 16)
-                                    if case .indexing(let done, let total) = appState.smartSyncState {
-                                        Text("Indexing \(min(done, total))/\(total)…")
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                }
-                            } else if case .complete(let n) = appState.smartSyncState, n == 0 {
-                                Label("No similar scenes found", systemImage: "sparkles.slash")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            } else {
-                                Button {
-                                    if AppFeatures.smartSyncEnabled {
-                                        Task { await appState.startSmartSync() }
-                                    } else {
-                                        // Non-Pro: redirect to account sheet (paywall).
-                                        appState.showAccountSheet = true
-                                    }
-                                } label: {
-                                    HStack(spacing: 4) {
-                                        Label("Smart Sync…", systemImage: "sparkles.rectangle.stack")
-                                        if !AppFeatures.smartSyncEnabled {
-                                            Image(systemName: "crown.fill")
-                                                .font(.caption2)
-                                                .foregroundColor(.yellow)
+                    if !quietDarkroomEnabled {
+                        HStack {
+                            Group {
+                                if appState.smartSyncState.isRunning {
+                                    HStack(spacing: 6) {
+                                        ProgressView().scaleEffect(0.6).frame(width: 16, height: 16)
+                                        if case .indexing(let done, let total) = appState.smartSyncState {
+                                            Text("Indexing \(min(done, total))/\(total)…")
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
                                         }
                                     }
+                                } else if case .complete(let n) = appState.smartSyncState, n == 0 {
+                                    Label("No similar scenes found", systemImage: "sparkles.slash")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                } else {
+                                    Button {
+                                        if AppFeatures.smartSyncEnabled {
+                                            Task { await appState.startSmartSync() }
+                                        } else {
+                                            // Non-Pro: redirect to account sheet (paywall).
+                                            appState.showAccountSheet = true
+                                        }
+                                    } label: {
+                                        HStack(spacing: 4) {
+                                            Label("Smart Sync…", systemImage: "sparkles.rectangle.stack")
+                                            if !AppFeatures.smartSyncEnabled {
+                                                Image(systemName: "crown.fill")
+                                                    .font(.caption2)
+                                                    .foregroundColor(.yellow)
+                                            }
+                                        }
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                    .disabled(appState.selectedAsset == nil)
+                                    .help(AppFeatures.smartSyncEnabled
+                                        ? "Find visually similar scenes and sync this photo's edit settings"
+                                        : "Smart Sync is a Pro feature — upgrade to unlock"
+                                    )
                                 }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                                .disabled(appState.selectedAsset == nil)
-                                .help(AppFeatures.smartSyncEnabled
-                                    ? "Find visually similar scenes and sync this photo's edit settings"
-                                    : "Smart Sync is a Pro feature — upgrade to unlock"
-                                )
                             }
+                            Spacer()
                         }
-                        Spacer()
                     }
                 }
 
-                Divider()
-                
-                // Metadata: Rating, Color, Flag, Tags + EXIF button
-                if panelConfig.isVisible(.organization), !isLocalNodeMode {
-                DisclosureGroup("Organization") {
-                    MetadataBar(recipe: $localRecipe)
-                    
-                    // EXIF Info button
-                    if appState.selectedAsset != nil {
-                        Button {
-                            showEXIFViewer = true
-                        } label: {
-                            HStack {
-                                Image(systemName: "info.circle")
-                                Text("View Full EXIF Info")
+                if quietDarkroomEnabled, effectiveQuietMode != .edit, !isLocalNodeMode {
+                    quietContextInspectorContent
+                } else {
+                    Divider()
+
+                    // Metadata: Rating, Color, Flag, Tags + EXIF button
+                    if panelConfig.isVisible(.organization), !isLocalNodeMode {
+                    DisclosureGroup("Organization") {
+                        MetadataBar(recipe: $localRecipe)
+
+                        // EXIF Info button
+                        if appState.selectedAsset != nil {
+                            Button {
+                                showEXIFViewer = true
+                            } label: {
+                                HStack {
+                                    Image(systemName: "info.circle")
+                                    Text("View Full EXIF Info")
+                                }
+                                .font(.caption)
+                                .foregroundColor(.accentColor)
                             }
-                            .font(.caption)
-                            .foregroundColor(.accentColor)
+                            .buttonStyle(.plain)
+                            .padding(.top, 8)
                         }
-                        .buttonStyle(.plain)
-                        .padding(.top, 8)
                     }
-                }
-                .contextMenu { panelContextMenu(.organization) }
-                }
-                
-                Divider()
-                
-                // Light section
-                if panelConfig.isVisible(.light) {
-                DisclosureGroup("Light", isExpanded: $lightExpanded) {
-                    VStack(spacing: controlSpacing) {
-                        if !isLocalNodeMode {
-                            // Camera Profile (v1.2)
-                            ProfilePicker(selectedProfileId: $localRecipe.profileId)
-                                .padding(.bottom, 4)
+                    .contextMenu { panelContextMenu(.organization) }
+                    }
 
-                            Divider()
-                                .padding(.bottom, 4)
-                        } else {
-                            Text("Profile is global-only and unavailable in Local Mode.")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
+                    Divider()
+
+                    // Light section
+                    if panelConfig.isVisible(.light) {
+                    DisclosureGroup("Light", isExpanded: $lightExpanded) {
+                        VStack(spacing: controlSpacing) {
+                            if !isLocalNodeMode {
+                                // Camera Profile (v1.2)
+                                ProfilePicker(selectedProfileId: $localRecipe.profileId)
+                                    .padding(.bottom, 4)
+
+                                Divider()
+                                    .padding(.bottom, 4)
+                            } else {
+                                Text("Profile is global-only and unavailable in Local Mode.")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+
+                            ControlSlider(
+                                label: "Exposure",
+                                value: $localRecipe.exposure,
+                                range: -5...5,
+                                format: "%.2f",
+                                onDragStart: { pushHistory() }
+                            )
+                            ControlSlider(
+                                label: "Contrast",
+                                value: $localRecipe.contrast,
+                                range: -100...100,
+                                onDragStart: { pushHistory() }
+                            )
+                            ControlSlider(
+                                label: "Highlights",
+                                value: $localRecipe.highlights,
+                                range: -100...100,
+                                onDragStart: { pushHistory() }
+                            )
+                            ControlSlider(
+                                label: "Shadows",
+                                value: $localRecipe.shadows,
+                                range: -100...100,
+                                onDragStart: { pushHistory() }
+                            )
+                            ControlSlider(
+                                label: "Whites",
+                                value: $localRecipe.whites,
+                                range: -100...100,
+                                onDragStart: { pushHistory() }
+                            )
+                            ControlSlider(
+                                label: "Blacks",
+                                value: $localRecipe.blacks,
+                                range: -100...100,
+                                onDragStart: { pushHistory() }
+                            )
                         }
-
-                        ControlSlider(
-                            label: "Exposure",
-                            value: $localRecipe.exposure,
-                            range: -5...5,
-                            format: "%.2f",
-                            onDragStart: { pushHistory() }
-                        )
-                        ControlSlider(
-                            label: "Contrast",
-                            value: $localRecipe.contrast,
-                            range: -100...100,
-                            onDragStart: { pushHistory() }
-                        )
-                        ControlSlider(
-                            label: "Highlights",
-                            value: $localRecipe.highlights,
-                            range: -100...100,
-                            onDragStart: { pushHistory() }
-                        )
-                        ControlSlider(
-                            label: "Shadows",
-                            value: $localRecipe.shadows,
-                            range: -100...100,
-                            onDragStart: { pushHistory() }
-                        )
-                        ControlSlider(
-                            label: "Whites",
-                            value: $localRecipe.whites,
-                            range: -100...100,
-                            onDragStart: { pushHistory() }
-                        )
-                        ControlSlider(
-                            label: "Blacks",
-                            value: $localRecipe.blacks,
-                            range: -100...100,
-                            onDragStart: { pushHistory() }
-                        )
+                        .padding(.top, 6)
                     }
-                    .padding(.top, 6)
-                }
-                .contextMenu { panelContextMenu(.light) }
-                }
-                
+                    .contextMenu { panelContextMenu(.light) }
+                    }
+
                 Divider()
-                
+
                 // Tone Curve section
                 if panelConfig.isVisible(.toneCurve), !isLocalNodeMode {
                 DisclosureGroup("Tone Curve", isExpanded: $toneCurveExpanded) {
@@ -314,7 +326,7 @@ struct InspectorView: View {
                 }
                 .contextMenu { panelContextMenu(.toneCurve) }
                 }
-                
+
                 // RGB Curves section
                 if panelConfig.isVisible(.rgbCurves), !isLocalNodeMode {
                 DisclosureGroup("RGB Curves") {
@@ -323,9 +335,9 @@ struct InspectorView: View {
                 }
                 .contextMenu { panelContextMenu(.rgbCurves) }
                 }
-                
+
                 Divider()
-                
+
                 // White Balance section
                 if panelConfig.isVisible(.whiteBalance) {
                 DisclosureGroup("White Balance", isExpanded: $whiteBalanceExpanded) {
@@ -337,9 +349,9 @@ struct InspectorView: View {
                 }
                 .contextMenu { panelContextMenu(.whiteBalance) }
                 }
-                
+
                 Divider()
-                
+
                 // Color section - Enhanced with professional grading
                 if panelConfig.isVisible(.color) {
                 DisclosureGroup("Color", isExpanded: $colorExpanded) {
@@ -356,9 +368,9 @@ struct InspectorView: View {
                             range: -100...100,
                             onDragStart: { pushHistory() }
                         )
-                        
+
                         Divider()
-                        
+
                         // Professional Color Grading
                         ControlSlider(
                             label: "Clarity",
@@ -383,7 +395,7 @@ struct InspectorView: View {
                 }
                 .contextMenu { panelContextMenu(.color) }
                 }
-                
+
                 // HSL section - Per-color adjustment
                 if panelConfig.isVisible(.hsl) {
                 DisclosureGroup("HSL") {
@@ -392,9 +404,9 @@ struct InspectorView: View {
                 }
                 .contextMenu { panelContextMenu(.hsl) }
                 }
-                
+
                 Divider()
-                
+
                 // Composition section - Crop, Rotate, Flip
                 if panelConfig.isVisible(.composition), !isLocalNodeMode {
                 DisclosureGroup("Composition", isExpanded: $compositionExpanded) {
@@ -536,23 +548,23 @@ struct InspectorView: View {
                             range: -100...100,
                             onDragStart: { pushHistory() }
                         )
-                        
+
                         ControlSlider(
                             label: "V. Midpoint",
                             value: $localRecipe.vignette.midpoint,
                             range: 0...100,
                             onDragStart: { pushHistory() }
                         )
-                        
+
                         ControlSlider(
                             label: "V. Feather",
                             value: $localRecipe.vignette.feather,
                             range: 0...100,
                             onDragStart: { pushHistory() }
                         )
-                        
+
                         Divider()
-                        
+
                         // Sharpness
                         ControlSlider(
                             label: "Sharpen",
@@ -560,7 +572,7 @@ struct InspectorView: View {
                             range: 0...100,
                             onDragStart: { pushHistory() }
                         )
-                        
+
                         // Noise Reduction
                         ControlSlider(
                             label: "Noise",
@@ -573,7 +585,7 @@ struct InspectorView: View {
                 }
                 .contextMenu { panelContextMenu(.effects) }
                 }
-                
+
                 // Split Toning section
                 if panelConfig.isVisible(.splitToning) {
                 DisclosureGroup("Split Toning") {
@@ -582,44 +594,44 @@ struct InspectorView: View {
                         Text("Highlights")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                        
+
                         ControlSlider(
                             label: "Hue",
                             value: $localRecipe.splitToning.highlightHue,
                             range: 0...360,
                             onDragStart: { pushHistory() }
                         )
-                        
+
                         ControlSlider(
                             label: "Saturation",
                             value: $localRecipe.splitToning.highlightSaturation,
                             range: 0...100,
                             onDragStart: { pushHistory() }
                         )
-                        
+
                         Divider()
-                        
+
                         // Shadows
                         Text("Shadows")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                        
+
                         ControlSlider(
                             label: "Hue",
                             value: $localRecipe.splitToning.shadowHue,
                             range: 0...360,
                             onDragStart: { pushHistory() }
                         )
-                        
+
                         ControlSlider(
                             label: "Saturation",
                             value: $localRecipe.splitToning.shadowSaturation,
                             range: 0...100,
                             onDragStart: { pushHistory() }
                         )
-                        
+
                         Divider()
-                        
+
                         // Balance
                         ControlSlider(
                             label: "Balance",
@@ -632,7 +644,7 @@ struct InspectorView: View {
                 }
                 .contextMenu { panelContextMenu(.splitToning) }
                 }
-                
+
                 // Grain section
                 if panelConfig.isVisible(.grain) {
                 DisclosureGroup("Grain") {
@@ -660,9 +672,9 @@ struct InspectorView: View {
                 }
                 .contextMenu { panelContextMenu(.grain) }
                 }
-                
+
                 Divider()
-                
+
                 // Transform / Perspective section
                 if panelConfig.isVisible(.transform), !isLocalNodeMode {
                 DisclosureGroup("Transform") {
@@ -698,7 +710,7 @@ struct InspectorView: View {
                 }
                 .contextMenu { panelContextMenu(.transform) }
                 }
-                
+
                 // Lens Corrections section
                 if panelConfig.isVisible(.lensCorrections), !isLocalNodeMode {
                 DisclosureGroup("Lens Corrections") {
@@ -714,9 +726,9 @@ struct InspectorView: View {
                 }
                 .contextMenu { panelContextMenu(.lensCorrections) }
                 }
-                
+
                 Divider()
-                
+
                 // Camera Calibration section
                 if panelConfig.isVisible(.calibration) {
                 DisclosureGroup("Calibration") {
@@ -727,9 +739,9 @@ struct InspectorView: View {
                             range: -100...100,
                             onDragStart: { pushHistory() }
                         )
-                        
+
                         Divider()
-                        
+
                         Text("Red Primary")
                             .font(.caption)
                             .foregroundColor(.secondary)
@@ -745,7 +757,7 @@ struct InspectorView: View {
                             range: -100...100,
                             onDragStart: { pushHistory() }
                         )
-                        
+
                         Text("Green Primary")
                             .font(.caption)
                             .foregroundColor(.secondary)
@@ -761,7 +773,7 @@ struct InspectorView: View {
                             range: -100...100,
                             onDragStart: { pushHistory() }
                         )
-                        
+
                         Text("Blue Primary")
                             .font(.caption)
                             .foregroundColor(.secondary)
@@ -782,11 +794,11 @@ struct InspectorView: View {
                 }
                 .contextMenu { panelContextMenu(.calibration) }
                 }
-                
+
                 Divider()
 
                 // AI Colour Grading section
-                if panelConfig.isVisible(.aiColorGrading), !isLocalNodeMode {
+                if panelConfig.isVisible(.aiColorGrading), !isLocalNodeMode, !quietDarkroomEnabled {
                 DisclosureGroup("AI Colour Grading") {
                     AIColorGradingPanel(appState: appState)
                         .padding(.top, 6)
@@ -795,7 +807,7 @@ struct InspectorView: View {
                 }
 
                 // AI Generation section
-                if panelConfig.isVisible(.aiGeneration), !isLocalNodeMode {
+                if panelConfig.isVisible(.aiGeneration), !isLocalNodeMode, !quietDarkroomEnabled {
                 DisclosureGroup("AI Generation") {
                     AIGenerationPanel(appState: appState)
                         .padding(.top, 6)
@@ -836,10 +848,10 @@ struct InspectorView: View {
                             .buttonStyle(.plain)
                             .font(.caption)
                             .foregroundColor(.accentColor)
-                            
+
                             Spacer()
                         }
-                        
+
                         let snaps = appState.snapshots[appState.selectedAssetId ?? UUID()] ?? []
                         if snaps.isEmpty {
                             Text("No saved versions")
@@ -858,9 +870,9 @@ struct InspectorView: View {
                                     .padding(4)
                                     .background(Color.gray.opacity(0.1))
                                     .cornerRadius(4)
-                                    
+
                                     Spacer()
-                                    
+
                                     Button {
                                         appState.deleteSnapshot(snap)
                                     } label: {
@@ -876,9 +888,10 @@ struct InspectorView: View {
                     .padding(.top, 6)
                 }
                 }
-                
+                }
+
                 Spacer(minLength: 20)
-                
+
                 // Reset button
                 if localRecipe.hasEdits {
                     Button(role: .destructive) {
@@ -896,7 +909,20 @@ struct InspectorView: View {
             .padding()
         }
         .frame(minWidth: isCompact ? 260 : 280, maxWidth: isCompact ? 300 : 340)
-        .background(.ultraThinMaterial)
+        .background {
+            if quietDarkroomEnabled {
+                QDColor.panelBackground
+            } else {
+                Rectangle().fill(.ultraThinMaterial)
+            }
+        }
+        .overlay(alignment: .leading) {
+            if quietDarkroomEnabled {
+                Rectangle()
+                    .fill(QDColor.divider.opacity(0.6))
+                    .frame(width: 1)
+            }
+        }
         .disabled(appState.selectedAsset == nil)
         .opacity(appState.selectedAsset == nil ? 0.5 : 1.0)
         // Sync inspector recipe with current context (global vs local node).
@@ -1008,7 +1034,79 @@ struct InspectorView: View {
         }
     } // end ScrollViewReader
     }
-    
+
+    @ViewBuilder
+    private var quietContextInspectorContent: some View {
+        switch effectiveQuietMode {
+        case .library:
+            QuietInspectorSection(title: "Metadata") {
+                MetadataBar(recipe: $localRecipe)
+                quietInfoRows
+            }
+
+        case .cull:
+            QuietInspectorSection(title: "Decision Tools") {
+                MetadataBar(recipe: $localRecipe)
+                quietInfoRows
+            }
+
+            QuietInspectorSection(title: "AI Notes") {
+                VStack(alignment: .leading, spacing: QDSpace.sm) {
+                    Text(appState.cullingProgress.isRunning ? "AI culling is currently analysing this set." : "Use Assist to score keepers, detect similar scenes, or sync decisions.")
+                        .font(QDFont.body)
+                        .foregroundStyle(QDColor.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if case .complete(let scored) = appState.cullingProgress {
+                        quietInfoRow("Last pass", value: "\(scored) photos scored")
+                    }
+                    if case .complete(let synced) = appState.smartSyncState {
+                        quietInfoRow("Smart Sync", value: synced == 0 ? "No matches" : "\(synced) synced")
+                    }
+                }
+            }
+
+        case .export:
+            QuietInspectorSection(title: "Delivery Set") {
+                quietInfoRow("Current", value: appState.selectedAsset?.filename ?? "No selection")
+                quietInfoRow("Selected", value: "\(max(appState.selectionCount, appState.selectedAsset == nil ? 0 : 1))")
+                quietInfoRow("Quick Export", value: QuickExportManager.shared.destinationDescription)
+            }
+
+            QuietInspectorSection(title: "Readiness") {
+                let unedited = appState.assets.filter { !(appState.recipes[$0.id]?.hasEdits ?? false) }.count
+                quietInfoRow("Edited", value: "\(appState.assets.count - unedited)/\(appState.assets.count)")
+                quietInfoRow("Unedited", value: "\(unedited)")
+            }
+
+        case .edit:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private var quietInfoRows: some View {
+        VStack(alignment: .leading, spacing: QDSpace.sm) {
+            quietInfoRow("Filename", value: appState.selectedAsset?.filename ?? "—")
+            quietInfoRow("Format", value: appState.selectedAsset?.fileExtension.uppercased() ?? "—")
+            quietInfoRow("Folder", value: appState.selectedAsset?.url.deletingLastPathComponent().lastPathComponent ?? "—")
+        }
+    }
+
+    @ViewBuilder
+    private func quietInfoRow(_ title: String, value: String) -> some View {
+        HStack {
+            Text(title)
+                .font(QDFont.body)
+                .foregroundStyle(QDColor.textSecondary)
+            Spacer()
+            Text(value)
+                .font(QDFont.metadata)
+                .foregroundStyle(QDColor.textPrimary)
+                .lineLimit(1)
+        }
+    }
+
     /// Context menu for hiding panels
     @ViewBuilder
     private func panelContextMenu(_ panel: InspectorPanel) -> some View {
@@ -1019,9 +1117,9 @@ struct InspectorView: View {
         } label: {
             Label("Hide \(panel.rawValue)", systemImage: "eye.slash")
         }
-        
+
         Divider()
-        
+
         Button {
             showCustomizeSheet = true
         } label: {
@@ -1059,7 +1157,7 @@ struct InspectorView: View {
         appState.recipes[id] = localRecipe
         appState.saveCurrentRecipeDebounced()
     }
-    
+
     /// Import Lightroom XMP preset
     private func importPreset(from url: URL) {
         do {
@@ -1069,10 +1167,10 @@ struct InspectorView: View {
                 return
             }
             defer { url.stopAccessingSecurityScopedResource() }
-            
+
             pushHistory()
             let importedRecipe = try LightroomPresetParser.parse(from: url)
-            
+
             // Merge imported values with current recipe (preserve metadata)
             localRecipe.exposure = importedRecipe.exposure
             localRecipe.contrast = importedRecipe.contrast
@@ -1095,13 +1193,13 @@ struct InspectorView: View {
             localRecipe.calibration = importedRecipe.calibration
             localRecipe.perspective = importedRecipe.perspective
             localRecipe.chromaticAberration = importedRecipe.chromaticAberration
-            
+
             print("[InspectorView] Successfully imported preset: \(url.lastPathComponent)")
         } catch {
             importError = error.localizedDescription
         }
     }
-    
+
     /// Apply auto adjustments for quick enhancement
     private func autoAdjust() {
         withAnimation(.easeInOut(duration: 0.2)) {
@@ -1114,34 +1212,34 @@ struct InspectorView: View {
             localRecipe.vibrance = 15       // Vibrance for natural look
         }
     }
-    
+
     private func pushHistory() {
         guard !isLocalNodeMode else { return }
         appState.pushHistory(localRecipe)
     }
-    
+
     // MARK: - Nano Banana
-    
+
     /// Start Nano Banana AI processing
     private func startNanoBanana(resolution: NanoBananaResolution) {
         guard let asset = appState.selectedAsset else {
             appState.showHUD("No photo selected")
             return
         }
-        
+
         showNanoBananaProgress = true
-        
+
         Task {
             do {
                 let resultURL = try await nanoBananaService.processImage(
                     asset: asset,
                     resolution: resolution
                 )
-                
+
                 await MainActor.run {
                     appState.showHUD("Enhanced image saved")
                     print("[InspectorView] Nano Banana complete: \(resultURL.path)")
-                    
+
                     // Optionally refresh folder to show new file
                     Task {
                         await appState.refreshCurrentFolder()

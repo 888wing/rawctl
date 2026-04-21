@@ -89,6 +89,11 @@ struct LatentApp: App {
         #if os(macOS)
         Settings {
             TabView {
+                GeneralSettingsView()
+                    .tabItem {
+                        Label("General", systemImage: "gearshape")
+                    }
+
                 AboutView()
                     .tabItem {
                         Label("About", systemImage: "info.circle")
@@ -99,7 +104,7 @@ struct LatentApp: App {
                         Label("Updates", systemImage: "arrow.down.circle")
                     }
             }
-            .frame(width: 450, height: 550)
+            .frame(width: 760, height: 620)
         }
         #endif
     }

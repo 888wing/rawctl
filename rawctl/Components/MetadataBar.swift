@@ -10,6 +10,7 @@ import SwiftUI
 /// Compact metadata bar for photo organization
 struct MetadataBar: View {
     @Binding var recipe: EditRecipe
+    @AppStorage("latent.ui.quietDarkroom") private var quietDarkroomEnabled = true
     
     @State private var newTag = ""
     @State private var showTagInput = false
@@ -20,7 +21,7 @@ struct MetadataBar: View {
             HStack(spacing: 4) {
                 Text("Rating")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(quietDarkroomEnabled ? QDColor.textTertiary : .secondary)
                     .frame(width: 50, alignment: .leading)
                 
                 ForEach(1...5, id: \.self) { star in
@@ -30,7 +31,7 @@ struct MetadataBar: View {
                         }
                     } label: {
                         Image(systemName: star <= recipe.rating ? "star.fill" : "star")
-                            .foregroundColor(star <= recipe.rating ? .yellow : .gray.opacity(0.4))
+                            .foregroundColor(star <= recipe.rating ? (quietDarkroomEnabled ? QDColor.ratingMuted : .yellow) : .gray.opacity(0.4))
                             .font(.system(size: 14))
                     }
                     .buttonStyle(.plain)
@@ -43,7 +44,7 @@ struct MetadataBar: View {
             HStack(spacing: 4) {
                 Text("Flag")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(quietDarkroomEnabled ? QDColor.textTertiary : .secondary)
                     .frame(width: 50, alignment: .leading)
                 
                 ForEach(Flag.allCases, id: \.self) { flag in
@@ -59,7 +60,7 @@ struct MetadataBar: View {
                     .buttonStyle(.plain)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
-                    .background(recipe.flag == flag ? flagColor(for: flag, selected: true).opacity(0.2) : Color.clear)
+                    .background(recipe.flag == flag ? flagBackground(for: flag) : Color.clear)
                     .cornerRadius(4)
                 }
                 
@@ -70,7 +71,7 @@ struct MetadataBar: View {
             HStack(spacing: 4) {
                 Text("Color")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(quietDarkroomEnabled ? QDColor.textTertiary : .secondary)
                     .frame(width: 50, alignment: .leading)
                 
                 ForEach(ColorLabel.allCases, id: \.self) { color in
@@ -96,10 +97,10 @@ struct MetadataBar: View {
             // Tags
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Text("Tags")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .frame(width: 50, alignment: .leading)
+                        Text("Tags")
+                            .font(.caption)
+                            .foregroundColor(quietDarkroomEnabled ? QDColor.textTertiary : .secondary)
+                            .frame(width: 50, alignment: .leading)
                     
                     // Existing tags
                     ScrollView(.horizontal, showsIndicators: false) {
@@ -132,7 +133,7 @@ struct MetadataBar: View {
                             .textFieldStyle(.plain)
                             .font(.caption)
                             .padding(4)
-                            .background(Color(white: 0.15))
+                            .background(quietDarkroomEnabled ? QDColor.elevatedSurface : Color(white: 0.15))
                             .cornerRadius(4)
                             .onSubmit {
                                 addTag()
@@ -172,9 +173,16 @@ struct MetadataBar: View {
     private func flagColor(for flag: Flag, selected: Bool) -> Color {
         switch flag {
         case .none: return selected ? .gray : .gray.opacity(0.5)
-        case .pick: return selected ? .green : .gray.opacity(0.5)
-        case .reject: return selected ? .red : .gray.opacity(0.5)
+        case .pick: return selected ? (quietDarkroomEnabled ? QDColor.successMuted : .green) : .gray.opacity(0.5)
+        case .reject: return selected ? (quietDarkroomEnabled ? QDColor.dangerMuted : .red) : .gray.opacity(0.5)
         }
+    }
+
+    private func flagBackground(for flag: Flag) -> Color {
+        if quietDarkroomEnabled {
+            return QDColor.selectedSurface
+        }
+        return flagColor(for: flag, selected: true).opacity(0.2)
     }
     
     private func swiftUIColor(for label: ColorLabel) -> Color {
@@ -187,6 +195,7 @@ struct MetadataBar: View {
 struct TagChip: View {
     let tag: String
     let onRemove: () -> Void
+    @AppStorage("latent.ui.quietDarkroom") private var quietDarkroomEnabled = true
     
     var body: some View {
         HStack(spacing: 2) {
@@ -203,8 +212,8 @@ struct TagChip: View {
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 3)
-        .background(Color.accentColor.opacity(0.2))
-        .foregroundColor(.accentColor)
+        .background(quietDarkroomEnabled ? QDColor.selectedSurface : Color.accentColor.opacity(0.2))
+        .foregroundColor(quietDarkroomEnabled ? QDColor.textSecondary : .accentColor)
         .cornerRadius(4)
     }
 }

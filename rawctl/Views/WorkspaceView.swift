@@ -10,41 +10,72 @@ import SwiftUI
 /// Main workspace area showing Grid or Single view
 struct WorkspaceView: View {
     @ObservedObject var appState: AppState
+    var quietMode: QuietMode? = nil
+    var quietUIState: QuietUIState? = nil
     var isCompact: Bool = false
+    var showsLegacyToolbar: Bool = true
+    @AppStorage("latent.ui.quietDarkroom") private var quietDarkroomEnabled = true
     @State private var showExportDialog = false
     @State private var showImportDialog = false
     @State private var showKeyboardShortcuts = false
     @State private var showCullingMode = false
     @State private var copiedRecipe: EditRecipe?
+
+    private var workspaceBackgroundColor: Color {
+        quietDarkroomEnabled ? QDColor.appBackground : Color(nsColor: .windowBackgroundColor)
+    }
+
+    private var showsSingleView: Bool {
+        if quietDarkroomEnabled, let quietMode {
+            return quietMode == .edit && appState.selectedAsset != nil
+        }
+        return appState.viewMode != .grid && appState.selectedAsset != nil
+    }
+
+    @ViewBuilder
+    private var workspaceContent: some View {
+        if appState.assets.isEmpty {
+            emptyState
+        } else if !showsSingleView {
+            GridView(appState: appState, quietUIState: quietUIState)
+        } else {
+            SingleView(appState: appState)
+        }
+    }
     
     var body: some View {
         ZStack {
-            Color(nsColor: .windowBackgroundColor)
+            workspaceBackgroundColor
                 .ignoresSafeArea()
             
             // View content with minimal transition for snappy response
-            Group {
-                if appState.assets.isEmpty {
-                    emptyState
-                } else if appState.viewMode == .grid || appState.selectedAsset == nil {
-                    GridView(appState: appState)
-                        .transition(.opacity)
-                } else {
-                    SingleView(appState: appState)
-                        .transition(.opacity)
-                }
+            workspaceContent
+                .animation(quietDarkroomEnabled ? nil : .easeOut(duration: 0.1), value: appState.viewMode)
+
+            if quietDarkroomEnabled,
+               let startupHero = appState.startupHero,
+               !showsSingleView {
+                QuietStartupHeroOverlay(hero: startupHero)
+                    .padding(QDSpace.xl)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             }
-            // Faster transition: 100ms instead of 200ms, no scale animation
-            .animation(.easeOut(duration: 0.1), value: appState.viewMode)
         }
         // Lightroom-style keyboard shortcuts
         .onKeyPress("g") {
-            withAnimation { appState.viewMode = .grid }
+            if quietDarkroomEnabled {
+                appState.viewMode = .grid
+            } else {
+                withAnimation { appState.viewMode = .grid }
+            }
             return .handled
         }
         .onKeyPress("d") {
-            withAnimation {
+            if quietDarkroomEnabled {
                 _ = appState.switchToSingleViewIfPossible()
+            } else {
+                withAnimation {
+                    _ = appState.switchToSingleViewIfPossible()
+                }
             }
             return .handled
         }
@@ -70,11 +101,19 @@ struct WorkspaceView: View {
             return .handled
         }
         .onKeyPress(.space) {
-            withAnimation {
+            if quietDarkroomEnabled {
                 if appState.viewMode == .grid {
                     _ = appState.switchToSingleViewIfPossible()
                 } else {
                     appState.viewMode = .grid
+                }
+            } else {
+                withAnimation {
+                    if appState.viewMode == .grid {
+                        _ = appState.switchToSingleViewIfPossible()
+                    } else {
+                        appState.viewMode = .grid
+                    }
                 }
             }
             return .handled
@@ -96,140 +135,142 @@ struct WorkspaceView: View {
         .onKeyPress("8") { applyColorLabelToSelection(.green); return .handled }
         .onKeyPress("9") { applyColorLabelToSelection(.blue); return .handled }
         .toolbar {
-            ToolbarItemGroup(placement: .automatic) {
-                // View mode picker
-                Picker("Mode", selection: $appState.viewMode) {
-                    Label("Grid View", systemImage: "square.grid.2x2")
-                        .labelStyle(.iconOnly)
-                        .tag(AppState.ViewMode.grid)
-                    Label("Single View", systemImage: "rectangle")
-                        .labelStyle(.iconOnly)
-                        .tag(AppState.ViewMode.single)
-                }
-                .pickerStyle(.segmented)
-                .accessibilityIdentifier("toolbar.viewMode")
-                .accessibilityLabel("View Mode")
-                .help("Toggle Grid / Single View")
-                
-                Divider()
-                
-                if appState.viewMode == .single {
-                    // Comparison Toggle
-                    Button {
-                        withAnimation {
-                            appState.comparisonMode = appState.comparisonMode == .sideBySide ? .none : .sideBySide
-                        }
-                    } label: {
-                        Image(systemName: appState.comparisonMode == .sideBySide ? "rectangle.split.2x1.fill" : "rectangle.split.2x1")
+            if showsLegacyToolbar {
+                ToolbarItemGroup(placement: .automatic) {
+                    // View mode picker
+                    Picker("Mode", selection: $appState.viewMode) {
+                        Label("Grid View", systemImage: "square.grid.2x2")
+                            .labelStyle(.iconOnly)
+                            .tag(AppState.ViewMode.grid)
+                        Label("Single View", systemImage: "rectangle")
+                            .labelStyle(.iconOnly)
+                            .tag(AppState.ViewMode.single)
                     }
-                    .help("Before/After Comparison (\\)")
-                    
-                    // Zoom Toggle
-                    Button {
-                        appState.isZoomed.toggle()
-                    } label: {
-                        Image(systemName: appState.isZoomed ? "plus.magnifyingglass" : "magnifyingglass")
-                    }
-                    .help("Toggle Zoom 100% (Z)")
-                    
+                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier("toolbar.viewMode")
+                    .accessibilityLabel("View Mode")
+                    .help("Toggle Grid / Single View")
+
                     Divider()
-                }
-                
-                // Culling Mode button
-                Button {
-                    showCullingMode = true
-                } label: {
-                    Image(systemName: "eye.square")
-                }
-                .help("Culling Mode (C)")
-                .disabled(appState.assets.isEmpty)
-                
-                // Import button
-                Button {
-                    showImportDialog = true
-                } label: {
-                    if isCompact {
-                        Image(systemName: "square.and.arrow.down")
-                    } else {
-                        Label("Import", systemImage: "square.and.arrow.down")
-                    }
-                }
-                .help("Import from Memory Card")
-                
-                if isCompact {
-                    Menu {
-                        Button("Copy Settings", action: copySettings)
-                            .disabled(appState.selectedAsset == nil)
-                        Button("Paste Settings", action: pasteSettings)
-                            .disabled(appState.selectedAsset == nil || copiedRecipe == nil)
+
+                    if appState.viewMode == .single {
+                        // Comparison Toggle
+                        Button {
+                            withAnimation {
+                                appState.comparisonMode = appState.comparisonMode == .sideBySide ? .none : .sideBySide
+                            }
+                        } label: {
+                            Image(systemName: appState.comparisonMode == .sideBySide ? "rectangle.split.2x1.fill" : "rectangle.split.2x1")
+                        }
+                        .help("Before/After Comparison (\\)")
+
+                        // Zoom Toggle
+                        Button {
+                            appState.isZoomed.toggle()
+                        } label: {
+                            Image(systemName: appState.isZoomed ? "plus.magnifyingglass" : "magnifyingglass")
+                        }
+                        .help("Toggle Zoom 100% (Z)")
+
                         Divider()
-                        Button("Quick Export", action: quickExport)
-                            .disabled(appState.selectedAsset == nil || !QuickExportManager.shared.isQuickExportAvailable)
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
                     }
-                    .help("More Actions")
-                } else {
-                    // Copy/Paste settings
+
+                    // Culling Mode button
                     Button {
-                        copySettings()
+                        showCullingMode = true
                     } label: {
-                        Image(systemName: "doc.on.doc")
+                        Image(systemName: "eye.square")
                     }
-                    .help("Copy Edit Settings (⌘C)")
-                    .keyboardShortcut("c", modifiers: .command)
-                    .disabled(appState.selectedAsset == nil)
-                    
+                    .help("Culling Mode (C)")
+                    .disabled(appState.assets.isEmpty)
+
+                    // Import button
                     Button {
-                        pasteSettings()
+                        showImportDialog = true
                     } label: {
-                        Image(systemName: "doc.on.clipboard")
+                        if isCompact {
+                            Image(systemName: "square.and.arrow.down")
+                        } else {
+                            Label("Import", systemImage: "square.and.arrow.down")
+                        }
                     }
-                    .help("Paste Edit Settings (⌘V)")
-                    .keyboardShortcut("v", modifiers: .command)
-                    .disabled(appState.selectedAsset == nil || copiedRecipe == nil)
-                    
-                    // Quick Export button
-                    Button {
-                        quickExport()
-                    } label: {
-                        Image(systemName: "bolt.circle")
-                    }
-                    .help(QuickExportManager.shared.isQuickExportAvailable
-                          ? "Quick Export to \(QuickExportManager.shared.destinationDescription) (⌘⇧E)"
-                          : "Quick Export (configure with Export first)")
-                    .keyboardShortcut("e", modifiers: [.command, .shift])
-                    .disabled(appState.selectedAsset == nil || !QuickExportManager.shared.isQuickExportAvailable)
-                }
-                
-                // Prominent Export button
-                Button {
-                    showExportDialog = true
-                } label: {
+                    .help("Import from Memory Card")
+
                     if isCompact {
-                        Image(systemName: "square.and.arrow.up.fill")
-                            .font(.system(size: 13, weight: .semibold))
-                            .padding(.horizontal, 10)
+                        Menu {
+                            Button("Copy Settings", action: copySettings)
+                                .disabled(appState.selectedAsset == nil)
+                            Button("Paste Settings", action: pasteSettings)
+                                .disabled(appState.selectedAsset == nil || copiedRecipe == nil)
+                            Divider()
+                            Button("Quick Export", action: quickExport)
+                                .disabled(appState.selectedAsset == nil || !QuickExportManager.shared.isQuickExportAvailable)
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                        }
+                        .help("More Actions")
+                    } else {
+                        // Copy/Paste settings
+                        Button {
+                            copySettings()
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                        }
+                        .help("Copy Edit Settings (⌘C)")
+                        .keyboardShortcut("c", modifiers: .command)
+                        .disabled(appState.selectedAsset == nil)
+
+                        Button {
+                            pasteSettings()
+                        } label: {
+                            Image(systemName: "doc.on.clipboard")
+                        }
+                        .help("Paste Edit Settings (⌘V)")
+                        .keyboardShortcut("v", modifiers: .command)
+                        .disabled(appState.selectedAsset == nil || copiedRecipe == nil)
+
+                        // Quick Export button
+                        Button {
+                            quickExport()
+                        } label: {
+                            Image(systemName: "bolt.circle")
+                        }
+                        .help(QuickExportManager.shared.isQuickExportAvailable
+                              ? "Quick Export to \(QuickExportManager.shared.destinationDescription) (⌘⇧E)"
+                              : "Quick Export (configure with Export first)")
+                        .keyboardShortcut("e", modifiers: [.command, .shift])
+                        .disabled(appState.selectedAsset == nil || !QuickExportManager.shared.isQuickExportAvailable)
+                    }
+
+                    // Prominent Export button
+                    Button {
+                        showExportDialog = true
+                    } label: {
+                        if isCompact {
+                            Image(systemName: "square.and.arrow.up.fill")
+                                .font(.system(size: 13, weight: .semibold))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(Color.accentColor)
+                                .foregroundColor(.white)
+                                .cornerRadius(6)
+                        } else {
+                            HStack(spacing: 4) {
+                                Image(systemName: "square.and.arrow.up.fill")
+                                Text("Export JPG")
+                                    .fontWeight(.medium)
+                            }
+                            .padding(.horizontal, 12)
                             .padding(.vertical, 6)
                             .background(Color.accentColor)
                             .foregroundColor(.white)
                             .cornerRadius(6)
-                    } else {
-                        HStack(spacing: 4) {
-                            Image(systemName: "square.and.arrow.up.fill")
-                            Text("Export JPG")
-                                .fontWeight(.medium)
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Color.accentColor)
-                        .foregroundColor(.white)
-                        .cornerRadius(6)
                     }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut("e", modifiers: .command)
+                    .disabled(appState.selectedAsset == nil)
                 }
-                .buttonStyle(.plain)
-                .keyboardShortcut("e", modifiers: .command)
-                .disabled(appState.selectedAsset == nil)
             }
         }
         .navigationTitle(appState.selectedFolder?.lastPathComponent ?? "rawctl")

@@ -20,6 +20,7 @@ struct ControlSlider: View {
     var format: String = "%.0f"
     var showSign: Bool = true
     var defaultValue: Double = 0
+    @AppStorage("latent.ui.quietDarkroom") private var quietDarkroomEnabled = true
     
     // Performance callbacks
     var onDragStart: (() -> Void)?
@@ -39,6 +40,52 @@ struct ControlSlider: View {
     private let trackHeight: CGFloat = 5
     
     var body: some View {
+        Group {
+            if quietDarkroomEnabled {
+                quietBody
+            } else {
+                legacyBody
+            }
+        }
+    }
+
+    private var quietBody: some View {
+        QuietEditSliderRow(
+            title: label,
+            value: $value,
+            range: range,
+            step: quietStep,
+            defaultValue: defaultValue,
+            display: { _ in formattedValue },
+            onReset: value != defaultValue ? {
+                value = defaultValue
+            } : nil,
+            onEditingChanged: { editing in
+                if editing {
+                    onDragStart?()
+                } else {
+                    onDragEnd?()
+                }
+                NotificationCenter.default.post(name: .sliderDragStateChanged, object: editing)
+            }
+        )
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) {
+            value = defaultValue
+        }
+    }
+
+    private var quietStep: Double {
+        if format.contains(".2") {
+            return 0.01
+        }
+        if format.contains(".1") {
+            return 0.1
+        }
+        return 1
+    }
+
+    private var legacyBody: some View {
         VStack(spacing: 4) {
             // Label row with enhanced feedback
             HStack {
@@ -250,7 +297,7 @@ struct ControlSlider: View {
             }
         }
     }
-    
+
     private var formattedValue: String {
         let formatted = String(format: format, value)
         if showSign && value > 0 {

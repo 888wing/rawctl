@@ -39,6 +39,7 @@ struct PendingAISuggestion {
     let assetId: UUID
     let delta: ColorGradeDelta
     let mode: GeminiColorService.Mode
+    let aiAppliedRecipe: EditRecipe
 }
 
 // MARK: - GeminiColorService

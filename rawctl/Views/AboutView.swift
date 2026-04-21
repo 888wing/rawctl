@@ -145,7 +145,7 @@ struct AboutView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 400)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .sheet(isPresented: $showingWhatsNew) {
             WhatsNewView(release: ReleaseHistory.latest) {
                 showingWhatsNew = false

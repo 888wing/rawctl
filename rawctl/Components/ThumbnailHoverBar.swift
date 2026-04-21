@@ -11,6 +11,7 @@ import SwiftUI
 struct ThumbnailHoverBar: View {
     let rating: Int
     let flag: Flag
+    var usesQuietDarkroomStyle: Bool = false
     let onRatingChange: (Int) -> Void
     let onFlagChange: (Flag) -> Void
     
@@ -25,7 +26,7 @@ struct ThumbnailHoverBar: View {
                     } label: {
                         Image(systemName: star <= rating ? "star.fill" : "star")
                             .font(.system(size: 10))
-                            .foregroundStyle(star <= rating ? .yellow : .white.opacity(0.6))
+                            .foregroundStyle(star <= rating ? ratingColor : idleColor)
                     }
                     .buttonStyle(.plain)
                 }
@@ -43,7 +44,7 @@ struct ThumbnailHoverBar: View {
                 } label: {
                     Image(systemName: flag == .pick ? "flag.fill" : "flag")
                         .font(.system(size: 10))
-                        .foregroundStyle(flag == .pick ? .green : .white.opacity(0.6))
+                        .foregroundStyle(flag == .pick ? pickColor : idleColor)
                 }
                 .buttonStyle(.plain)
                 .help("Pick (P)")
@@ -54,7 +55,7 @@ struct ThumbnailHoverBar: View {
                 } label: {
                     Image(systemName: flag == .reject ? "xmark.circle.fill" : "xmark.circle")
                         .font(.system(size: 10))
-                        .foregroundStyle(flag == .reject ? .red : .white.opacity(0.6))
+                        .foregroundStyle(flag == .reject ? rejectColor : idleColor)
                 }
                 .buttonStyle(.plain)
                 .help("Reject (X)")
@@ -64,12 +65,36 @@ struct ThumbnailHoverBar: View {
         .padding(.vertical, 4)
         .background(
             Capsule()
-                .fill(.black.opacity(0.7))
+                .fill(backgroundColor)
                 .overlay(
                     Capsule()
-                        .stroke(.white.opacity(0.1), lineWidth: 0.5)
+                        .stroke(borderColor, lineWidth: 0.5)
                 )
         )
+    }
+
+    private var backgroundColor: Color {
+        usesQuietDarkroomStyle ? QDColor.appBackground.opacity(0.82) : .black.opacity(0.7)
+    }
+
+    private var borderColor: Color {
+        usesQuietDarkroomStyle ? QDColor.divider.opacity(0.7) : .white.opacity(0.1)
+    }
+
+    private var idleColor: Color {
+        usesQuietDarkroomStyle ? QDColor.textSecondary : .white.opacity(0.6)
+    }
+
+    private var ratingColor: Color {
+        usesQuietDarkroomStyle ? QDColor.ratingMuted : .yellow
+    }
+
+    private var pickColor: Color {
+        usesQuietDarkroomStyle ? QDColor.successMuted : .green
+    }
+
+    private var rejectColor: Color {
+        usesQuietDarkroomStyle ? QDColor.dangerMuted : .red
     }
 }
 

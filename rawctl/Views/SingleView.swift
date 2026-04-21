@@ -471,6 +471,7 @@ struct SingleView: View {
         @Binding var showAIEditor: Bool
         let hasAsset: Bool
         let onEnterTransformMode: () -> Void
+        @AppStorage("latent.ui.quietDarkroom") private var quietDarkroomEnabled = true
 
         var body: some View {
             if hasAsset {
@@ -501,25 +502,27 @@ struct SingleView: View {
                     .cornerRadius(6)
                     .help("Enter Transform Mode (C)")
 
-                    // AI Edit button
-                    Button {
-                        showAIEditor = true
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "sparkles")
-                                .font(.system(size: 10))
-                                .foregroundColor(.yellow)
-                            Text("AI Edit")
-                                .font(.system(size: 10, weight: .medium))
+                    if !quietDarkroomEnabled {
+                        // AI Edit button
+                        Button {
+                            showAIEditor = true
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "sparkles")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.yellow)
+                                Text("AI Edit")
+                                    .font(.system(size: 10, weight: .medium))
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
                         }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
+                        .buttonStyle(.plain)
+                        .background(.black.opacity(0.6))
+                        .foregroundColor(.white)
+                        .cornerRadius(6)
+                        .help("Open AI Editor (⌘⇧A)")
                     }
-                    .buttonStyle(.plain)
-                    .background(.black.opacity(0.6))
-                    .foregroundColor(.white)
-                    .cornerRadius(6)
-                    .help("Open AI Editor (⌘⇧A)")
                 }
                 .padding(16)
             }
@@ -1006,8 +1009,13 @@ struct SingleView: View {
             previewImage = nil
             return
         }
-        
-        if previewImage == nil {
+
+        if previewImage == nil,
+           let warmedPreview = appState.consumePrefetchedRenderedPreview(for: asset.id) {
+            previewImage = warmedPreview
+            appState.currentPreviewImage = warmedPreview
+            isLoadingPreview = false
+        } else if previewImage == nil {
             isLoadingPreview = true
         }
         
@@ -1032,7 +1040,11 @@ struct SingleView: View {
         
         if isInitialLoad {
             // First time loading - show quick preview immediately
-            if let quickPreview = await ImagePipeline.shared.quickPreview(for: asset) {
+            var quickPreview = appState.consumePrefetchedQuickPreview(for: asset.id)
+            if quickPreview == nil {
+                quickPreview = await ImagePipeline.shared.quickPreview(for: asset)
+            }
+            if let quickPreview {
                 guard !Task.isCancelled else { return }
                 if let requestVersion, requestVersion != previewRequestVersion {
                     return

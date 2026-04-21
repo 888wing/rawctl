@@ -10,6 +10,8 @@ import SwiftUI
 /// Grid view showing photo thumbnails
 struct GridView: View {
     @ObservedObject var appState: AppState
+    var quietUIState: QuietUIState? = nil
+    @AppStorage("latent.ui.quietDarkroom") private var quietDarkroomEnabled = true
     @State private var thumbnailSize: CGFloat = 160
 
     // Marquee selection coordinate space
@@ -33,14 +35,18 @@ struct GridView: View {
         formatter.locale = Locale(identifier: "zh-Hant")
         return formatter
     }()
-    
+
     // Responsive grid columns
     private var columns: [GridItem] {
-        let effectiveSize = max(minThumbnailSize, min(thumbnailSize, maxThumbnailSize))
-        let spacing: CGFloat = effectiveSize < 120 ? 8 : 12
+        let effectiveSize = quietDarkroomEnabled
+            ? max(minThumbnailSize, min(quietGridDensity.thumbnailMinWidth, maxThumbnailSize))
+            : max(minThumbnailSize, min(thumbnailSize, maxThumbnailSize))
+        let spacing = quietDarkroomEnabled
+            ? quietGridDensity.gap
+            : (effectiveSize < 120 ? 8 : 12)
         return [GridItem(.adaptive(minimum: effectiveSize, maximum: effectiveSize + 40), spacing: spacing)]
     }
-    
+
     // Calculate optimal thumbnail size based on width
     private func optimalThumbnailSize(for width: CGFloat) -> CGFloat {
         // Aim for 3-6 columns depending on width
@@ -50,18 +56,18 @@ struct GridView: View {
         let optimalSize = (width - padding - (spacing * CGFloat(targetColumns - 1))) / CGFloat(targetColumns)
         return max(minThumbnailSize, min(optimalSize, maxThumbnailSize))
     }
-    
+
     /// Group assets by current sort criteria
     private var groupedAssets: [(key: String, assets: [PhotoAsset])] {
         let assets = appState.filteredAssets
-        
+
         var groups: [String: [PhotoAsset]] = [:]
-        
+
         for asset in assets {
             let key = groupKey(for: asset)
             groups[key, default: []].append(asset)
         }
-        
+
         // Sort groups by key
         let sorted = groups.sorted { a, b in
             if appState.sortOrder == .ascending {
@@ -70,10 +76,10 @@ struct GridView: View {
                 return a.key > b.key
             }
         }
-        
+
         return sorted.map { (key: $0.key, assets: $0.value) }
     }
-    
+
     /// Generate group key based on sort criteria
     private func groupKey(for asset: PhotoAsset) -> String {
         switch appState.sortCriteria {
@@ -110,7 +116,7 @@ struct GridView: View {
 
             // Fallback: group by file extension
             return asset.fileExtension.uppercased()
-            
+
         case .captureDate:
             // Group by date (YYYY-MM-DD) - using cached formatter
             let date = asset.metadata?.dateTime ?? asset.creationDate ?? asset.modificationDate
@@ -125,7 +131,7 @@ struct GridView: View {
                 return Self.groupKeyDateFormatter.string(from: d)
             }
             return "Unknown Date"
-            
+
         case .fileSize:
             // Group by size range
             let mb = Double(asset.fileSize) / 1_000_000
@@ -135,11 +141,11 @@ struct GridView: View {
             else if mb < 25 { return "10-25 MB" }
             else if mb < 50 { return "25-50 MB" }
             else { return "> 50 MB" }
-            
+
         case .fileType:
             // Group by extension
             return asset.fileExtension
-            
+
         case .rating:
             // Group by rating
             let rating = appState.recipes[asset.id]?.rating ?? 0
@@ -147,7 +153,7 @@ struct GridView: View {
             return String(repeating: "★", count: rating)
         }
     }
-    
+
     /// Display label for group
     private func groupLabel(for key: String) -> String {
         switch appState.sortCriteria {
@@ -185,21 +191,72 @@ struct GridView: View {
             return key
         }
     }
-    
+
     @State private var showExportDialog = false
-    
+
+    private var quietGridDensity: QuietGridDensity {
+        quietUIState?.gridDensity ?? .comfort
+    }
+
+    private var quietWorkspaceTitle: String {
+        if let project = appState.selectedProject {
+            return project.name
+        }
+        if let collection = appState.activeSmartCollection {
+            return collection.name
+        }
+        if appState.isRecentImportsMode {
+            return "Recent Imports"
+        }
+        return appState.selectedFolder?.lastPathComponent ?? "Library"
+    }
+
+    private var quietFilterChips: [String] {
+        var chips: [String] = []
+        if appState.filterRating > 0 {
+            chips.append("\(appState.filterRating)+ Stars")
+        }
+        if let flag = appState.filterFlag {
+            switch flag {
+            case .none:
+                break
+            case .pick:
+                chips.append("Picked")
+            case .reject:
+                chips.append("Rejected")
+            }
+        }
+        if let color = appState.filterColor {
+            chips.append(color.displayName)
+        }
+        if !appState.filterTag.isEmpty {
+            chips.append("#\(appState.filterTag)")
+        }
+        if appState.isRecentImportsMode {
+            chips.append("Recent")
+        }
+        if appState.exifFilter != nil {
+            chips.append("EXIF")
+        }
+        return chips
+    }
+
     // Explicit dependency on recipes to trigger view updates
     private var recipesVersion: Int { appState.recipes.count }
-    
+
     var body: some View {
         // Add implicit dependency on recipes for filter refresh
         let _ = recipesVersion
         let _ = appState.recipes
-        
+
         VStack(spacing: 0) {
             // Selection mode bar
-            SelectionBar(appState: appState, showExportDialog: $showExportDialog)
-            
+            SelectionBar(
+                appState: appState,
+                showExportDialog: $showExportDialog,
+                usesQuietDarkroomStyle: quietDarkroomEnabled
+            )
+
             // Global thumbnail loading progress bar
             if case .loading(let loaded, let total) = appState.thumbnailLoadingProgress {
                 VStack(spacing: 4) {
@@ -216,7 +273,13 @@ struct GridView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
-                .background(.ultraThinMaterial)
+                .background {
+                    if quietDarkroomEnabled {
+                        QDColor.panelBackground
+                    } else {
+                        Rectangle().fill(.ultraThinMaterial)
+                    }
+                }
             }
 
             // AI Culling progress bar
@@ -237,7 +300,13 @@ struct GridView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
-                .background(.ultraThinMaterial)
+                .background {
+                    if quietDarkroomEnabled {
+                        QDColor.panelBackground
+                    } else {
+                        Rectangle().fill(.ultraThinMaterial)
+                    }
+                }
             } else if case .complete(let scored) = appState.cullingProgress {
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.circle.fill")
@@ -258,97 +327,145 @@ struct GridView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 6)
-                .background(.ultraThinMaterial)
-            }
-            
-            // Filter bar
-            FilterBar(appState: appState)
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-            
-            // Grid content with section headers
-            gridContent
-            
-            // Bottom toolbar with size slider
-            Divider()
-            HStack(spacing: 8) {
-                Image(systemName: "photo")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                
-                Slider(value: $thumbnailSize, in: minThumbnailSize...maxThumbnailSize)
-                    .frame(minWidth: 80, maxWidth: 140)
-                
-                Image(systemName: "photo.fill")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                
-                Text("\(Int(thumbnailSize))px")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(.secondary)
-                    .frame(width: 40)
-                
-                Spacer()
-
-                // AI Cull button (menu when selection exists, single button otherwise)
-                Group {
-                    if appState.cullingProgress.isRunning {
-                        ProgressView()
-                            .scaleEffect(0.6)
-                            .frame(width: 20, height: 16)
-                    } else if !AppFeatures.aiCullingEnabled {
-                        Button {
-                            appState.showAccountSheet = true
-                            appState.showHUD("AI Cull is a Pro feature")
-                        } label: {
-                            HStack(spacing: 4) {
-                                Label("AI Cull", systemImage: "sparkles")
-                                Image(systemName: "crown.fill")
-                                    .font(.caption2)
-                                    .foregroundColor(.yellow)
-                            }
-                            .font(.caption)
-                        }
-                        .buttonStyle(.borderless)
-                        .disabled(appState.assets.isEmpty)
-                        .help("AI Cull is a Pro feature — upgrade to unlock")
-                    } else if appState.selectionCount > 1 {
-                        Menu {
-                            Button("Cull Selected (\(appState.selectionCount))") {
-                                Task { await appState.startAICulling(scope: .selected) }
-                            }
-                            Button("Cull All (\(appState.assets.count))") {
-                                Task { await appState.startAICulling(scope: .all) }
-                            }
-                        } label: {
-                            Label("AI Cull", systemImage: "sparkles")
-                                .font(.caption)
-                        }
-                        .menuStyle(.borderlessButton)
-                        .help("Score photos for sharpness, composition, and duplicates")
+                .background {
+                    if quietDarkroomEnabled {
+                        QDColor.panelBackground
                     } else {
-                        Button {
-                            Task { await appState.startAICulling(scope: .all) }
-                        } label: {
-                            Label("AI Cull", systemImage: "sparkles")
-                                .font(.caption)
-                        }
-                        .buttonStyle(.borderless)
-                        .disabled(appState.assets.isEmpty)
-                        .help("Score all photos for sharpness, composition, and duplicates")
+                        Rectangle().fill(.ultraThinMaterial)
                     }
                 }
+            }
 
-                Divider()
-                    .frame(height: 12)
+            if quietDarkroomEnabled {
+                QuietWorkspaceHeader(
+                    title: quietWorkspaceTitle,
+                    count: appState.filteredAssets.count,
+                    filterChips: quietFilterChips,
+                    gridDensity: Binding(
+                        get: { quietGridDensity },
+                        set: { newValue in
+                            quietUIState?.gridDensity = newValue
+                            thumbnailSize = newValue.thumbnailMinWidth
+                        }
+                    ),
+                    sortCriteria: $appState.sortCriteria,
+                    sortOrder: $appState.sortOrder,
+                    onToggleFilters: {
+                        quietUIState?.toggleOverlay(.filter)
+                    }
+                )
+            } else {
+                FilterBar(appState: appState)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+            }
 
-                Text("\(appState.assets.count) photos")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+            // Grid content with section headers
+            gridContent
+
+            // Bottom toolbar
+            Divider()
+            HStack(spacing: 8) {
+                if quietDarkroomEnabled {
+                    HStack(spacing: QDSpace.sm) {
+                        Label(quietGridDensity.title, systemImage: "square.grid.2x2")
+                            .font(QDFont.metadata)
+                            .foregroundColor(QDColor.textTertiary)
+
+                        if !quietFilterChips.isEmpty {
+                            Divider()
+                                .frame(height: 12)
+
+                            Text("\(quietFilterChips.count) active")
+                                .font(QDFont.metadata)
+                                .foregroundColor(QDColor.textTertiary)
+                        }
+                    }
+                } else {
+                    Image(systemName: "photo")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    Slider(value: $thumbnailSize, in: minThumbnailSize...maxThumbnailSize)
+                        .frame(minWidth: 80, maxWidth: 140)
+
+                    Image(systemName: "photo.fill")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    Text("\(Int(thumbnailSize))px")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .frame(width: 40)
+                }
+
+                Spacer()
+
+                if quietDarkroomEnabled {
+                    Text("\(appState.assets.count) photos")
+                        .font(QDFont.metadata)
+                        .foregroundColor(QDColor.textSecondary)
+                } else {
+                    // AI Cull button (menu when selection exists, single button otherwise)
+                    Group {
+                        if appState.cullingProgress.isRunning {
+                            ProgressView()
+                                .scaleEffect(0.6)
+                                .frame(width: 20, height: 16)
+                        } else if !AppFeatures.aiCullingEnabled {
+                            Button {
+                                appState.showAccountSheet = true
+                                appState.showHUD("AI Cull is a Pro feature")
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Label("AI Cull", systemImage: "sparkles")
+                                    Image(systemName: "crown.fill")
+                                        .font(.caption2)
+                                        .foregroundColor(.yellow)
+                                }
+                                .font(.caption)
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(appState.assets.isEmpty)
+                            .help("AI Cull is a Pro feature — upgrade to unlock")
+                        } else if appState.selectionCount > 1 {
+                            Menu {
+                                Button("Cull Selected (\(appState.selectionCount))") {
+                                    Task { await appState.startAICulling(scope: .selected) }
+                                }
+                                Button("Cull All (\(appState.assets.count))") {
+                                    Task { await appState.startAICulling(scope: .all) }
+                                }
+                            } label: {
+                                Label("AI Cull", systemImage: "sparkles")
+                                    .font(.caption)
+                            }
+                            .menuStyle(.borderlessButton)
+                            .help("Score photos for sharpness, composition, and duplicates")
+                        } else {
+                            Button {
+                                Task { await appState.startAICulling(scope: .all) }
+                            } label: {
+                                Label("AI Cull", systemImage: "sparkles")
+                                    .font(.caption)
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(appState.assets.isEmpty)
+                            .help("Score all photos for sharpness, composition, and duplicates")
+                        }
+                    }
+
+                    Divider()
+                        .frame(height: 12)
+
+                    Text("\(appState.assets.count) photos")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
-            .background(Color(nsColor: .windowBackgroundColor))
+            .background(quietDarkroomEnabled ? QDColor.panelBackground : Color(nsColor: .windowBackgroundColor))
         }
         .background(
             GeometryReader { geometry in
@@ -358,7 +475,16 @@ struct GridView: View {
                 }
             }
         )
-        .background(Color(nsColor: NSColor(calibratedWhite: 0.08, alpha: 1.0)))
+        .background(quietDarkroomEnabled ? QDColor.appBackground : Color(nsColor: NSColor(calibratedWhite: 0.08, alpha: 1.0)))
+        .onAppear {
+            if quietDarkroomEnabled {
+                thumbnailSize = quietGridDensity.thumbnailMinWidth
+            }
+        }
+        .onChange(of: quietGridDensity) { _, newValue in
+            guard quietDarkroomEnabled else { return }
+            thumbnailSize = newValue.thumbnailMinWidth
+        }
         // Keyboard shortcuts (note: macOS SwiftUI receives keys without .focusable() when view is active)
         .onKeyPress(.escape) {
             appState.clearMultiSelection()
@@ -377,7 +503,7 @@ struct GridView: View {
             ExportDialog(appState: appState)
         }
     }
-    
+
     /// Handle tap with modifier keys
     private func handleTap(asset: PhotoAsset, modifiers: EventModifiers) {
         if modifiers.contains(.command) {
@@ -435,7 +561,7 @@ struct GridView: View {
             appState.showHUD("Selected \(selectedIds.count) photos")
         }
     }
-    
+
     /// Grid content view (extracted for compiler performance)
     @ViewBuilder
     private var gridContent: some View {
@@ -485,7 +611,8 @@ struct GridView: View {
                         SectionHeader(
                             title: groupLabel(for: group.key),
                             count: group.assets.count,
-                            sortCriteria: appState.sortCriteria
+                            sortCriteria: appState.sortCriteria,
+                            usesQuietDarkroomStyle: quietDarkroomEnabled
                         )
                         .animation(nil, value: group.key)
                     }
@@ -502,13 +629,13 @@ struct GridView: View {
 
     /// Grid for a group of assets
     private func gridForGroup(_ assets: [PhotoAsset]) -> some View {
-        LazyVGrid(columns: columns, spacing: 12) {
+        LazyVGrid(columns: columns, spacing: quietDarkroomEnabled ? quietGridDensity.gap : 12) {
             ForEach(assets) { asset in
                 thumbnailForAsset(asset)
             }
         }
     }
-    
+
     /// Single thumbnail view (extracted for compiler performance)
     private func thumbnailForAsset(_ asset: PhotoAsset) -> some View {
         GridThumbnail(
@@ -516,6 +643,7 @@ struct GridView: View {
             size: thumbnailSize,
             isSelected: appState.selectedAssetId == asset.id || appState.isSelected(asset.id),
             isMultiSelected: appState.isSelected(asset.id),
+            usesQuietDarkroomStyle: quietDarkroomEnabled,
             hasEdits: appState.recipes[asset.id]?.hasEdits ?? false,
             recipe: appState.recipes[asset.id] ?? EditRecipe(),
             renderContext: appState.makeRenderContext(
@@ -695,7 +823,8 @@ struct GridView: View {
 struct SelectionBar: View {
     @ObservedObject var appState: AppState
     @Binding var showExportDialog: Bool
-    
+    var usesQuietDarkroomStyle: Bool = false
+
     var body: some View {
         if appState.isSelectionMode || appState.selectionCount > 0 {
             ScrollView(.horizontal, showsIndicators: false) {
@@ -722,10 +851,14 @@ struct SelectionBar: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .clipped()
-            .background(appState.isSelectionMode ? Color.accentColor.opacity(0.15) : Color.accentColor.opacity(0.1))
+            .background(
+                usesQuietDarkroomStyle
+                ? (appState.isSelectionMode ? QDColor.selectedSurface : QDColor.panelBackground)
+                : (appState.isSelectionMode ? Color.accentColor.opacity(0.15) : Color.accentColor.opacity(0.1))
+            )
         }
     }
-    
+
     private var selectionModeToggle: some View {
         Button {
             withAnimation(.easeInOut(duration: 0.2)) {
@@ -740,15 +873,23 @@ struct SelectionBar: View {
                 Text(appState.isSelectionMode ? "Select Mode" : "Multi-select")
             }
             .font(.caption.bold())
-            .foregroundColor(appState.isSelectionMode ? .white : .accentColor)
+            .foregroundColor(
+                appState.isSelectionMode
+                ? (usesQuietDarkroomStyle ? QDColor.textPrimary : .white)
+                : (usesQuietDarkroomStyle ? QDColor.accent : .accentColor)
+            )
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
-            .background(appState.isSelectionMode ? Color.accentColor : Color.clear)
+            .background(
+                appState.isSelectionMode
+                ? (usesQuietDarkroomStyle ? QDColor.selectedSurface : Color.accentColor)
+                : Color.clear
+            )
             .cornerRadius(12)
         }
         .buttonStyle(.plain)
     }
-    
+
     private var actionButtons: some View {
         let batchLocked = appState.selectionCount > 1 && !AppFeatures.batchProcessingEnabled
 
@@ -758,15 +899,15 @@ struct SelectionBar: View {
             }
             .buttonStyle(.plain)
             .foregroundColor(.accentColor)
-            
+
             Button { appState.clearMultiSelection() } label: {
                 Text("Deselect").font(.caption)
             }
             .buttonStyle(.plain)
             .foregroundColor(.secondary)
-            
+
             Divider().frame(height: 16)
-            
+
             Button {
                 if batchLocked {
                     appState.showAccountSheet = true
@@ -801,42 +942,67 @@ struct SectionHeader: View {
     let title: String
     let count: Int
     let sortCriteria: AppState.SortCriteria
+    var usesQuietDarkroomStyle: Bool = false
 
     var body: some View {
-        HStack(spacing: 10) {
-            // Sort icon with background
-            ZStack {
-                Circle()
-                    .fill(Color.accentColor.opacity(0.15))
-                    .frame(width: 24, height: 24)
-                Image(systemName: sortCriteria.icon)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.accentColor)
+        Group {
+            if usesQuietDarkroomStyle {
+                HStack(spacing: QDSpace.sm) {
+                    Image(systemName: sortCriteria.icon)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(QDColor.textTertiary)
+
+                    Text(title)
+                        .font(QDFont.bodyMedium)
+                        .foregroundColor(QDColor.textPrimary)
+
+                    Text("\(count)")
+                        .font(QDFont.metadata)
+                        .foregroundColor(QDColor.textTertiary)
+
+                    Spacer()
+                }
+                .padding(.horizontal, 2)
+                .padding(.vertical, QDSpace.sm)
+                .overlay(alignment: .bottom) {
+                    Rectangle()
+                        .fill(QDColor.divider.opacity(0.45))
+                        .frame(height: 1)
+                }
+            } else {
+                HStack(spacing: 10) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.accentColor.opacity(0.15))
+                            .frame(width: 24, height: 24)
+                        Image(systemName: sortCriteria.icon)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.accentColor)
+                    }
+
+                    Text(title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.primary)
+
+                    Text("\(count)")
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(Color(white: 0.2))
+                        .cornerRadius(10)
+
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color(white: 0.12))
+                        .shadow(color: .black.opacity(0.2), radius: 2, y: 1)
+                )
             }
-            
-            // Title
-            Text(title)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(.primary)
-            
-            // Count badge
-            Text("\(count)")
-                .font(.system(size: 11, weight: .medium, design: .rounded))
-                .foregroundColor(.secondary)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 2)
-                .background(Color(white: 0.2))
-                .cornerRadius(10)
-            
-            Spacer()
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color(white: 0.12))
-                .shadow(color: .black.opacity(0.2), radius: 2, y: 1)
-        )
     }
 }
 
@@ -846,6 +1012,7 @@ struct GridThumbnail<ContextMenuContent: View>: View {
     let size: CGFloat
     let isSelected: Bool
     var isMultiSelected: Bool = false
+    var usesQuietDarkroomStyle: Bool = false
     let hasEdits: Bool
     let recipe: EditRecipe
     let renderContext: RenderContext
@@ -857,170 +1024,16 @@ struct GridThumbnail<ContextMenuContent: View>: View {
 
     @State private var thumbnail: NSImage?
     @State private var isHovering = false
-    
+
     var body: some View {
-        ZStack {
-            // Fixed square container
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color(white: 0.15))
-                .frame(width: size, height: size)
-            
-            // Thumbnail image - centered crop
-            if let thumbnail = thumbnail {
-                Image(nsImage: thumbnail)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: size, height: size)
-                    .clipped()
-                    .cornerRadius(8)
+        Group {
+            if usesQuietDarkroomStyle {
+                quietCard
             } else {
-                // Loading placeholder with shimmer effect
-                ShimmerLoadingView()
-            }
-            
-            // Multi-selection checkbox overlay
-            if isMultiSelected {
-                VStack {
-                    HStack {
-                        ZStack {
-                            Circle()
-                                .fill(Color.accentColor)
-                                .frame(width: 22, height: 22)
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 11, weight: .bold))
-                                .foregroundColor(.white)
-                        }
-                        .shadow(color: .black.opacity(0.3), radius: 3, y: 1)
-                        Spacer()
-                    }
-                    Spacer()
-                }
-                .padding(6)
-            }
-            
-            // Overlay badges
-            VStack {
-                HStack {
-                    // Only show these if not multi-selected (checkbox takes priority)
-                    if !isMultiSelected {
-                        // Edited indicator with subtle glow
-                        if hasEdits {
-                            Circle()
-                                .fill(Color.accentColor)
-                                .frame(width: 8, height: 8)
-                                .shadow(color: Color.accentColor.opacity(0.5), radius: 2)
-                        }
-                        
-                        // Color label indicator
-                        if recipe.colorLabel != .none {
-                            Circle()
-                                .fill(colorLabelColor)
-                                .frame(width: 8, height: 8)
-                                .shadow(color: colorLabelColor.opacity(0.5), radius: 2)
-                        }
-                    }
-                    
-                    Spacer()
-                    
-                    // RAW badge only (no extension cluttering)
-                    if asset.isRAW {
-                        Text("R")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundColor(.orange)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 2)
-                            .background(.black.opacity(0.7))
-                            .cornerRadius(3)
-                    }
-                }
-                
-                Spacer()
-                
-                // Bottom: Rating and Flag + Hover info
-                HStack {
-                    // Rating stars
-                    if recipe.rating > 0 {
-                        HStack(spacing: 1) {
-                            ForEach(1...recipe.rating, id: \.self) { _ in
-                                Image(systemName: "star.fill")
-                                    .font(.system(size: 6))
-                                    .foregroundColor(.yellow)
-                            }
-                        }
-                        .padding(2)
-                        .background(.black.opacity(0.6))
-                        .cornerRadius(2)
-                    }
-                    
-                    Spacer()
-                    
-                    // Flag indicator
-                    if recipe.flag == .pick {
-                        Image(systemName: "flag.fill")
-                            .font(.system(size: 8))
-                            .foregroundColor(.green)
-                            .padding(2)
-                            .background(.black.opacity(0.6))
-                            .cornerRadius(2)
-                    } else if recipe.flag == .reject {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 8, weight: .bold))
-                            .foregroundColor(.red)
-                            .padding(2)
-                            .background(.black.opacity(0.6))
-                            .cornerRadius(2)
-                    }
-                }
-                
-                // Hover bar with quick rating/flag actions
-                if isHovering && onRatingChange != nil && onFlagChange != nil {
-                    ThumbnailHoverBar(
-                        rating: recipe.rating,
-                        flag: recipe.flag,
-                        onRatingChange: { onRatingChange?($0) },
-                        onFlagChange: { onFlagChange?($0) }
-                    )
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
-                } else if isHovering && !isSelected {
-                    // Fallback: Hover info overlay - filename
-                    HStack {
-                        Text(asset.filename.replacingOccurrences(of: ".\(asset.url.pathExtension)", with: ""))
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundColor(.white)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(
-                        Capsule()
-                            .fill(.black.opacity(0.75))
-                    )
-                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
-                }
-            }
-            .padding(6)
-            
-            // Selection glow border
-            if isSelected {
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(
-                        LinearGradient(
-                            colors: [Color.accentColor, Color.accentColor.opacity(0.6)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 3
-                    )
-            }
-            
-            // Hover border glow (subtle)
-            if isHovering && !isSelected {
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color.white.opacity(0.3), lineWidth: 1.5)
+                legacyCard
             }
         }
-        .frame(width: size, height: size)
+        .frame(width: size, height: usesQuietDarkroomStyle ? quietCardHeight : size)
         // Shadow lift effect on hover (instead of scale)
         .shadow(
             color: isHovering ? .black.opacity(0.4) : .black.opacity(0.15),
@@ -1077,23 +1090,246 @@ struct GridThumbnail<ContextMenuContent: View>: View {
             }
         }
     }
-    
+
     private var colorLabelColor: Color {
         let c = recipe.colorLabel.color
         return Color(red: c.r, green: c.g, blue: c.b)
+    }
+
+    private var quietCardHeight: CGFloat {
+        size * 0.75
+    }
+
+    private var displayFilename: String {
+        asset.filename.replacingOccurrences(of: ".\(asset.url.pathExtension)", with: "")
+    }
+
+    private var formatLabel: String {
+        asset.isRAW ? "RAW" : asset.fileExtension.uppercased()
+    }
+
+    @ViewBuilder
+    private var thumbnailImage: some View {
+        if let thumbnail {
+            Image(nsImage: thumbnail)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+        } else {
+            ShimmerLoadingView()
+        }
+    }
+
+    private var legacyCard: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color(white: 0.15))
+                .frame(width: size, height: size)
+
+            thumbnailImage
+                .frame(width: size, height: size)
+                .clipped()
+                .cornerRadius(8)
+
+            if isMultiSelected {
+                VStack {
+                    HStack {
+                        ZStack {
+                            Circle()
+                                .fill(Color.accentColor)
+                                .frame(width: 22, height: 22)
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundColor(.white)
+                        }
+                        .shadow(color: .black.opacity(0.3), radius: 3, y: 1)
+                        Spacer()
+                    }
+                    Spacer()
+                }
+                .padding(6)
+            }
+
+            VStack {
+                HStack {
+                    if !isMultiSelected {
+                        if hasEdits {
+                            Circle()
+                                .fill(Color.accentColor)
+                                .frame(width: 8, height: 8)
+                                .shadow(color: Color.accentColor.opacity(0.5), radius: 2)
+                        }
+
+                        if recipe.colorLabel != .none {
+                            Circle()
+                                .fill(colorLabelColor)
+                                .frame(width: 8, height: 8)
+                                .shadow(color: colorLabelColor.opacity(0.5), radius: 2)
+                        }
+                    }
+
+                    Spacer()
+
+                    if asset.isRAW {
+                        Text("R")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundColor(.orange)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 2)
+                            .background(.black.opacity(0.7))
+                            .cornerRadius(3)
+                    }
+                }
+
+                Spacer()
+
+                HStack {
+                    if recipe.rating > 0 {
+                        HStack(spacing: 1) {
+                            ForEach(1...recipe.rating, id: \.self) { _ in
+                                Image(systemName: "star.fill")
+                                    .font(.system(size: 6))
+                                    .foregroundColor(.yellow)
+                            }
+                        }
+                        .padding(2)
+                        .background(.black.opacity(0.6))
+                        .cornerRadius(2)
+                    }
+
+                    Spacer()
+
+                    if recipe.flag == .pick {
+                        Image(systemName: "flag.fill")
+                            .font(.system(size: 8))
+                            .foregroundColor(.green)
+                            .padding(2)
+                            .background(.black.opacity(0.6))
+                            .cornerRadius(2)
+                    } else if recipe.flag == .reject {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundColor(.red)
+                            .padding(2)
+                            .background(.black.opacity(0.6))
+                            .cornerRadius(2)
+                    }
+                }
+
+                if isHovering && onRatingChange != nil && onFlagChange != nil {
+                    ThumbnailHoverBar(
+                        rating: recipe.rating,
+                        flag: recipe.flag,
+                        onRatingChange: { onRatingChange?($0) },
+                        onFlagChange: { onFlagChange?($0) }
+                    )
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                } else if isHovering && !isSelected {
+                    HStack {
+                        Text(displayFilename)
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundColor(.white)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(
+                        Capsule()
+                            .fill(.black.opacity(0.75))
+                    )
+                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                }
+            }
+            .padding(6)
+
+            if isSelected {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(
+                        LinearGradient(
+                            colors: [Color.accentColor, Color.accentColor.opacity(0.6)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 3
+                    )
+            }
+
+            if isHovering && !isSelected {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.white.opacity(0.3), lineWidth: 1.5)
+            }
+        }
+    }
+
+    private var quietCard: some View {
+        QuietPhotoCard(
+            filename: displayFilename,
+            isSelected: isSelected,
+            isRejected: recipe.flag == .reject,
+            rating: recipe.rating,
+            formatLabel: formatLabel,
+            isHovering: isHovering,
+            thumbnailHeight: quietCardHeight
+        ) {
+            thumbnailImage
+                .frame(width: size, height: quietCardHeight)
+        } topLeading: {
+            if isMultiSelected {
+                ZStack {
+                    Circle()
+                        .fill(QDColor.accent)
+                        .frame(width: 22, height: 22)
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(QDColor.appBackground)
+                }
+            } else {
+                HStack(spacing: 4) {
+                    if hasEdits {
+                        Circle()
+                            .fill(QDColor.accent)
+                            .frame(width: 7, height: 7)
+                    }
+
+                    if recipe.colorLabel != .none {
+                        Circle()
+                            .fill(colorLabelColor)
+                            .frame(width: 7, height: 7)
+                    }
+                }
+            }
+        } topTrailing: {
+            HStack(spacing: 4) {
+                if recipe.flag == .pick {
+                    QuietStatusChip(title: "Pick", color: QDColor.successMuted)
+                } else if recipe.flag == .reject {
+                    QuietStatusChip(title: "Reject", color: QDColor.dangerMuted)
+                }
+            }
+        } hoverOverlay: {
+            if onRatingChange != nil && onFlagChange != nil {
+                ThumbnailHoverBar(
+                    rating: recipe.rating,
+                    flag: recipe.flag,
+                    usesQuietDarkroomStyle: true,
+                    onRatingChange: { onRatingChange?($0) },
+                    onFlagChange: { onFlagChange?($0) }
+                )
+            }
+        }
     }
 }
 
 /// Shimmer loading animation for thumbnails
 struct ShimmerLoadingView: View {
     @State private var animationOffset: CGFloat = -1.0
-    
+
     var body: some View {
         ZStack {
             // Base placeholder
             Rectangle()
                 .fill(Color.gray.opacity(0.2))
-            
+
             // Shimmer effect
             Rectangle()
                 .fill(
@@ -1108,7 +1344,7 @@ struct ShimmerLoadingView: View {
                     )
                 )
                 .offset(x: animationOffset * 200)
-            
+
             // Photo icon
             Image(systemName: "photo")
                 .font(.title3)

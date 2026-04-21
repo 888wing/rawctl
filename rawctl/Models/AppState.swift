@@ -23,6 +23,19 @@ final class AppState: ObservableObject {
         case none
     }
 
+    enum StartupFolderPreference: Equatable {
+        case defaultFirst
+        case lastOpenedFirst
+    }
+
+    struct StartupHeroState {
+        var assetId: UUID
+        var sourceTitle: String
+        var filename: String
+        var preview: NSImage?
+        var isReady: Bool
+    }
+
     // MARK: - Undo/Redo Storage
     
     struct HistoryStack {
@@ -137,16 +150,24 @@ final class AppState: ObservableObject {
     private var sidecarWriteMetricsTask: Task<Void, Never>?
     private var pendingRecipeSaveTask: Task<Void, Never>?
     private var pendingRecipeSavePayloads: [UUID: RecipeSavePayload] = [:]
+    private var prefetchedQuickPreviews: [UUID: NSImage] = [:]
+    private var prefetchedRenderedPreviews: [UUID: NSImage] = [:]
+    private var startupHeroWarmTask: Task<Void, Never>?
+    private var startupHeroDismissTask: Task<Void, Never>?
+    private var startupWarmWindowTask: Task<Void, Never>?
+    private var startupWarmStartActive = false
     private let e2eSidecarMetricsPollIntervalNs: UInt64 = 300_000_000
     private lazy var selectionCoordinator = SelectionCoordinator(appState: self)
     private lazy var editStateCoordinator = EditStateCoordinator(appState: self)
     private lazy var librarySyncCoordinator = LibrarySyncCoordinator(appState: self)
     
     /// Load last opened or default folder on startup
-    func loadStartupFolder() async {
+    func loadStartupFolder(preference: StartupFolderPreference = .defaultFirst) async {
+        beginLaunchWarmStart()
         let choice = Self.resolveStartupFolderChoice(
             defaultFolderURL: folderManager.defaultFolderURL,
-            lastOpenedFolderPath: userDefaults.string(forKey: StartupStorageKeys.lastOpenedFolder)
+            lastOpenedFolderPath: userDefaults.string(forKey: StartupStorageKeys.lastOpenedFolder),
+            preference: preference
         )
 
         switch choice {
@@ -165,13 +186,24 @@ final class AppState: ObservableObject {
 
     static func resolveStartupFolderChoice(
         defaultFolderURL: URL?,
-        lastOpenedFolderPath: String?
+        lastOpenedFolderPath: String?,
+        preference: StartupFolderPreference = .defaultFirst
     ) -> StartupFolderChoice {
-        if let defaultFolderURL {
-            return .defaultFolder(defaultFolderURL)
-        }
-        if let lastOpenedFolderPath, !lastOpenedFolderPath.isEmpty {
-            return .lastOpened(URL(fileURLWithPath: lastOpenedFolderPath))
+        switch preference {
+        case .defaultFirst:
+            if let defaultFolderURL {
+                return .defaultFolder(defaultFolderURL)
+            }
+            if let lastOpenedFolderPath, !lastOpenedFolderPath.isEmpty {
+                return .lastOpened(URL(fileURLWithPath: lastOpenedFolderPath))
+            }
+        case .lastOpenedFirst:
+            if let lastOpenedFolderPath, !lastOpenedFolderPath.isEmpty {
+                return .lastOpened(URL(fileURLWithPath: lastOpenedFolderPath))
+            }
+            if let defaultFolderURL {
+                return .defaultFolder(defaultFolderURL)
+            }
         }
         return .none
     }
@@ -334,6 +366,7 @@ final class AppState: ObservableObject {
     @Published var viewMode: ViewMode = .grid
     @Published var previewQuality: PreviewQuality = .full
     @Published var currentPreviewImage: NSImage?  // For histogram
+    @Published var startupHero: StartupHeroState?
 
     // Eyedropper mode for white balance
     @Published var eyedropperMode: Bool = false
@@ -647,21 +680,30 @@ final class AppState: ObservableObject {
     func applyColorGrade(_ result: GeminiColorService.ColorGradeResult, mode: GeminiColorService.Mode) {
         guard let id = selectedAssetId else { return }
         let before = recipes[id] ?? EditRecipe()
+        let applied = result.delta.applying(to: before)
         pushHistory(before)
-        recipes[id] = result.delta.applying(to: before)
+        recipes[id] = applied
         aiGradeAnalysis = result.analysis
-        pendingAiSuggestion = PendingAISuggestion(assetId: id, delta: result.delta, mode: mode)
+        pendingAiSuggestion = PendingAISuggestion(
+            assetId: id,
+            delta: result.delta,
+            mode: mode,
+            aiAppliedRecipe: applied
+        )
         saveCurrentRecipe()
         objectWillChange.send()
+    }
+
+    func stylePreferenceDiff(for suggestion: PendingAISuggestion, userFinal: EditRecipe) -> ColorGradeDelta {
+        ColorGradeDelta.diff(ai: suggestion.aiAppliedRecipe, final: userFinal)
     }
 
     /// Record preference diff for a pending AI suggestion, then clear it.
     func recordAndClearPendingAISuggestion() {
         guard let suggestion = pendingAiSuggestion else { return }
         pendingAiSuggestion = nil
-        let aiApplied = suggestion.delta.applying(to: EditRecipe())
         let userFinal = recipes[suggestion.assetId] ?? EditRecipe()
-        let diff = ColorGradeDelta.diff(ai: aiApplied, final: userFinal)
+        let diff = stylePreferenceDiff(for: suggestion, userFinal: userFinal)
         let modeString: String
         let moodString: String?
         switch suggestion.mode {
@@ -1248,7 +1290,7 @@ final class AppState: ObservableObject {
     func applySmartSync(selections: [SmartSyncMatch]) async {
         showSmartSyncSheet = false
         for match in selections {
-            var recipe = match.adaptedRecipe
+            let recipe = match.adaptedRecipe
             recipes[match.id] = recipe
             if let asset = assets.first(where: { $0.id == match.id }) {
                 await SidecarService.shared.saveRecipe(
@@ -1295,6 +1337,7 @@ final class AppState: ObservableObject {
         }
 
         selectedAssetId = asset.id
+        maybePrimeStartupHero(for: asset)
 
         if loadSidecarImmediately {
             // Load recipe from sidecar if not already in memory (may have been prefetched).
@@ -1743,6 +1786,115 @@ final class AppState: ObservableObject {
         }
     }
 
+    private var startupHeroSourceTitle: String {
+        if let project = selectedProject {
+            return project.name
+        }
+        if let collection = activeSmartCollection {
+            return collection.name
+        }
+        return selectedFolder?.lastPathComponent ?? "Library"
+    }
+
+    func beginLaunchWarmStart() {
+        startupWarmWindowTask?.cancel()
+        startupHeroWarmTask?.cancel()
+        startupHeroDismissTask?.cancel()
+        startupHero = nil
+        guard AppPreferences.startupPresentationMode(userDefaults: userDefaults) == .preloadImage else {
+            startupWarmStartActive = false
+            return
+        }
+        startupWarmStartActive = true
+
+        startupWarmWindowTask = Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard !Task.isCancelled else { return }
+            startupWarmStartActive = false
+        }
+    }
+
+    private func maybePrimeStartupHero(for asset: PhotoAsset) {
+        guard startupWarmStartActive else { return }
+        primeStartupHero(for: asset)
+    }
+
+    private func primeStartupHero(for asset: PhotoAsset) {
+        startupHeroWarmTask?.cancel()
+        startupHeroDismissTask?.cancel()
+
+        let seedPreview = prefetchedRenderedPreviews[asset.id] ?? prefetchedQuickPreviews[asset.id]
+        startupHero = StartupHeroState(
+            assetId: asset.id,
+            sourceTitle: startupHeroSourceTitle,
+            filename: asset.filename,
+            preview: seedPreview,
+            isReady: prefetchedRenderedPreviews[asset.id] != nil
+        )
+
+        startupHeroWarmTask = Task { [weak self] in
+            guard let self else { return }
+
+            if prefetchedRenderedPreviews[asset.id] == nil {
+                var quickPreview = prefetchedQuickPreviews[asset.id]
+                if quickPreview == nil {
+                    quickPreview = await ImagePipeline.shared.quickPreview(for: asset)
+                }
+                guard !Task.isCancelled else { return }
+
+                if let quickPreview {
+                    storePrefetchedQuickPreview(quickPreview, for: asset.id)
+                    if startupHero?.assetId == asset.id, startupHero?.preview == nil {
+                        startupHero?.preview = quickPreview
+                    }
+                }
+
+                if recipes[asset.id] == nil || aiEditsByURL[asset.url] == nil || localNodes[asset.url] == nil || aiLayerStacks[asset.id] == nil {
+                    if let state = await SidecarService.shared.loadRenderState(for: asset.url) {
+                        guard !Task.isCancelled else { return }
+                        if recipes[asset.id] == nil {
+                            recipes[asset.id] = state.recipe
+                            snapshots[asset.id] = state.snapshots
+                        }
+                        localNodes[asset.url] = state.localNodes
+                        aiEditsByURL[asset.url] = state.aiEdits
+                        setAILayers(state.aiLayers, for: asset.id)
+                    }
+                }
+
+                let renderContext = makeRenderContext(for: asset)
+                let warmedPreview = await ImagePipeline.shared.renderPreview(
+                    for: asset,
+                    context: renderContext,
+                    maxSize: 1024
+                )
+                guard !Task.isCancelled else { return }
+
+                if let warmedPreview {
+                    storePrefetchedRenderedPreview(warmedPreview, for: asset.id)
+                    if startupHero?.assetId == asset.id {
+                        startupHero?.preview = warmedPreview
+                    }
+                }
+            }
+
+            guard startupHero?.assetId == asset.id else { return }
+            startupHero?.isReady = true
+            scheduleStartupHeroDismiss()
+        }
+    }
+
+    private func scheduleStartupHeroDismiss() {
+        startupHeroDismissTask?.cancel()
+        startupHeroDismissTask = Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard !Task.isCancelled else { return }
+            startupHero = nil
+        }
+    }
+
     /// Prefetch a photo for SingleView (called on selection in GridView)
     /// Pre-loads the recipe so double-click transition doesn't need to wait for sidecar I/O
     func prefetchForSingleView(_ asset: PhotoAsset) {
@@ -1763,6 +1915,44 @@ final class AppState: ObservableObject {
                     self.setAILayers(state.aiLayers, for: asset.id)
                 }
             }
+        }
+
+        Task {
+            guard let preview = await ImagePipeline.shared.quickPreview(for: asset) else { return }
+            await MainActor.run {
+                self.storePrefetchedQuickPreview(preview, for: asset.id)
+            }
+        }
+    }
+
+    func consumePrefetchedQuickPreview(for assetId: UUID) -> NSImage? {
+        let preview = prefetchedQuickPreviews[assetId]
+        prefetchedQuickPreviews[assetId] = nil
+        return preview
+    }
+
+    func consumePrefetchedRenderedPreview(for assetId: UUID) -> NSImage? {
+        let preview = prefetchedRenderedPreviews[assetId]
+        prefetchedRenderedPreviews[assetId] = nil
+        return preview
+    }
+
+    private func storePrefetchedQuickPreview(_ preview: NSImage, for assetId: UUID) {
+        prefetchedQuickPreviews[assetId] = preview
+
+        // Keep this tiny and local to likely next-open assets.
+        if prefetchedQuickPreviews.count > 8,
+           let staleId = prefetchedQuickPreviews.keys.first(where: { $0 != selectedAssetId && $0 != assetId }) {
+            prefetchedQuickPreviews.removeValue(forKey: staleId)
+        }
+    }
+
+    private func storePrefetchedRenderedPreview(_ preview: NSImage, for assetId: UUID) {
+        prefetchedRenderedPreviews[assetId] = preview
+
+        if prefetchedRenderedPreviews.count > 4,
+           let staleId = prefetchedRenderedPreviews.keys.first(where: { $0 != selectedAssetId && $0 != assetId }) {
+            prefetchedRenderedPreviews.removeValue(forKey: staleId)
         }
     }
     
@@ -2660,6 +2850,7 @@ extension AppState {
 
     /// Called on app launch to restore last project
     func restoreLastProject() async -> Bool {
+        beginLaunchWarmStart()
         guard let catalog = catalog else { return false }
 
         // Migrate if needed

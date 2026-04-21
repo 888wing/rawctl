@@ -281,6 +281,7 @@ struct GeminiColorServiceTests {
         #expect(appState.pendingAiSuggestion != nil)
         #expect(appState.pendingAiSuggestion?.assetId == assetId)
         #expect(appState.pendingAiSuggestion?.delta.exposure == 0.5)
+        #expect(appState.pendingAiSuggestion?.aiAppliedRecipe.exposure == 0.5)
         #expect(appState.aiGradeAnalysis == "Test analysis")
     }
 
@@ -325,5 +326,36 @@ struct GeminiColorServiceTests {
 
         appState.recordAndClearPendingAISuggestion()
         #expect(appState.pendingAiSuggestion == nil)
+    }
+
+    @Test @MainActor func stylePreferenceDiffUsesAppliedRecipeBaseline() throws {
+        let appState = AppState()
+        let assetId = UUID()
+        appState.selectedAssetId = assetId
+
+        var base = EditRecipe()
+        base.exposure = 1.2
+        base.contrast = 10
+        appState.recipes[assetId] = base
+
+        let result = GeminiColorService.ColorGradeResult(
+            delta: ColorGradeDelta(shadows: 20),
+            analysis: "Test analysis",
+            detectedMood: "cinematic",
+            creditsUsed: 1
+        )
+
+        appState.applyColorGrade(result, mode: .auto)
+
+        var userFinal = try #require(appState.recipes[assetId])
+        userFinal.contrast = 15
+        appState.recipes[assetId] = userFinal
+
+        let suggestion = try #require(appState.pendingAiSuggestion)
+        let diff = appState.stylePreferenceDiff(for: suggestion, userFinal: userFinal)
+
+        #expect(diff.exposure == nil)
+        #expect(diff.shadows == nil)
+        #expect(abs((diff.contrast ?? 0) - 5) < 0.001)
     }
 }

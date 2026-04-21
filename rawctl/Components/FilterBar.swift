@@ -10,14 +10,15 @@ import SwiftUI
 /// Filter bar for searching/filtering photos
 struct FilterBar: View {
     @ObservedObject var appState: AppState
+    @AppStorage("latent.ui.quietDarkroom") private var quietDarkroomEnabled = true
     
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 12) {
                 // Filters label
                 Text("Filters")
-                    .font(.caption.bold())
-                    .foregroundColor(.secondary)
+                    .font(quietDarkroomEnabled ? QDFont.bodyMedium : .caption.bold())
+                    .foregroundColor(quietDarkroomEnabled ? QDColor.textSecondary : .secondary)
 
                 // Rating filter - compact pills
                 HStack(spacing: 2) {
@@ -35,8 +36,8 @@ struct FilterBar: View {
                         }
                         .padding(.horizontal, 5)
                         .padding(.vertical, 3)
-                        .background(appState.filterRating == rating ? Color.accentColor : Color.gray.opacity(0.2))
-                        .foregroundColor(appState.filterRating == rating ? .white : .secondary)
+                        .background(filterPillBackground(isSelected: appState.filterRating == rating))
+                        .foregroundColor(filterPillForeground(isSelected: appState.filterRating == rating))
                         .cornerRadius(4)
                         .buttonStyle(.plain)
                     }
@@ -55,8 +56,8 @@ struct FilterBar: View {
                     }
                     .padding(.horizontal, 4)
                     .padding(.vertical, 3)
-                    .background(appState.filterFlag == nil ? Color.accentColor : Color.gray.opacity(0.2))
-                    .foregroundColor(appState.filterFlag == nil ? .white : .secondary)
+                    .background(filterPillBackground(isSelected: appState.filterFlag == nil))
+                    .foregroundColor(filterPillForeground(isSelected: appState.filterFlag == nil))
                     .cornerRadius(4)
                     .buttonStyle(.plain)
 
@@ -67,8 +68,8 @@ struct FilterBar: View {
                             .font(.system(size: 9))
                     }
                     .padding(4)
-                    .background(appState.filterFlag == .pick ? Color.green : Color.gray.opacity(0.2))
-                    .foregroundColor(appState.filterFlag == .pick ? .white : .green)
+                    .background(appState.filterFlag == .pick ? semanticSelectedBackground(.green) : secondaryPillBackground)
+                    .foregroundColor(appState.filterFlag == .pick ? .white : (quietDarkroomEnabled ? QDColor.successMuted : .green))
                     .cornerRadius(4)
                     .buttonStyle(.plain)
 
@@ -79,8 +80,8 @@ struct FilterBar: View {
                             .font(.system(size: 9, weight: .bold))
                     }
                     .padding(4)
-                    .background(appState.filterFlag == .reject ? Color.red : Color.gray.opacity(0.2))
-                    .foregroundColor(appState.filterFlag == .reject ? .white : .red)
+                    .background(appState.filterFlag == .reject ? semanticSelectedBackground(.red) : secondaryPillBackground)
+                    .foregroundColor(appState.filterFlag == .reject ? .white : (quietDarkroomEnabled ? QDColor.dangerMuted : .red))
                     .cornerRadius(4)
                     .buttonStyle(.plain)
                 }
@@ -113,7 +114,7 @@ struct FilterBar: View {
                 HStack(spacing: 4) {
                     Image(systemName: "tag")
                         .font(.system(size: 9))
-                        .foregroundColor(.secondary)
+                        .foregroundColor(quietDarkroomEnabled ? QDColor.textTertiary : .secondary)
 
                     TextField("Tags...", text: $appState.filterTag)
                         .textFieldStyle(.plain)
@@ -122,7 +123,7 @@ struct FilterBar: View {
                 }
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
-                .background(Color(white: 0.15))
+                .background(secondaryPillBackground)
                 .cornerRadius(4)
 
                 // Clear button
@@ -132,13 +133,13 @@ struct FilterBar: View {
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 12))
-                            .foregroundColor(.secondary)
+                            .foregroundColor(quietDarkroomEnabled ? QDColor.textSecondary : .secondary)
                     }
                     .buttonStyle(.plain)
 
                     Text("\(appState.filteredAssets.count)/\(appState.assets.count)")
                         .font(.system(size: 9))
-                        .foregroundColor(.secondary)
+                        .foregroundColor(quietDarkroomEnabled ? QDColor.textSecondary : .secondary)
                 }
 
                 // EXIF filter indicator
@@ -158,8 +159,8 @@ struct FilterBar: View {
                     }
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
-                    .background(Color.orange.opacity(0.2))
-                    .foregroundColor(.orange)
+                    .background(quietDarkroomEnabled ? QDColor.elevatedSurface : Color.orange.opacity(0.2))
+                    .foregroundColor(quietDarkroomEnabled ? QDColor.ratingMuted : .orange)
                     .cornerRadius(4)
                 }
 
@@ -170,7 +171,7 @@ struct FilterBar: View {
                 HStack(spacing: 4) {
                     Text("Sort")
                         .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(quietDarkroomEnabled ? QDColor.textSecondary : .secondary)
 
                     // Sort criteria picker
                     Menu {
@@ -194,7 +195,7 @@ struct FilterBar: View {
                         .font(.system(size: 10))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 4)
-                        .background(Color.gray.opacity(0.2))
+                        .background(secondaryPillBackground)
                         .cornerRadius(4)
                     }
                     .buttonStyle(.plain)
@@ -206,7 +207,7 @@ struct FilterBar: View {
                         Image(systemName: appState.sortOrder.icon)
                             .font(.system(size: 10))
                             .padding(5)
-                            .background(Color.gray.opacity(0.2))
+                            .background(secondaryPillBackground)
                             .cornerRadius(4)
                     }
                     .buttonStyle(.plain)
@@ -218,7 +219,7 @@ struct FilterBar: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .clipped()
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+        .background(quietDarkroomEnabled ? QDColor.panelBackground : Color(nsColor: .controlBackgroundColor).opacity(0.5))
     }
     
     private var hasActiveFilters: Bool {
@@ -231,6 +232,26 @@ struct FilterBar: View {
     private func swiftUIColor(for label: ColorLabel) -> Color {
         let c = label.color
         return Color(red: c.r, green: c.g, blue: c.b)
+    }
+
+    private var secondaryPillBackground: Color {
+        quietDarkroomEnabled ? QDColor.elevatedSurface : Color.gray.opacity(0.2)
+    }
+
+    private func filterPillBackground(isSelected: Bool) -> Color {
+        guard isSelected else { return secondaryPillBackground }
+        return quietDarkroomEnabled ? QDColor.selectedSurface : .accentColor
+    }
+
+    private func filterPillForeground(isSelected: Bool) -> Color {
+        if isSelected {
+            return quietDarkroomEnabled ? QDColor.textPrimary : .white
+        }
+        return quietDarkroomEnabled ? QDColor.textSecondary : .secondary
+    }
+
+    private func semanticSelectedBackground(_ fallback: Color) -> Color {
+        quietDarkroomEnabled ? QDColor.selectedSurface : fallback
     }
 }
 

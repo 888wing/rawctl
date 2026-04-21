@@ -5,9 +5,9 @@ PROJECT="rawctl.xcodeproj"
 SCHEME="rawctl-mas"
 CONFIGURATION="Release"
 INFO_PLIST="Info-MAS.plist"
-DERIVED_DATA="$(mktemp -d /tmp/latent-mas-check-XXXXXX)"
-BUILD_SETTINGS_FILE="$(mktemp /tmp/latent-mas-settings-XXXXXX.txt)"
-BUILD_LOG="$(mktemp /tmp/latent-mas-build-XXXXXX.log)"
+DERIVED_DATA="$(mktemp -d -t latent-mas-check)"
+BUILD_SETTINGS_FILE="$(mktemp -t latent-mas-settings)"
+BUILD_LOG="$(mktemp -t latent-mas-build)"
 
 cleanup() {
   rm -rf "$DERIVED_DATA" "$BUILD_SETTINGS_FILE" "$BUILD_LOG"

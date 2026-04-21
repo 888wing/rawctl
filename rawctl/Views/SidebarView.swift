@@ -10,7 +10,9 @@ import SwiftUI
 /// Left sidebar showing folder and file list
 struct SidebarView: View {
     @ObservedObject var appState: AppState
+    var quietMode: QuietMode? = nil
     @StateObject private var folderManager = FolderManager.shared
+    @AppStorage("latent.ui.quietDarkroom") private var quietDarkroomEnabled = true
     @State private var pathInput: String = ""
     
     var body: some View {
@@ -52,7 +54,20 @@ struct SidebarView: View {
             // Account section at bottom
             accountSection
         }
-        .background(.ultraThinMaterial)
+        .background {
+            if quietDarkroomEnabled {
+                QDColor.panelBackground
+            } else {
+                Rectangle().fill(.ultraThinMaterial)
+            }
+        }
+        .overlay(alignment: .trailing) {
+            if quietDarkroomEnabled {
+                Rectangle()
+                    .fill(QDColor.divider.opacity(0.6))
+                    .frame(width: 1)
+            }
+        }
         .overlay {
             if appState.isLoading {
                 loadingOverlay
@@ -109,7 +124,7 @@ struct SidebarView: View {
                         .textFieldStyle(.plain)
                         .font(.system(size: 10))
                         .padding(4)
-                        .background(Color(white: 0.15))
+                        .background(quietDarkroomEnabled ? QDColor.elevatedSurface : Color(white: 0.15))
                         .cornerRadius(4)
                         .onSubmit {
                             Task {
@@ -210,7 +225,20 @@ struct SidebarView: View {
             .padding(.vertical, 10)
         }
         .buttonStyle(.plain)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.3))
+        .background {
+            if quietDarkroomEnabled {
+                RoundedRectangle(cornerRadius: QDRadius.lg, style: .continuous)
+                    .fill(QDColor.elevatedSurface)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: QDRadius.lg, style: .continuous)
+                            .stroke(QDColor.divider.opacity(0.7), lineWidth: 1)
+                    )
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+            } else {
+                Color(nsColor: .controlBackgroundColor).opacity(0.3)
+            }
+        }
         .sheet(isPresented: $showAccountSheet) {
             AccountSheet()
         }
@@ -226,7 +254,13 @@ struct SidebarView: View {
                 .foregroundColor(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.ultraThinMaterial)
+        .background {
+            if quietDarkroomEnabled {
+                QDColor.panelBackground.opacity(0.92)
+            } else {
+                Rectangle().fill(.ultraThinMaterial)
+            }
+        }
     }
     
     // MARK: - Actions
@@ -407,6 +441,7 @@ struct SavedFolderRow: View {
     let onSelect: () -> Void
     let onSetDefault: () -> Void
     let onRemove: () -> Void
+    @AppStorage("latent.ui.quietDarkroom") private var quietDarkroomEnabled = true
     
     var body: some View {
         Button {
@@ -417,22 +452,22 @@ struct SavedFolderRow: View {
                 if source.isDefault {
                     Image(systemName: "star.fill")
                         .font(.system(size: 10))
-                        .foregroundColor(.yellow)
+                        .foregroundColor(quietDarkroomEnabled ? QDColor.ratingMuted : .yellow)
                 } else {
                     Image(systemName: "folder")
                         .font(.system(size: 10))
-                        .foregroundColor(.secondary)
+                        .foregroundColor(quietDarkroomEnabled ? QDColor.textTertiary : .secondary)
                 }
                 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(source.name)
                         .font(.caption)
                         .lineLimit(1)
-                        .foregroundColor(isCurrentFolder ? .accentColor : .primary)
+                        .foregroundColor(isCurrentFolder ? (quietDarkroomEnabled ? QDColor.textPrimary : .accentColor) : (quietDarkroomEnabled ? QDColor.textSecondary : .primary))
                     
                     Text("\(source.assetCount)  photos")
                         .font(.system(size: 9))
-                        .foregroundColor(.secondary)
+                        .foregroundColor(quietDarkroomEnabled ? QDColor.textTertiary : .secondary)
                 }
                 
                 Spacer()
@@ -441,12 +476,12 @@ struct SavedFolderRow: View {
                 if isCurrentFolder {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: 12))
-                        .foregroundColor(.accentColor)
+                        .foregroundColor(quietDarkroomEnabled ? QDColor.accent : .accentColor)
                 }
             }
             .padding(.vertical, 4)
             .padding(.horizontal, 8)
-            .background(isCurrentFolder ? Color.accentColor.opacity(0.1) : Color.clear)
+            .background(isCurrentFolder ? (quietDarkroomEnabled ? QDColor.selectedSurface : Color.accentColor.opacity(0.1)) : Color.clear)
             .cornerRadius(6)
         }
         .buttonStyle(.plain)

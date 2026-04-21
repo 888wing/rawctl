@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import CryptoKit
 import CoreImage
 import CoreImage.CIFilterBuiltins
 import AppKit
@@ -33,9 +34,21 @@ actor ImagePipeline {
         var evictedBytes: Int64
     }
 
+    struct PersistentPreviewCacheTelemetry: Equatable {
+        var entryCount: Int
+        var totalBytes: Int64
+    }
+
     private struct PipelineStage {
         let name: String
         let run: (CIImage) async -> CIImage
+    }
+
+    private struct PersistentPreviewHashInput: Codable {
+        let recipe: EditRecipe
+        let localNodes: [ColorNode]
+        let aiLayers: [AILayer]
+        let aiEdits: [AIEdit]
     }
     
     private let context: CIContext
@@ -64,6 +77,11 @@ actor ImagePipeline {
     private var previewCacheMissCount = 0
     private var previewEvictedEntries = 0
     private var previewEvictedBytes: Int64 = 0
+    private let previewDiskCacheDirectory: URL
+    nonisolated private static let previewDiskIOQueue = DispatchQueue(
+        label: "Shacoworkshop.rawctl.preview.diskio",
+        qos: .utility
+    )
 
     /// Filters to skip in fast mode (expensive operations)
     private let expensiveFilters: Set<String> = ["clarity", "dehaze", "texture", "grain", "noiseReduction", "hsl"]
@@ -93,6 +111,12 @@ actor ImagePipeline {
     }
     
     init() {
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        previewDiskCacheDirectory = caches
+            .appendingPathComponent("Shacoworkshop.rawctl", isDirectory: true)
+            .appendingPathComponent("previews", isDirectory: true)
+        try? FileManager.default.createDirectory(at: previewDiskCacheDirectory, withIntermediateDirectories: true)
+
         // Use Metal for GPU acceleration with optimized settings
         if let device = MTLCreateSystemDefaultDevice() {
             context = CIContext(mtlDevice: device, options: [
@@ -241,10 +265,20 @@ actor ImagePipeline {
         let ext = asset.url.pathExtension.lowercased()
         let isRaw = PhotoAsset.rawExtensions.contains(ext)
         let cacheKey = previewCacheKey(for: asset, maxSize: maxSize, isRaw: isRaw)
+        let persistentPreviewKey = shouldUsePersistentPreviewCache(
+            fastMode: fastMode,
+            interactivePreview: interactivePreview
+        ) ? persistentPreviewCacheKey(for: asset, renderContext: renderContext, maxSize: maxSize) : nil
 
         let signpostId = PerformanceSignposts.signposter.makeSignpostID()
         let signpostState = PerformanceSignposts.begin("renderPreview", id: signpostId)
         defer { PerformanceSignposts.end("renderPreview", signpostState) }
+
+        if let persistentPreviewKey,
+           let cached = await loadPersistentPreview(forKey: persistentPreviewKey) {
+            previewCacheHitCount += 1
+            return cached
+        }
 
         // For grid thumbnails (fastMode), limit concurrent renders to prevent GPU overload
         if fastMode {
@@ -257,8 +291,19 @@ actor ImagePipeline {
         }
 
         // RAW files: use CIRAWFilter for true RAW processing
+        let renderedImage: NSImage?
         if isRaw {
-            return await renderRAWPreview(
+            renderedImage = await renderRAWPreview(
+                for: asset,
+                renderContext: renderContext,
+                cacheKey: cacheKey,
+                maxSize: maxSize,
+                fastMode: fastMode,
+                interactivePreview: interactivePreview
+            )
+        } else {
+            // Non-RAW: use standard pipeline
+            renderedImage = await renderStandardPreview(
                 for: asset,
                 renderContext: renderContext,
                 cacheKey: cacheKey,
@@ -268,15 +313,12 @@ actor ImagePipeline {
             )
         }
 
-        // Non-RAW: use standard pipeline
-        return await renderStandardPreview(
-            for: asset,
-            renderContext: renderContext,
-            cacheKey: cacheKey,
-            maxSize: maxSize,
-            fastMode: fastMode,
-            interactivePreview: interactivePreview
-        )
+        if let persistentPreviewKey,
+           let renderedImage {
+            storePersistentPreview(renderedImage, forKey: persistentPreviewKey)
+        }
+
+        return renderedImage
     }
 
     private func previewCacheKey(
@@ -286,6 +328,38 @@ actor ImagePipeline {
     ) -> String {
         guard !isRaw else { return asset.fingerprint }
         return "\(asset.fingerprint)-preview-\(Int(maxSize.rounded()))"
+    }
+
+    private func shouldUsePersistentPreviewCache(
+        fastMode: Bool,
+        interactivePreview: Bool
+    ) -> Bool {
+        AppPreferences.persistentPreviewDiskCacheEnabled() && !fastMode && !interactivePreview
+    }
+
+    private func persistentPreviewCacheKey(
+        for asset: PhotoAsset,
+        renderContext: RenderContext,
+        maxSize: CGFloat
+    ) -> String {
+        let recipeHash = persistentPreviewHash(for: renderContext)
+        return "\(asset.fingerprint)-\(recipeHash)-\(Int(maxSize.rounded()))"
+    }
+
+    private func persistentPreviewHash(for renderContext: RenderContext) -> String {
+        let payload = PersistentPreviewHashInput(
+            recipe: renderContext.recipe,
+            localNodes: renderContext.localNodes,
+            aiLayers: renderContext.aiLayers,
+            aiEdits: renderContext.aiEdits
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(payload) else {
+            return "render-default"
+        }
+        let digest = SHA256.hash(data: data)
+        return digest.map { String(format: "%02x", $0) }.joined()
     }
 
     /// Benchmark stage-level timings for preview rendering.
@@ -1930,8 +2004,11 @@ actor ImagePipeline {
         return EvictionStats(entries: 1, estimatedBytes: removedBytes)
     }
     
-    func clearCache() {
+    /// Clear both in-memory and persistent preview caches.
+    /// Tests and benchmark gates rely on this to force a cold render path.
+    func clearCache() async {
         _ = clearAllPreviewCaches()
+        await clearPersistentPreviewCache()
         previewCacheHitCount = 0
         previewCacheMissCount = 0
         previewEvictedEntries = 0
@@ -1996,6 +2073,37 @@ actor ImagePipeline {
             evictedBytes: previewEvictedBytes
         )
     }
+
+    func persistentPreviewCacheUsage() async -> PersistentPreviewCacheTelemetry {
+        let directory = previewDiskCacheDirectory
+        return await withCheckedContinuation { continuation in
+            Self.previewDiskIOQueue.async {
+                continuation.resume(returning: Self.measurePersistentPreviewCache(at: directory))
+            }
+        }
+    }
+
+    func clearPersistentPreviewCache() async {
+        let directory = previewDiskCacheDirectory
+        await withCheckedContinuation { continuation in
+            Self.previewDiskIOQueue.async {
+                try? FileManager.default.removeItem(at: directory)
+                try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                continuation.resume()
+            }
+        }
+    }
+
+    func trimPersistentPreviewCache(to maxBytes: Int64? = nil) async {
+        let directory = previewDiskCacheDirectory
+        let effectiveMaxBytes = maxBytes ?? AppPreferences.persistentPreviewDiskCacheMaxBytes()
+        await withCheckedContinuation { continuation in
+            Self.previewDiskIOQueue.async {
+                Self.prunePersistentPreviewCache(at: directory, maxBytes: effectiveMaxBytes)
+                continuation.resume()
+            }
+        }
+    }
     
     // MARK: - Utilities
     
@@ -2030,6 +2138,108 @@ actor ImagePipeline {
             return nil
         }
         return NSImage(cgImage: cgImage, size: NSSize(width: extent.width, height: extent.height))
+    }
+
+    private func loadPersistentPreview(forKey key: String) async -> NSImage? {
+        let fileURL = previewDiskCacheDirectory.appendingPathComponent("\(key).png")
+        return await withCheckedContinuation { continuation in
+            Self.previewDiskIOQueue.async {
+                guard FileManager.default.fileExists(atPath: fileURL.path),
+                      let image = NSImage(contentsOf: fileURL) else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: fileURL.path)
+                continuation.resume(returning: image)
+            }
+        }
+    }
+
+    private func storePersistentPreview(_ image: NSImage, forKey key: String) {
+        let fileURL = previewDiskCacheDirectory.appendingPathComponent("\(key).png")
+        let directory = previewDiskCacheDirectory
+        let maxBytes = AppPreferences.persistentPreviewDiskCacheMaxBytes()
+        Self.previewDiskIOQueue.async {
+            guard let data = Self.pngData(for: image) else { return }
+            try? data.write(to: fileURL, options: .atomic)
+            try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: fileURL.path)
+            Self.prunePersistentPreviewCache(at: directory, maxBytes: maxBytes)
+        }
+    }
+
+    private static func pngData(for image: NSImage) -> Data? {
+        if let rep = image.representations.compactMap({ $0 as? NSBitmapImageRep }).first,
+           let data = rep.representation(using: .png, properties: [:]) {
+            return data
+        }
+
+        guard let tiffData = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiffData) else {
+            return nil
+        }
+        return bitmap.representation(using: .png, properties: [:])
+    }
+
+    private static func measurePersistentPreviewCache(at directory: URL) -> PersistentPreviewCacheTelemetry {
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return PersistentPreviewCacheTelemetry(entryCount: 0, totalBytes: 0)
+        }
+
+        var entryCount = 0
+        var totalBytes: Int64 = 0
+        for url in urls {
+            guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+                  values.isRegularFile == true else {
+                continue
+            }
+            entryCount += 1
+            totalBytes += Int64(values.fileSize ?? 0)
+        }
+
+        return PersistentPreviewCacheTelemetry(entryCount: entryCount, totalBytes: totalBytes)
+    }
+
+    private static func prunePersistentPreviewCache(at directory: URL, maxBytes: Int64) {
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [
+                .isRegularFileKey,
+                .contentModificationDateKey,
+                .fileSizeKey
+            ],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+
+        var files: [(url: URL, date: Date, size: Int64)] = []
+        var totalBytes: Int64 = 0
+
+        for url in urls {
+            guard let values = try? url.resourceValues(forKeys: [
+                .isRegularFileKey,
+                .contentModificationDateKey,
+                .fileSizeKey
+            ]),
+            values.isRegularFile == true else {
+                continue
+            }
+
+            let size = Int64(values.fileSize ?? 0)
+            totalBytes += size
+            files.append((url, values.contentModificationDate ?? .distantPast, size))
+        }
+
+        guard totalBytes > maxBytes else { return }
+
+        for file in files.sorted(by: { $0.date < $1.date }) where totalBytes > maxBytes {
+            try? FileManager.default.removeItem(at: file.url)
+            totalBytes -= file.size
+        }
     }
 
     // MARK: - AI Compositing

@@ -55,7 +55,7 @@ struct UpdateSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 400)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
@@ -145,7 +145,7 @@ struct UpdateSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 400)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 

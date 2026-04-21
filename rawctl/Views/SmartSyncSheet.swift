@@ -15,6 +15,7 @@ import SwiftUI
 /// then taps "Apply" to write adapted recipes via SidecarService.
 struct SmartSyncSheet: View {
     @ObservedObject var appState: AppState
+    @AppStorage("latent.ui.quietDarkroom") private var quietDarkroomEnabled = true
 
     /// IDs the user has chosen to exclude from the sync.
     @State private var excluded: Set<UUID> = []
@@ -29,92 +30,91 @@ struct SmartSyncSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // ── Header ──────────────────────────────────────────────────────
-            HStack(spacing: 10) {
-                Image(systemName: "sparkles.rectangle.stack")
-                    .font(.title2)
-                    .foregroundColor(.accentColor)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Smart Sync")
-                        .font(.headline)
-                    Text("\(matches.count) similar scene\(matches.count == 1 ? "" : "s") found")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                Spacer()
-                Button("Cancel") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-            }
-            .padding(16)
-
+            headerView
             Divider()
-
-            // ── Explanation ──────────────────────────────────────────────────
-            HStack(spacing: 8) {
-                Image(systemName: "info.circle")
-                    .foregroundColor(.secondary)
-                    .font(.caption)
-                Text("Edit settings will be adapted to each photo's exposure. Deselect any photos to exclude them.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Spacer()
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(Color.secondary.opacity(0.08))
-
-            // ── Match List ───────────────────────────────────────────────────
-            List(matches) { match in
-                let isSelected = !excluded.contains(match.id)
-                HStack(spacing: 10) {
-                    // Checkbox
-                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                        .foregroundColor(isSelected ? .accentColor : .secondary)
-                        .font(.title3)
-                        .onTapGesture { toggleExclusion(match.id) }
-
-                    // Filename
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(match.asset.filename)
-                            .font(.system(size: 12, weight: .medium))
-                            .lineLimit(1)
-                        HStack(spacing: 8) {
-                            // Similarity badge
-                            let pct = Int((1.0 - Double(match.distance) / 0.40) * 100)
-                            Text("~\(max(0, pct))% match")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                            // Exposure delta
-                            exposureDeltaLabel(for: match)
-                        }
-                    }
-
-                    Spacer()
-                }
-                .contentShape(Rectangle())
-                .onTapGesture { toggleExclusion(match.id) }
-                .opacity(isSelected ? 1.0 : 0.45)
-                .animation(.easeInOut(duration: 0.12), value: isSelected)
-            }
-            .listStyle(.plain)
-
+            explanationView
+            matchList
             Divider()
+            footerView
+        }
+        .frame(minWidth: 460, minHeight: 320)
+        .background(quietDarkroomEnabled ? QDColor.panelBackground : Color(nsColor: .windowBackgroundColor))
+    }
 
-            // ── Footer ───────────────────────────────────────────────────────
-            HStack {
-                Text("\(selected.count) of \(matches.count) photo\(matches.count == 1 ? "" : "s") selected")
+    // MARK: - Helpers
+
+    private var headerView: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "sparkles.rectangle.stack")
+                .font(.title2)
+                .foregroundColor(quietDarkroomEnabled ? QDColor.accent : .accentColor)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Smart Sync")
+                    .font(.headline)
+                Text("\(matches.count) similar scene\(matches.count == 1 ? "" : "s") found")
                     .font(.caption)
-                    .foregroundColor(.secondary)
-                Spacer()
-                Button("Select All")  { excluded.removeAll() }
-                    .buttonStyle(.borderless)
-                    .controlSize(.small)
-                    .disabled(excluded.isEmpty)
-                Button("None")        { excluded = Set(matches.map(\.id)) }
-                    .buttonStyle(.borderless)
-                    .controlSize(.small)
-                    .disabled(excluded.count == matches.count)
-                Divider().frame(height: 16)
+                    .foregroundColor(quietDarkroomEnabled ? QDColor.textSecondary : .secondary)
+            }
+            Spacer()
+            Button("Cancel") { dismiss() }
+                .keyboardShortcut(.cancelAction)
+        }
+        .padding(16)
+    }
+
+    private var explanationView: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "info.circle")
+                .foregroundColor(quietDarkroomEnabled ? QDColor.textSecondary : .secondary)
+                .font(.caption)
+            Text("Edit settings will be adapted to each photo's exposure. Deselect any photos to exclude them.")
+                .font(.caption)
+                .foregroundColor(quietDarkroomEnabled ? QDColor.textSecondary : .secondary)
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(quietDarkroomEnabled ? QDColor.elevatedSurface : Color.secondary.opacity(0.08))
+    }
+
+    private var matchList: some View {
+        List(matches) { match in
+            smartSyncRow(for: match)
+        }
+        .listStyle(.plain)
+    }
+
+    private var footerView: some View {
+        HStack {
+            Text("\(selected.count) of \(matches.count) photo\(matches.count == 1 ? "" : "s") selected")
+                .font(.caption)
+                .foregroundColor(quietDarkroomEnabled ? QDColor.textSecondary : .secondary)
+            Spacer()
+            Button("Select All")  { excluded.removeAll() }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .disabled(excluded.isEmpty)
+            Button("None")        { excluded = Set(matches.map(\.id)) }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .disabled(excluded.count == matches.count)
+            Divider().frame(height: 16)
+            if quietDarkroomEnabled {
+                Button("Apply Smart Sync") {
+                    Task { await appState.applySmartSync(selections: selected) }
+                }
+                .buttonStyle(.plain)
+                .controlSize(.regular)
+                .padding(.horizontal, 14)
+                .frame(height: 32)
+                .background {
+                    RoundedRectangle(cornerRadius: QDRadius.sm, style: .continuous)
+                        .fill(selected.isEmpty ? QDColor.textDisabled : QDColor.accent)
+                }
+                .foregroundColor(QDColor.appBackground)
+                .disabled(selected.isEmpty)
+                .keyboardShortcut(.defaultAction)
+            } else {
                 Button("Apply Smart Sync") {
                     Task { await appState.applySmartSync(selections: selected) }
                 }
@@ -123,12 +123,9 @@ struct SmartSyncSheet: View {
                 .disabled(selected.isEmpty)
                 .keyboardShortcut(.defaultAction)
             }
-            .padding(16)
         }
-        .frame(minWidth: 460, minHeight: 320)
+        .padding(16)
     }
-
-    // MARK: - Helpers
 
     private func toggleExclusion(_ id: UUID) {
         if excluded.contains(id) {
@@ -136,6 +133,37 @@ struct SmartSyncSheet: View {
         } else {
             excluded.insert(id)
         }
+    }
+
+    private func smartSyncRow(for match: SmartSyncMatch) -> some View {
+        let isSelected = !excluded.contains(match.id)
+        let pct = Int((1.0 - Double(match.distance) / 0.40) * 100)
+
+        return HStack(spacing: 10) {
+            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                .foregroundColor(isSelected ? (quietDarkroomEnabled ? QDColor.accent : .accentColor) : (quietDarkroomEnabled ? QDColor.textSecondary : .secondary))
+                .font(.title3)
+                .onTapGesture { toggleExclusion(match.id) }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(match.asset.filename)
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
+                    .foregroundColor(quietDarkroomEnabled ? QDColor.textPrimary : .primary)
+                HStack(spacing: 8) {
+                    Text("~\(max(0, pct))% match")
+                        .font(.caption2)
+                        .foregroundColor(quietDarkroomEnabled ? QDColor.textSecondary : .secondary)
+                    exposureDeltaLabel(for: match)
+                }
+            }
+
+            Spacer()
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { toggleExclusion(match.id) }
+        .opacity(isSelected ? 1.0 : 0.45)
+        .animation(.easeInOut(duration: 0.12), value: isSelected)
     }
 
     @ViewBuilder
