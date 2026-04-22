@@ -1,0 +1,349 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================
+   QUESTIONLESS DESIGN SYSTEM - CLAYMORPHISM
+   Educational, playful, approachable
+   ============================================ */
+
+@layer base {
+  :root {
+    /* Core Colors - Educational Indigo Theme */
+    --background: 0 0% 98%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+
+    /* Primary - Indigo (Educational, trustworthy) */
+    --primary: 239 84% 67%;
+    --primary-foreground: 0 0% 100%;
+
+    /* Secondary - Soft purple */
+    --secondary: 250 100% 95%;
+    --secondary-foreground: 239 84% 67%;
+
+    /* Muted backgrounds */
+    --muted: 240 5% 96%;
+    --muted-foreground: 240 4% 46%;
+
+    /* Accent - Warm coral for engagement */
+    --accent: 250 100% 95%;
+    --accent-foreground: 239 84% 67%;
+
+    /* Success - Green for correct answers */
+    --success: 142 76% 36%;
+    --success-foreground: 0 0% 100%;
+
+    /* Destructive - Red for wrong answers */
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* Borders and inputs */
+    --border: 240 6% 90%;
+    --input: 240 6% 90%;
+    --ring: 239 84% 67%;
+
+    /* Chart colors */
+    --chart-1: 239 84% 67%;
+    --chart-2: 142 76% 36%;
+    --chart-3: 38 92% 50%;
+    --chart-4: 280 65% 60%;
+    --chart-5: 340 75% 55%;
+
+    /* Design tokens */
+    --radius: 1rem;
+
+    /* Claymorphism shadows */
+    --shadow-clay: 0 8px 32px rgba(79, 70, 229, 0.08),
+                   0 4px 16px rgba(0, 0, 0, 0.04),
+                   inset 0 2px 4px rgba(255, 255, 255, 0.8);
+    --shadow-clay-sm: 0 4px 16px rgba(79, 70, 229, 0.06),
+                      0 2px 8px rgba(0, 0, 0, 0.03),
+                      inset 0 1px 2px rgba(255, 255, 255, 0.6);
+    --shadow-clay-lg: 0 12px 48px rgba(79, 70, 229, 0.12),
+                      0 8px 24px rgba(0, 0, 0, 0.06),
+                      inset 0 2px 6px rgba(255, 255, 255, 0.9);
+    --shadow-clay-hover: 0 12px 40px rgba(79, 70, 229, 0.15),
+                         0 6px 20px rgba(0, 0, 0, 0.08),
+                         inset 0 2px 4px rgba(255, 255, 255, 0.9);
+    --shadow-inset: inset 0 2px 8px rgba(0, 0, 0, 0.06);
+
+    /* Animation tokens */
+    --transition-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+    --transition-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  /* Note: Dark mode disabled for educational app (per design system recommendation) */
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+
+  /* Focus visible styles for accessibility */
+  :focus-visible {
+    @apply outline-none ring-2 ring-primary ring-offset-2 ring-offset-background;
+  }
+
+  /* Skip to content link for accessibility */
+  .skip-link {
+    @apply sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:bg-primary focus:text-primary-foreground focus:px-4 focus:py-2 focus:rounded-lg;
+  }
+
+  /* Reduced motion support */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* ============================================
+   CLAYMORPHISM COMPONENT STYLES
+   ============================================ */
+
+@layer components {
+  /* Claymorphism Card */
+  .card-clay {
+    @apply bg-white rounded-2xl border-0;
+    box-shadow: var(--shadow-clay);
+    transition: box-shadow 0.3s var(--transition-smooth),
+                transform 0.3s var(--transition-bounce);
+  }
+
+  .card-clay:hover {
+    box-shadow: var(--shadow-clay-hover);
+    transform: translateY(-2px);
+  }
+
+  .card-clay-static {
+    @apply bg-white rounded-2xl border-0;
+    box-shadow: var(--shadow-clay);
+  }
+
+  /* Claymorphism Button */
+  .btn-clay {
+    @apply rounded-xl font-semibold;
+    box-shadow: var(--shadow-clay-sm);
+    transition: all 0.2s var(--transition-bounce);
+  }
+
+  .btn-clay:hover {
+    box-shadow: var(--shadow-clay);
+    transform: translateY(-1px);
+  }
+
+  .btn-clay:active {
+    box-shadow: var(--shadow-inset);
+    transform: translateY(0);
+  }
+
+  /* Inset/pressed style for selected states */
+  .clay-inset {
+    box-shadow: var(--shadow-inset);
+  }
+
+  /* Playful gradient backgrounds */
+  .bg-gradient-hero {
+    background: linear-gradient(135deg,
+      hsl(250, 100%, 98%) 0%,
+      hsl(240, 100%, 99%) 50%,
+      hsl(0, 0%, 100%) 100%);
+  }
+
+  .bg-gradient-success {
+    background: linear-gradient(135deg,
+      hsl(142, 76%, 95%) 0%,
+      hsl(142, 76%, 98%) 100%);
+  }
+
+  .bg-gradient-error {
+    background: linear-gradient(135deg,
+      hsl(0, 84%, 95%) 0%,
+      hsl(0, 84%, 98%) 100%);
+  }
+
+  .bg-gradient-primary {
+    background: linear-gradient(135deg,
+      hsl(239, 84%, 67%) 0%,
+      hsl(250, 84%, 60%) 100%);
+  }
+
+  /* Option buttons for questions */
+  .option-btn {
+    @apply w-full flex items-center gap-3 p-4 rounded-xl border-2 text-left;
+    transition: all 0.2s var(--transition-bounce);
+    box-shadow: var(--shadow-clay-sm);
+  }
+
+  .option-btn:hover:not(:disabled) {
+    @apply border-primary/50 bg-primary/5;
+    box-shadow: var(--shadow-clay);
+    transform: translateY(-1px);
+  }
+
+  .option-btn:active:not(:disabled) {
+    transform: translateY(0);
+  }
+
+  .option-btn-correct {
+    @apply border-green-500 bg-gradient-success;
+    box-shadow: 0 4px 16px rgba(34, 197, 94, 0.2);
+  }
+
+  .option-btn-incorrect {
+    @apply border-red-500 bg-gradient-error;
+    box-shadow: 0 4px 16px rgba(239, 68, 68, 0.2);
+  }
+
+  .option-btn-disabled {
+    @apply opacity-60 cursor-not-allowed;
+  }
+
+  /* Progress bar with gradient */
+  .progress-gradient {
+    background: linear-gradient(90deg,
+      hsl(239, 84%, 67%) 0%,
+      hsl(250, 84%, 55%) 100%);
+  }
+
+  /* Topic card colors */
+  .topic-amber { @apply text-amber-600 bg-amber-100; }
+  .topic-blue { @apply text-blue-600 bg-blue-100; }
+  .topic-purple { @apply text-purple-600 bg-purple-100; }
+  .topic-green { @apply text-green-600 bg-green-100; }
+  .topic-pink { @apply text-pink-600 bg-pink-100; }
+  .topic-cyan { @apply text-cyan-600 bg-cyan-100; }
+  .topic-indigo { @apply text-indigo-600 bg-indigo-100; }
+  .topic-orange { @apply text-orange-600 bg-orange-100; }
+  .topic-red { @apply text-red-600 bg-red-100; }
+
+  /* Score circle animation */
+  .score-circle {
+    @apply inline-flex items-center justify-center rounded-full;
+    animation: scaleIn 0.5s var(--transition-bounce);
+  }
+
+  @keyframes scaleIn {
+    0% {
+      transform: scale(0);
+      opacity: 0;
+    }
+    100% {
+      transform: scale(1);
+      opacity: 1;
+    }
+  }
+
+  /* Celebration confetti container */
+  .confetti-container {
+    @apply fixed inset-0 pointer-events-none z-50 overflow-hidden;
+  }
+
+  /* Pulse animation for streaks */
+  .pulse-glow {
+    animation: pulseGlow 2s ease-in-out infinite;
+  }
+
+  @keyframes pulseGlow {
+    0%, 100% {
+      box-shadow: 0 0 0 0 rgba(79, 70, 229, 0.4);
+    }
+    50% {
+      box-shadow: 0 0 0 10px rgba(79, 70, 229, 0);
+    }
+  }
+
+  /* Correct answer celebration */
+  .celebrate {
+    animation: celebrate 0.5s var(--transition-bounce);
+  }
+
+  @keyframes celebrate {
+    0% { transform: scale(1); }
+    25% { transform: scale(1.05); }
+    50% { transform: scale(0.95); }
+    100% { transform: scale(1); }
+  }
+
+  /* Shake animation for wrong answer */
+  .shake {
+    animation: shake 0.5s ease-in-out;
+  }
+
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-5px); }
+    75% { transform: translateX(5px); }
+  }
+
+  /* Floating animation for icons */
+  .float {
+    animation: float 3s ease-in-out infinite;
+  }
+
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-10px); }
+  }
+
+  /* Badge styles */
+  .badge-easy {
+    @apply bg-green-100 text-green-700 border-green-200;
+  }
+
+  .badge-medium {
+    @apply bg-amber-100 text-amber-700 border-amber-200;
+  }
+
+  .badge-hard {
+    @apply bg-red-100 text-red-700 border-red-200;
+  }
+}
+
+/* ============================================
+   TYPOGRAPHY - Playful headings
+   ============================================ */
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  /* Heading styles - using system fonts with rounded feel */
+  .heading-display {
+    @apply font-bold tracking-tight;
+    font-variation-settings: "wght" 700;
+  }
+
+  .heading-playful {
+    @apply font-bold tracking-tight;
+    letter-spacing: -0.02em;
+  }
+
+  /* Gradient text */
+  .text-gradient {
+    @apply bg-clip-text text-transparent;
+    background-image: linear-gradient(135deg,
+      hsl(239, 84%, 67%) 0%,
+      hsl(280, 84%, 60%) 100%);
+  }
+}
